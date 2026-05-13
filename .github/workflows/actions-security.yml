@@ -19,6 +19,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Install zizmor
-        run: python3 -m pip install --user zizmor==1.16.3
+        run: |
+          python3 -m venv /tmp/zizmor-venv
+          /tmp/zizmor-venv/bin/pip install zizmor==1.16.3
       - name: Audit workflows
-        run: "$HOME/.local/bin/zizmor" --offline --format=github .
+        run: /tmp/zizmor-venv/bin/zizmor --offline --format=github .
