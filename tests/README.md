@@ -28,3 +28,52 @@ The probe checks:
 This is a behavioral gate, not a full OpenAPI validator. Later phases should
 add generated OpenAPI schema tests, streaming-specific tests, property tests for
 route graph invariants, and load/backpressure tests.
+
+## Generated Model/Governance Properties
+
+`property_fuzz.py` generates random synthetic model definitions and validates
+route-selection and stream-governance invariants against a local oracle.
+
+Pure properties only:
+
+```bash
+python3 tests/property_fuzz.py --cases 500
+```
+
+Pure properties plus dynamic HTTP properties against a backend that supports the
+prototype-only `POST /__test/config` endpoint:
+
+```bash
+python3 tests/property_fuzz.py \
+  --base-url http://127.0.0.1:8787 \
+  --cases 500 \
+  --http-cases 100
+```
+
+The dynamic HTTP layer generates a model definition, installs it into the
+backend, generates requests around context-window thresholds, and checks
+selected targets, skipped targets, receipts, caller provenance, and latency
+against the oracle.
+
+Run dynamic-config tests against isolated backend instances, or run them
+serially. `POST /__test/config` intentionally mutates prototype state, so
+parallel probes against the same process can invalidate each other's model
+namespace assumptions.
+
+## BDD Scenarios
+
+`bdd_scenarios.py` is ordinary behavior-driven documentation as executable
+tests. It prints Given/When/Then steps for normal product flows:
+
+```bash
+python3 tests/bdd_scenarios.py --base-url http://127.0.0.1:8787
+```
+
+Current scenarios:
+
+- listing public synthetic models
+- routing chat and recording a receipt
+- simulating route selection before rollout
+- rejecting unknown model names
+- routing a generated test model by context window when the backend supports
+  `POST /__test/config`

@@ -49,6 +49,7 @@ Implemented endpoints:
 - `GET /v1/receipts/{id}`
 - `GET /admin/providers`
 - `GET /admin/synthetic-models`
+- `POST /__test/config` for generated property tests only
 
 ## Behavior
 

@@ -48,6 +48,18 @@ The probe checks the common OpenAI-compatible and Ingary-specific surface:
 - caller provenance and receipt fields
 - basic latency percentiles
 
+## Current Prototype Test State
+
+| Prototype | BDD scenarios | Baseline contract probe | Dynamic generated model properties |
+|---|---:|---:|---:|
+| Go | Passing | Passing | Passing |
+| Rust | Passing | Passing | Not implemented yet |
+| Elixir | Passing | Passing | Not implemented yet |
+
+Dynamic generated model properties require the prototype-only
+`POST /__test/config` endpoint. Go implements that first so the test shape can
+stabilize before porting it to Rust and Elixir.
+
 ## License
 
 Apache-2.0.

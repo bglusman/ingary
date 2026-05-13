@@ -329,7 +329,8 @@ fn build_receipt(
             "provider_id": decision.selected_model.split('/').next().unwrap_or("mock"),
             "model": decision.selected_model,
             "status": status,
-            "mock": true
+            "mock": true,
+            "called_provider": status != "simulated"
         })],
         final_result: json!({
             "status": status,

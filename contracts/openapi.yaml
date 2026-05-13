@@ -223,6 +223,36 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SyntheticModel"
+  /__test/config:
+    post:
+      tags: [Admin]
+      summary: Prototype-only dynamic model definition endpoint
+      description: |
+        Non-production endpoint used by property/fuzz tests to install generated
+        synthetic model definitions into runnable prototypes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TestModelConfig"
+      responses:
+        "200":
+          description: Test config accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, synthetic_model]
+                properties:
+                  status: { type: string }
+                  synthetic_model: { type: string }
+                  targets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TestRouteTarget"
+        "400":
+          $ref: "#/components/responses/Error"
 components:
   parameters:
     TenantId:
@@ -506,3 +536,36 @@ components:
             message: { type: string }
             type: { type: string }
             code: { type: string }
+    TestModelConfig:
+      type: object
+      required: [synthetic_model, targets]
+      properties:
+        synthetic_model:
+          type: string
+          description: Unprefixed synthetic model ID.
+        version:
+          type: string
+        targets:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/TestRouteTarget"
+        stream_rules:
+          type: array
+          items:
+            type: object
+            required: [id, pattern, action]
+            properties:
+              id: { type: string }
+              pattern: { type: string }
+              action:
+                type: string
+                enum: [pass, block_final, inject_reminder_and_retry, escalate]
+    TestRouteTarget:
+      type: object
+      required: [model, context_window]
+      properties:
+        model: { type: string }
+        context_window:
+          type: integer
+          minimum: 1

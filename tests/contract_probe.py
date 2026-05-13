@@ -139,6 +139,20 @@ def chat_body(model: str, text: str, stream: bool = False) -> dict[str, Any]:
     }
 
 
+def reset_default_config_if_supported(base_url: str) -> None:
+    body = {
+        "synthetic_model": "coding-balanced",
+        "version": "2026-05-13.mock",
+        "targets": [
+            {"model": "local/qwen-coder", "context_window": 32768},
+            {"model": "managed/kimi-k2.6", "context_window": 262144},
+        ],
+    }
+    result = request_json(base_url, "POST", "/__test/config", body)
+    if result.status not in (200, 404):
+        raise ProbeFailure(f"default config reset failed: {result.status} {result.body}")
+
+
 def assert_model_list(result: ProbeResult) -> None:
     expect(result.status == 200, f"/v1/models status {result.status}")
     expect(result.body.get("object") == "list", "/v1/models object must be list")
@@ -205,6 +219,10 @@ def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
         "admin": [],
     }
     failures: list[str] = []
+    try:
+        reset_default_config_if_supported(base_url)
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"reset_default_config: {exc}")
 
     def record(kind: str, result: ProbeResult) -> ProbeResult:
         latencies[kind].append(result.elapsed_ms)

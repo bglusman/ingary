@@ -27,6 +27,25 @@ const (
 type server struct {
 	mu       sync.RWMutex
 	receipts []Receipt
+	config   TestConfig
+}
+
+type TestConfig struct {
+	SyntheticModel string        `json:"synthetic_model"`
+	Version        string        `json:"version,omitempty"`
+	Targets        []RouteTarget `json:"targets"`
+	StreamRules    []StreamRule  `json:"stream_rules,omitempty"`
+}
+
+type RouteTarget struct {
+	Model         string `json:"model"`
+	ContextWindow int    `json:"context_window"`
+}
+
+type StreamRule struct {
+	ID      string `json:"id"`
+	Pattern string `json:"pattern"`
+	Action  string `json:"action"`
 }
 
 type ChatCompletionRequest struct {
@@ -87,7 +106,7 @@ func main() {
 		addr = defaultAddr
 	}
 
-	s := &server{}
+	s := &server{config: defaultTestConfig()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
@@ -96,6 +115,7 @@ func main() {
 	mux.HandleFunc("/v1/receipts/", s.handleReceiptByID)
 	mux.HandleFunc("/admin/providers", s.handleProviders)
 	mux.HandleFunc("/admin/synthetic-models", s.handleAdminSyntheticModels)
+	mux.HandleFunc("/__test/config", s.handleTestConfig)
 
 	log.Printf("go-ingary mock listening on http://%s", addr)
 	if err := http.ListenAndServe(addr, requestLogger(mux)); err != nil {
@@ -107,11 +127,12 @@ func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
+	cfg := s.currentConfig()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"object": "list",
 		"data": []map[string]string{
-			{"id": syntheticModel, "object": "model", "owned_by": "ingary"},
-			{"id": syntheticPrefix + syntheticModel, "object": "model", "owned_by": "ingary"},
+			{"id": cfg.SyntheticModel, "object": "model", "owned_by": "ingary"},
+			{"id": syntheticPrefix + cfg.SyntheticModel, "object": "model", "owned_by": "ingary"},
 		},
 	})
 }
@@ -126,7 +147,8 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "invalid_json")
 		return
 	}
-	model, err := normalizeModel(req.Model)
+	cfg := s.currentConfig()
+	model, err := normalizeModel(req.Model, cfg)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "unknown_model")
 		return
@@ -138,8 +160,8 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	caller := extractCaller(r, req.Metadata)
 	estimate := estimatePromptTokens(req.Messages)
-	selected := selectProviderModel(estimate)
-	receipt := s.recordReceipt(true, model, caller, req, estimate, selected, "completed")
+	selected, skipped := selectProviderModel(estimate, cfg)
+	receipt := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg)
 
 	w.Header().Set("X-Ingary-Receipt-Id", receipt.ReceiptID)
 	w.Header().Set("X-Ingary-Selected-Model", selected)
@@ -186,7 +208,8 @@ func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request)
 	if body.Model != "" {
 		body.Request.Model = body.Model
 	}
-	model, err := normalizeModel(body.Request.Model)
+	cfg := s.currentConfig()
+	model, err := normalizeModel(body.Request.Model, cfg)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "unknown_model")
 		return
@@ -198,8 +221,8 @@ func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request)
 
 	caller := extractCaller(r, body.Request.Metadata)
 	estimate := estimatePromptTokens(body.Request.Messages)
-	selected := selectProviderModel(estimate)
-	receipt := s.recordReceipt(false, model, caller, body.Request, estimate, selected, "simulated")
+	selected, skipped := selectProviderModel(estimate, cfg)
+	receipt := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg)
 	writeJSON(w, http.StatusOK, map[string]any{"receipt": receipt})
 }
 
@@ -209,6 +232,7 @@ func (s *server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	}
 	query := r.URL.Query()
 	limit := parseLimit(query.Get("limit"))
+	cfg := s.currentConfig()
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -216,7 +240,7 @@ func (s *server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	summaries := make([]ReceiptSummary, 0, min(limit, len(s.receipts)))
 	for i := len(s.receipts) - 1; i >= 0 && len(summaries) < limit; i-- {
 		receipt := s.receipts[i]
-		if !matchesReceiptFilters(receipt, query.Get("model"), query.Get("consuming_agent_id"), query.Get("consuming_user_id"), query.Get("session_id"), query.Get("run_id"), query.Get("status")) {
+		if !matchesReceiptFilters(receipt, query.Get("model"), query.Get("consuming_agent_id"), query.Get("consuming_user_id"), query.Get("session_id"), query.Get("run_id"), query.Get("status"), cfg) {
 			continue
 		}
 		summaries = append(summaries, receiptSummary(receipt))
@@ -256,10 +280,42 @@ func (s *server) handleAdminSyntheticModels(w http.ResponseWriter, r *http.Reque
 	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{syntheticModelRecord()}})
+	writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{syntheticModelRecord(s.currentConfig())}})
 }
 
-func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, status string) Receipt {
+func (s *server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var cfg TestConfig
+	if err := decodeJSON(r, &cfg); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "invalid_json")
+		return
+	}
+	if err := validateTestConfig(cfg); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "invalid_test_config")
+		return
+	}
+	if cfg.Version == "" {
+		cfg.Version = modelVersion
+	}
+	s.mu.Lock()
+	s.config = cfg
+	s.receipts = nil
+	s.mu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "synthetic_model": cfg.SyntheticModel, "targets": cfg.Targets})
+}
+
+func (s *server) currentConfig() TestConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.config.SyntheticModel == "" {
+		return defaultTestConfig()
+	}
+	return s.config
+}
+
+func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, skipped []map[string]any, status string, cfg TestConfig) Receipt {
 	receiptID := "rcpt_" + randomHex(8)
 	request := map[string]any{
 		"model":                   req.Model,
@@ -272,7 +328,8 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		"dispatcher":              "prompt_length_context_window",
 		"selected_model":          selected,
 		"estimated_prompt_tokens": estimate,
-		"rule":                    "use local/qwen-coder at or below 32768 estimated prompt tokens; otherwise use managed/kimi-k2.6",
+		"skipped":                 skipped,
+		"rule":                    "select the smallest configured context window that fits the estimated prompt",
 	}
 	attempts := []map[string]any{{
 		"provider_model":  selected,
@@ -291,7 +348,7 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		ReceiptID:        receiptID,
 		RunID:            sourcedValue(caller.RunID),
 		SyntheticModel:   model,
-		SyntheticVersion: modelVersion,
+		SyntheticVersion: cfg.Version,
 		Caller:           caller,
 		Request:          request,
 		Decision:         decision,
@@ -305,19 +362,23 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 	return receipt
 }
 
-func syntheticModelRecord() map[string]any {
+func syntheticModelRecord(cfg TestConfig) map[string]any {
+	nodes := []map[string]any{{"id": "dispatcher.prompt_length", "type": "dispatcher"}}
+	targetIDs := make([]string, 0, len(cfg.Targets))
+	for _, target := range cfg.Targets {
+		id := strings.ReplaceAll(target.Model, "/", ".")
+		targetIDs = append(targetIDs, id)
+		nodes = append(nodes, map[string]any{"id": id, "type": "concrete_model", "provider_id": strings.Split(target.Model, "/")[0], "upstream_model_id": target.Model, "context_window": target.ContextWindow})
+	}
+	nodes[0]["targets"] = targetIDs
 	return map[string]any{
-		"id":               syntheticModel,
-		"active_version":   modelVersion,
+		"id":               cfg.SyntheticModel,
+		"active_version":   cfg.Version,
 		"description":      "Mock coding assistant synthetic model with prompt-length dispatch.",
 		"public_namespace": "flat",
 		"route_graph": map[string]any{
-			"root": "dispatcher.prompt_length",
-			"nodes": []map[string]any{
-				{"id": "dispatcher.prompt_length", "type": "dispatcher", "targets": []string{"local.qwen_coder", "managed.kimi_k26"}},
-				{"id": "local.qwen_coder", "type": "concrete_model", "provider_id": "local", "upstream_model_id": "qwen-coder", "context_window": 32768},
-				{"id": "managed.kimi_k26", "type": "concrete_model", "provider_id": "managed", "upstream_model_id": "kimi-k2.6", "context_window": 262144},
-			},
+			"root":  "dispatcher.prompt_length",
+			"nodes": nodes,
 		},
 		"stream_policy": map[string]any{
 			"mode":          "buffered_horizon",
@@ -337,23 +398,75 @@ func providers() []map[string]string {
 	}
 }
 
-func normalizeModel(model string) (string, error) {
+func defaultTestConfig() TestConfig {
+	return TestConfig{
+		SyntheticModel: syntheticModel,
+		Version:        modelVersion,
+		Targets: []RouteTarget{
+			{Model: "local/qwen-coder", ContextWindow: 32768},
+			{Model: "managed/kimi-k2.6", ContextWindow: 262144},
+		},
+		StreamRules: []StreamRule{{ID: "mock_noop", Pattern: "", Action: "pass"}},
+	}
+}
+
+func validateTestConfig(cfg TestConfig) error {
+	if strings.TrimSpace(cfg.SyntheticModel) == "" {
+		return errors.New("synthetic_model must not be empty")
+	}
+	if strings.Contains(cfg.SyntheticModel, "/") {
+		return errors.New("synthetic_model must be unprefixed")
+	}
+	if len(cfg.Targets) == 0 {
+		return errors.New("targets must not be empty")
+	}
+	seen := map[string]bool{}
+	for _, target := range cfg.Targets {
+		if strings.TrimSpace(target.Model) == "" {
+			return errors.New("target model must not be empty")
+		}
+		if target.ContextWindow <= 0 {
+			return fmt.Errorf("target %s context_window must be positive", target.Model)
+		}
+		if seen[target.Model] {
+			return fmt.Errorf("duplicate target %s", target.Model)
+		}
+		seen[target.Model] = true
+	}
+	return nil
+}
+
+func normalizeModel(model string, cfg TestConfig) (string, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return "", errors.New("model is required")
 	}
 	model = strings.TrimPrefix(model, syntheticPrefix)
-	if model != syntheticModel {
+	if model != cfg.SyntheticModel {
 		return "", fmt.Errorf("unknown synthetic model %q", model)
 	}
 	return model, nil
 }
 
-func selectProviderModel(estimatedPromptTokens int) string {
-	if estimatedPromptTokens <= 32768 {
-		return "local/qwen-coder"
+func selectProviderModel(estimatedPromptTokens int, cfg TestConfig) (string, []map[string]any) {
+	targets := append([]RouteTarget(nil), cfg.Targets...)
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].ContextWindow == targets[j].ContextWindow {
+			return targets[i].Model < targets[j].Model
+		}
+		return targets[i].ContextWindow < targets[j].ContextWindow
+	})
+	var skipped []map[string]any
+	for _, target := range targets {
+		if target.ContextWindow >= estimatedPromptTokens {
+			return target.Model, skipped
+		}
+		skipped = append(skipped, map[string]any{"target": target.Model, "reason": "context_window_too_small", "context_window": target.ContextWindow})
 	}
-	return "managed/kimi-k2.6"
+	if len(targets) == 0 {
+		return "unconfigured/no-target", skipped
+	}
+	return targets[len(targets)-1].Model, skipped
 }
 
 func estimatePromptTokens(messages []ChatMessage) int {
@@ -463,9 +576,9 @@ func receiptSummary(receipt Receipt) ReceiptSummary {
 	}
 }
 
-func matchesReceiptFilters(receipt Receipt, model string, agentID string, userID string, sessionID string, runID string, status string) bool {
+func matchesReceiptFilters(receipt Receipt, model string, agentID string, userID string, sessionID string, runID string, status string, cfg TestConfig) bool {
 	if model != "" {
-		normalized, err := normalizeModel(model)
+		normalized, err := normalizeModel(model, cfg)
 		if err != nil || receipt.SyntheticModel != normalized {
 			return false
 		}
