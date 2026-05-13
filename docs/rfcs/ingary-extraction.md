@@ -1464,6 +1464,41 @@ Options to decide at that time:
 The right answer depends on operational maturity, packaging, and whether the
 new product's gateway is already more robust than Calciforge's internal path.
 
+Near-term recommendation: integrate through Calciforge's existing
+OpenAI-compatible provider-adapter boundary first. Calciforge can treat Ingary
+as a downstream OpenAI-compatible backend while Calciforge remains the outer
+agent/security gateway:
+
+```text
+agent / channel
+  -> Calciforge
+  -> Calciforge provider adapter pointed at Ingary /v1
+  -> Ingary synthetic model
+  -> Ingary downstream provider adapter or mock/local model
+```
+
+This gives real Calciforge traffic to Ingary without ripping out Calciforge's
+current synthetic model code immediately. It also keeps rollback simple: disable
+the Ingary provider route and return to Calciforge's existing model path.
+
+Requirements for that bridge:
+
+- Register Ingary as one OpenAI-compatible provider/backend in Calciforge.
+- Send public model names such as `coding-balanced` or
+  `ingary/coding-balanced` to Ingary unchanged.
+- Forward caller traceability headers: tenant, application, consuming agent,
+  consuming user, session, run, and client request ID where Calciforge knows
+  them.
+- Surface Ingary receipt IDs in Calciforge logs/receipts so a Calciforge run can
+  be correlated with an Ingary route receipt.
+- Avoid duplicating retries/fallbacks in both layers for the same failure class
+  until receipt semantics are explicit.
+
+Later, once Ingary has durable storage, stream governance, and real provider
+adapters, Calciforge can delete its internal synthetic model implementation and
+either keep calling Ingary over HTTP or embed the Rust/core library if that
+becomes the lower-friction path.
+
 ## Requirements
 
 ### Functional Requirements
