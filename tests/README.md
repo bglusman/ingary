@@ -55,6 +55,17 @@ backend, generates requests around context-window thresholds, and checks
 selected targets, skipped targets, receipts, caller provenance, and latency
 against the oracle.
 
+As storage and sink adapters come online, the same generator should also build
+sink oracles. For each generated request, tests should assert:
+
+- the durable receipt store has the authoritative receipt and ordered events
+- configured event streams receive the expected event IDs in per-receipt order
+- configured search sinks expose the expected receipt summary and filters after
+  a bounded eventual-consistency wait
+- telemetry/log sinks receive redacted derived payloads, never raw prompt,
+  completion, credential, or private-identifier fields by default
+- replaying durable receipt events can rebuild derived search/log projections
+
 Run dynamic-config tests against isolated backend instances, or run them
 serially. `POST /__test/config` intentionally mutates prototype state, so
 parallel probes against the same process can invalidate each other's model

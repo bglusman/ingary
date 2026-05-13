@@ -72,6 +72,22 @@ open with backpressure and drop/queue policy recorded in local health state.
 Search-index failure should not corrupt the receipt store; it should mark the
 index stale and allow a rebuild from durable receipts/events.
 
+Because sinks are derived from the same receipt-event stream, they are part of
+the property testing surface. A generated request should produce an expected
+receipt oracle and an expected sink oracle:
+
+- storage contains the authoritative receipt and ordered event timeline
+- event-stream sinks receive the expected events in order, or expose explicit
+  retry/drop/backpressure state
+- search sinks eventually expose the expected indexed receipt summary and
+  allowed redacted fields
+- telemetry/log sinks contain no prompt, completion, credential, or private
+  identifier fields unless explicitly configured and redacted
+- replaying durable receipt events can rebuild derived search indexes
+
+The sink oracle should allow eventual consistency where the sink is asynchronous,
+but it must bound that wait and make missing/stale sink records visible.
+
 Candidate infrastructure roles:
 
 - **Elasticsearch/OpenSearch/Meilisearch/Typesense**: search sinks for receipt
@@ -216,6 +232,21 @@ Every storage provider implementation should pass these tests:
 - optional Redis loss does not lose durable model, rollout, or receipt state
 - optional search-index loss can be rebuilt from durable receipts/events
 - optional event-stream outage follows explicit queue/drop/backpressure policy
+
+Every configured sink should pass these tests:
+
+- receipt-event fanout emits exactly the expected event IDs for a generated
+  request
+- event order is preserved per receipt/run where the sink claims ordered
+  delivery
+- at-least-once sinks use idempotency keys so duplicate delivery does not create
+  duplicate derived search records
+- redaction policy is identical between durable storage artifacts and sink
+  payloads
+- sink health exposes lag, queue depth, stale index status, and last successful
+  checkpoint where applicable
+- replay from durable receipt events rebuilds the sink to the same observable
+  state as live fanout
 
 ## Matrix Strategy
 

@@ -929,6 +929,14 @@ Event streams are useful for fanout, replay, async indexing, and audit
 pipelines, but they need a materialized store for the UI's query and retention
 requirements.
 
+Sinks are also part of the correctness story. Property tests should generate an
+expected receipt and an expected sink projection for each request. The oracle
+should verify durable receipt state, event-stream delivery/order/idempotency,
+search-index visibility, redaction consistency, sink lag/health reporting, and
+rebuild from durable receipt events. Asynchronous sinks can be eventually
+consistent, but tests must bound the wait and surface stale or missing
+projections.
+
 ### Logical Entities
 
 Control-plane tables:
@@ -1550,6 +1558,12 @@ new product's gateway is already more robust than Calciforge's internal path.
   for generated caller/model/status filters.
 - Storage round-trips preserve receipt schema version, caller provenance,
   skipped targets, stream triggers, and provider attempts.
+- Generated sink projections match the receipt oracle for configured event
+  streams, search indexes, and telemetry/log sinks.
+- Sink redaction properties match storage redaction properties for generated
+  prompt, completion, tool-call, credential-like, and private-identifier inputs.
+- Sink replay from durable receipt events rebuilds the same observable
+  projection as live fanout.
 
 ### Integration Tests
 
@@ -1569,6 +1583,12 @@ new product's gateway is already more robust than Calciforge's internal path.
   schema before declaring the server deployment path stable.
 - Optional Redis loss/restart does not lose receipts, model definitions, or
   active rollout state.
+- Search sink receives receipt summaries and can answer the receipt explorer's
+  expected filters after bounded eventual-consistency delay.
+- Event-stream sink receives ordered per-receipt events and handles duplicate
+  delivery idempotently.
+- Sink outage follows configured queue/drop/backpressure policy and records
+  health state without corrupting durable receipts.
 
 ### UI Tests
 
