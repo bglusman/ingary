@@ -21,12 +21,14 @@ defmodule ElixirIngary.Router do
   end
 
   get "/v1/models" do
+    synthetic_model = ElixirIngary.synthetic_model_record()["id"]
+
     json(conn, 200, %{
       "object" => "list",
       "data" => [
-        %{"id" => ElixirIngary.synthetic_model(), "object" => "model", "owned_by" => "ingary"},
+        %{"id" => synthetic_model, "object" => "model", "owned_by" => "ingary"},
         %{
-          "id" => "ingary/#{ElixirIngary.synthetic_model()}",
+          "id" => "ingary/#{synthetic_model}",
           "object" => "model",
           "owned_by" => "ingary"
         }
@@ -42,6 +44,7 @@ defmodule ElixirIngary.Router do
     with {:ok, request} <- require_json_object(conn.body_params),
          {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
+      request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       decision = route_decision(request)
       receipt = build_receipt("completed", model, caller, request, decision, true)
@@ -68,6 +71,7 @@ defmodule ElixirIngary.Router do
          request = override_model(request, Map.get(body, "model")),
          {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
+      request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       decision = route_decision(request)
       receipt = build_receipt("simulated", model, caller, request, decision, false)
@@ -126,6 +130,21 @@ defmodule ElixirIngary.Router do
     json(conn, 200, %{"data" => [ElixirIngary.synthetic_model_record()]})
   end
 
+  post "/__test/config" do
+    with {:ok, config} <- require_json_object(conn.body_params),
+         {:ok, config} <- ElixirIngary.put_config(config) do
+      ElixirIngary.ReceiptStore.clear()
+
+      json(conn, 200, %{
+        "status" => "ok",
+        "synthetic_model" => config["synthetic_model"],
+        "targets" => config["targets"]
+      })
+    else
+      {:error, message} -> error(conn, 400, message, "invalid_request", "invalid_test_config")
+    end
+  end
+
   match _ do
     error(conn, 404, "not found", "not_found", "not_found")
   end
@@ -137,6 +156,28 @@ defmodule ElixirIngary.Router do
   defp override_model(request, ""), do: request
   defp override_model(request, model), do: Map.put(request, "model", model)
 
+  defp apply_prompt_transforms(request) do
+    transforms = ElixirIngary.current_config()["prompt_transforms"] || %{}
+    messages = Map.get(request, "messages", [])
+
+    messages =
+      case transforms["preamble"] |> metadata_string() |> blank_to_nil() do
+        nil -> messages
+        text -> [%{"role" => "system", "name" => "ingary_preamble", "content" => text} | messages]
+      end
+
+    messages =
+      case transforms["postscript"] |> metadata_string() |> blank_to_nil() do
+        nil ->
+          messages
+
+        text ->
+          messages ++ [%{"role" => "system", "name" => "ingary_postscript", "content" => text}]
+      end
+
+    Map.put(request, "messages", messages)
+  end
+
   defp require_messages(%{"messages" => messages}) when is_list(messages) and messages != [],
     do: :ok
 
@@ -144,22 +185,7 @@ defmodule ElixirIngary.Router do
 
   defp route_decision(request) do
     estimate = ElixirIngary.estimate_prompt_tokens(Map.get(request, "messages", []))
-    selected_model = ElixirIngary.select_provider_model(estimate)
-    selected_provider = selected_model |> String.split("/", parts: 2) |> List.first()
-
-    reason =
-      if selected_model == ElixirIngary.local_model() do
-        "estimated prompt fits local context window"
-      else
-        "estimated prompt exceeds local context window"
-      end
-
-    %{
-      estimated_prompt_tokens: estimate,
-      selected_model: selected_model,
-      selected_provider: selected_provider,
-      reason: reason
-    }
+    ElixirIngary.select_route(estimate)
   end
 
   defp caller_context(conn, metadata) when is_map(metadata) do
@@ -252,7 +278,7 @@ defmodule ElixirIngary.Router do
       "created_at" => created_at,
       "run_id" => get_in(caller, ["run_id", "value"]),
       "synthetic_model" => model,
-      "synthetic_version" => ElixirIngary.synthetic_version(),
+      "synthetic_version" => ElixirIngary.current_config()["version"],
       "simulation" => status == "simulated",
       "caller" => caller,
       "request" => %{
@@ -260,15 +286,19 @@ defmodule ElixirIngary.Router do
         "normalized_model" => model,
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
         "stream" => Map.get(request, "stream", false),
-        "message_count" => length(Map.get(request, "messages", []))
+        "message_count" => length(Map.get(request, "messages", [])),
+        "prompt_transforms" => ElixirIngary.current_config()["prompt_transforms"],
+        "structured_output" => ElixirIngary.current_config()["structured_output"]
       },
       "decision" => %{
         "strategy" => "estimated_prompt_length",
         "selected_provider" => decision.selected_provider,
         "selected_model" => decision.selected_model,
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
+        "skipped" => decision.skipped,
         "reason" => decision.reason,
-        "threshold_tokens" => ElixirIngary.local_context_window()
+        "rule" => "select the smallest configured context window that fits the estimated prompt",
+        "governance" => ElixirIngary.current_config()["governance"]
       },
       "attempts" => [
         %{

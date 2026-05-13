@@ -13,7 +13,6 @@ import {
   setApiBaseUrl,
   simulateRoute,
 } from "./api";
-import { sinks, storageProviders } from "./mockData";
 import "./styles.css";
 import type {
   CallerContext,
@@ -21,7 +20,6 @@ import type {
   Receipt,
   ReceiptFilters,
   ReceiptSummary,
-  Sink,
   SimulationResult,
   StorageHealth,
   StorageProvider,
@@ -144,7 +142,7 @@ function App() {
           />
         )}
         {view === "Providers" && <Providers providers={providers} models={fullModels} selectedModel={selectedModel} />}
-        {view === "Storage" && <Storage storageProviders={storageProviders} storageHealth={storageHealth} sinks={sinks} receipts={receipts} />}
+        {view === "Storage" && <Storage storageHealth={storageHealth} receipts={receipts} />}
       </section>
     </main>
   );
@@ -267,7 +265,7 @@ function Routes({
         </div>
       </div>
       <div className="panel">
-        <h2>Stream policy</h2>
+        <h2>Governance</h2>
         <div className="kv">
           <span>Mode</span>
           <strong>{model.stream_policy?.mode ?? "pass_through"}</strong>
@@ -275,8 +273,14 @@ function Routes({
           <strong>{model.stream_policy?.buffer_tokens ?? 0} tokens</strong>
           <span>Rules</span>
           <strong>{model.stream_policy?.rules?.length ?? 0}</strong>
+          <span>Prompt transform</span>
+          <strong>{model.prompt_transforms?.preamble || model.prompt_transforms?.postscript ? "configured" : "none"}</strong>
+          <span>Structured output</span>
+          <strong>{model.structured_output?.mode ?? "none"}</strong>
+          <span>Policy descriptors</span>
+          <strong>{model.governance?.length ?? 0}</strong>
         </div>
-        <pre>{JSON.stringify(model.stream_policy?.rules ?? [], null, 2)}</pre>
+        <pre>{JSON.stringify({ stream_policy: model.stream_policy, prompt_transforms: model.prompt_transforms, structured_output: model.structured_output, governance: model.governance }, null, 2)}</pre>
       </div>
     </section>
   );
@@ -319,7 +323,7 @@ function Simulator({ models, onStatus }: { models: SyntheticModel[]; onStatus: (
         <div className="panelHeader compact">
           <div>
             <h2>Route simulator</h2>
-            <p>Posts to /v1/synthetic/simulate when available, otherwise runs the local planner mock.</p>
+            <p>Posts to the selected backend's /v1/synthetic/simulate endpoint.</p>
           </div>
         </div>
         <label>
@@ -409,7 +413,7 @@ function Receipts({
                 {receipt.synthetic_model} {"->"} {receipt.selected_model}
               </span>
               <small>
-                {receipt.caller.consuming_agent_id?.value ?? "unknown agent"} / {receipt.caller.consuming_user_id?.value ?? "unknown user"}
+                {receipt.caller?.consuming_agent_id?.value ?? "unknown agent"} / {receipt.caller?.consuming_user_id?.value ?? "unknown user"}
               </small>
               <Badge value={receipt.status} />
             </button>
@@ -463,21 +467,8 @@ function Providers({ providers, models, selectedModel }: { providers: Provider[]
   );
 }
 
-function Storage({
-  storageProviders,
-  storageHealth,
-  sinks,
-  receipts,
-}: {
-  storageProviders: StorageProvider[];
-  storageHealth: StorageHealth | null;
-  sinks: Sink[];
-  receipts: ReceiptSummary[];
-}) {
-  const visibleStorageProviders = storageHealth ? [storageProviderFromHealth(storageHealth, receipts.length), ...storageProviders] : storageProviders;
-  const primaryStore = visibleStorageProviders.find((provider) => provider.role === "system_of_record") ?? visibleStorageProviders[0];
-  const projectedReceiptCount = sinks.reduce((total, sink) => total + (sink.indexed_receipts ?? 0), 0);
-  const healthySinks = sinks.filter((sink) => sink.status === "healthy").length;
+function Storage({ storageHealth, receipts }: { storageHealth: StorageHealth | null; receipts: ReceiptSummary[] }) {
+  const primaryStore = storageHealth ? storageProviderFromHealth(storageHealth, receipts.length) : null;
 
   return (
     <section className="storageLayout">
@@ -485,83 +476,61 @@ function Storage({
         <div className="panelHeader">
           <div>
             <h2>Receipt storage</h2>
-            <p>Durable providers keep queryable receipt history; sinks hold redacted projections.</p>
+            <p>Live storage health reported by the selected backend.</p>
           </div>
           {primaryStore && <Badge value={`system of record: ${primaryStore.id}`} />}
         </div>
-        <div className="metricGrid">
-          <Metric label="Receipts" value={String(primaryStore?.receipt_count ?? receipts.length)} />
-          <Metric label="Receipt events" value={String(primaryStore?.event_count ?? 0)} />
-          <Metric label="Healthy sinks" value={`${healthySinks}/${sinks.length}`} />
-          <Metric label="Indexed copies" value={String(projectedReceiptCount)} />
-        </div>
-        <div className="storageCards">
-          {visibleStorageProviders.map((provider) => (
-            <article className="storageCard" key={provider.id}>
-              <div className="cardTitle">
-                <strong>{provider.id}</strong>
-                <Badge value={provider.status} />
-              </div>
-              <span>{provider.kind}</span>
-              <div className="kv tight">
-                <span>Role</span>
-                <strong>{provider.role}</strong>
-                <span>Contract</span>
-                <strong>{provider.contract_version}</strong>
-                <span>Migration</span>
-                <strong>{provider.migration_version}</strong>
-                <span>Failure policy</span>
-                <strong>{provider.failure_policy}</strong>
-                <span>Retention</span>
-                <strong>{provider.retention_days ? `${provider.retention_days} days` : "export snapshot"}</strong>
-              </div>
-              <div className="chipRow">
-                {provider.capabilities.map((capability) => (
-                  <span className="chip" key={capability}>
-                    {capability}
-                  </span>
-                ))}
-              </div>
-            </article>
-          ))}
-        </div>
+        {primaryStore ? (
+          <>
+            <div className="metricGrid">
+              <Metric label="Receipts" value={String(primaryStore.receipt_count)} />
+              <Metric label="Receipt events" value={String(primaryStore.event_count)} />
+              <Metric label="Read health" value={storageHealth?.read_health ?? "unknown"} />
+              <Metric label="Write health" value={storageHealth?.write_health ?? "unknown"} />
+            </div>
+            <div className="storageCards">
+              <article className="storageCard" key={primaryStore.id}>
+                <div className="cardTitle">
+                  <strong>{primaryStore.id}</strong>
+                  <Badge value={primaryStore.status} />
+                </div>
+                <span>{primaryStore.kind}</span>
+                <div className="kv tight">
+                  <span>Role</span>
+                  <strong>{primaryStore.role}</strong>
+                  <span>Contract</span>
+                  <strong>{primaryStore.contract_version}</strong>
+                  <span>Migration</span>
+                  <strong>{primaryStore.migration_version}</strong>
+                  <span>Failure policy</span>
+                  <strong>{primaryStore.failure_policy}</strong>
+                  <span>Retention</span>
+                  <strong>not implemented</strong>
+                </div>
+                <div className="chipRow">
+                  {primaryStore.capabilities.map((capability) => (
+                    <span className="chip" key={capability}>
+                      {capability}
+                    </span>
+                  ))}
+                </div>
+              </article>
+            </div>
+          </>
+        ) : (
+          <Empty message="Storage health is unavailable because the selected backend did not answer /admin/storage." />
+        )}
       </div>
 
       <div className="panel">
         <div className="panelHeader compact">
           <div>
             <h2>Sinks</h2>
-            <p>Derived outputs for search, event replay, and operator diagnostics.</p>
+            <p>Not implemented in the live backend contract yet.</p>
           </div>
+          <Badge value="not implemented" />
         </div>
-        <div className="sinkTimeline">
-          {sinks.map((sink) => (
-            <article className="sinkRow" key={sink.id}>
-              <div className="cardTitle">
-                <div>
-                  <strong>{sink.id}</strong>
-                  <span>{sink.kind}</span>
-                </div>
-                <Badge value={sink.status} />
-              </div>
-              <code>{sink.target}</code>
-              <div className="kv tight">
-                <span>Derived from</span>
-                <strong>{sink.derived_from}</strong>
-                <span>Delivery</span>
-                <strong>{sink.delivery}</strong>
-                <span>Lag</span>
-                <strong>{sink.lag_ms ?? 0} ms</strong>
-                <span>Backlog</span>
-                <strong>{sink.backlog ?? 0}</strong>
-                <span>Redaction</span>
-                <strong>{sink.redaction}</strong>
-                <span>Failure policy</span>
-                <strong>{sink.failure_policy}</strong>
-              </div>
-            </article>
-          ))}
-        </div>
+        <Empty message="Search, event stream, operator log, and metrics sinks were removed from the live UI until /admin/sinks exposes real backend state." />
       </div>
     </section>
   );

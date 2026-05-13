@@ -6,6 +6,7 @@ defmodule ElixirIngaryTest do
   @opts ElixirIngary.Router.init([])
 
   setup do
+    ElixirIngary.reset_config()
     ElixirIngary.ReceiptStore.clear()
     :ok
   end
@@ -108,6 +109,14 @@ defmodule ElixirIngaryTest do
                "receipt_schema" => "v1",
                "synthetic_model" => "coding-balanced",
                "synthetic_version" => "2026-05-13.mock",
+               "caller" => %{
+                 "tenant_id" => %{"value" => "tenant-a", "source" => "header"},
+                 "application_id" => %{"value" => "app-a", "source" => "header"},
+                 "consuming_agent_id" => %{"value" => "agent-z", "source" => "header"},
+                 "consuming_user_id" => %{"value" => "user-a", "source" => "header"},
+                 "session_id" => %{"value" => "session-a", "source" => "header"},
+                 "run_id" => %{"value" => "run-a", "source" => "header"}
+               },
                "tenant_id" => "tenant-a",
                "application_id" => "app-a",
                "consuming_agent_id" => "agent-z",

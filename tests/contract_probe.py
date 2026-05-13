@@ -216,6 +216,15 @@ def assert_receipt_search(result: ProbeResult) -> None:
     expect(result.status == 200, f"receipt search status {result.status}")
     data = result.body.get("data")
     expect(isinstance(data, list), "receipt search data must be list")
+    for row in data:
+        expect(isinstance(row, dict), "receipt search row must be object")
+        caller = row.get("caller")
+        expect(isinstance(caller, dict), "receipt summary must include nested caller object")
+        if row.get("receipt_id"):
+            expect(
+                isinstance(caller.get("consuming_agent_id"), dict) or "consuming_agent_id" not in caller,
+                "receipt summary caller.consuming_agent_id must be sourced object when present",
+            )
 
 
 def assert_storage_health(result: ProbeResult) -> None:

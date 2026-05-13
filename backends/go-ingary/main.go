@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -31,21 +32,43 @@ type server struct {
 }
 
 type TestConfig struct {
-	SyntheticModel string        `json:"synthetic_model"`
-	Version        string        `json:"version,omitempty"`
-	Targets        []RouteTarget `json:"targets"`
-	StreamRules    []StreamRule  `json:"stream_rules,omitempty"`
+	SyntheticModel   string              `json:"synthetic_model"`
+	Version          string              `json:"version,omitempty"`
+	Targets          []RouteTarget       `json:"targets"`
+	StreamRules      []StreamRule        `json:"stream_rules,omitempty"`
+	PromptTransforms PromptTransforms    `json:"prompt_transforms,omitempty"`
+	StructuredOutput *StructuredOutput   `json:"structured_output,omitempty"`
+	Governance       []GovernanceExample `json:"governance,omitempty"`
 }
 
 type RouteTarget struct {
-	Model         string `json:"model"`
-	ContextWindow int    `json:"context_window"`
+	Model           string `json:"model"`
+	ContextWindow   int    `json:"context_window"`
+	ProviderKind    string `json:"provider_kind,omitempty"`
+	ProviderBaseURL string `json:"provider_base_url,omitempty"`
 }
 
 type StreamRule struct {
 	ID      string `json:"id"`
 	Pattern string `json:"pattern"`
 	Action  string `json:"action"`
+}
+
+type PromptTransforms struct {
+	Preamble   string `json:"preamble,omitempty"`
+	Postscript string `json:"postscript,omitempty"`
+}
+
+type StructuredOutput struct {
+	Mode        string         `json:"mode,omitempty"`
+	Schema      map[string]any `json:"schema,omitempty"`
+	RepairTries int            `json:"repair_tries,omitempty"`
+}
+
+type GovernanceExample struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Action string `json:"action"`
 }
 
 type ChatCompletionRequest struct {
@@ -171,18 +194,37 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caller := extractCaller(r, req.Metadata)
+	req = applyPromptTransforms(req, cfg)
 	estimate := estimatePromptTokens(req.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
 	receipt, err := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record receipt", "server_error", "receipt_store_failed")
+		writeError(w, http.StatusInternalServerError, "failed to build receipt", "server_error", "receipt_failed")
 		return
 	}
 
 	w.Header().Set("X-Ingary-Receipt-Id", receipt.ReceiptID)
 	w.Header().Set("X-Ingary-Selected-Model", selected)
 	if req.Stream {
+		if err := s.storage.InsertReceipt(receipt); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to record receipt", "server_error", "receipt_store_failed")
+			return
+		}
 		writeMockStream(w, req.Model, selected, estimate)
+		return
+	}
+
+	content, providerStatus, providerLatency, providerErr := completeSelectedModel(selected, req, cfg)
+	if content == "" {
+		content = mockContent(selected, model, estimate, cfg)
+	}
+	receipt.Attempts[0]["status"] = providerStatus
+	receipt.Attempts[0]["latency_ms"] = providerLatency
+	receipt.Attempts[0]["provider_error"] = errorString(providerErr)
+	receipt.Final["status"] = providerStatus
+	receipt.Final["provider_error"] = errorString(providerErr)
+	if err := s.storage.InsertReceipt(receipt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record receipt", "server_error", "receipt_store_failed")
 		return
 	}
 
@@ -196,7 +238,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			"index": 0,
 			"message": map[string]string{
 				"role":    "assistant",
-				"content": fmt.Sprintf("Mock Ingary response routed to %s for %s. Estimated prompt tokens: %d.", selected, model, estimate),
+				"content": content,
 			},
 			"finish_reason": "stop",
 		}},
@@ -243,10 +285,15 @@ func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request)
 	}
 
 	caller := extractCaller(r, body.Request.Metadata)
+	body.Request = applyPromptTransforms(body.Request, cfg)
 	estimate := estimatePromptTokens(body.Request.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
 	receipt, err := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg)
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build receipt", "server_error", "receipt_failed")
+		return
+	}
+	if err := s.storage.InsertReceipt(receipt); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record receipt", "server_error", "receipt_store_failed")
 		return
 	}
@@ -302,7 +349,7 @@ func (s *server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	if !requireMethod(w, r, http.MethodGet) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"data": providers()})
+	writeJSON(w, http.StatusOK, map[string]any{"data": providersForConfig(s.currentConfig())})
 }
 
 func (s *server) handleStorage(w http.ResponseWriter, r *http.Request) {
@@ -362,6 +409,8 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		"estimated_prompt_tokens": estimate,
 		"stream":                  req.Stream,
 		"message_count":           len(req.Messages),
+		"prompt_transforms":       cfg.PromptTransforms,
+		"structured_output":       cfg.StructuredOutput,
 	}
 	decision := map[string]any{
 		"dispatcher":              "prompt_length_context_window",
@@ -369,6 +418,7 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		"estimated_prompt_tokens": estimate,
 		"skipped":                 skipped,
 		"rule":                    "select the smallest configured context window that fits the estimated prompt",
+		"governance":              cfg.Governance,
 	}
 	attempts := []map[string]any{{
 		"provider_model":  selected,
@@ -395,9 +445,6 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		Final:            final,
 	}
 
-	if err := s.storage.InsertReceipt(receipt); err != nil {
-		return Receipt{}, err
-	}
 	return receipt, nil
 }
 
@@ -428,19 +475,43 @@ func syntheticModelRecord(cfg TestConfig) map[string]any {
 		"stream_policy": map[string]any{
 			"mode":          "buffered_horizon",
 			"buffer_tokens": 256,
-			"rules": []map[string]any{{
-				"name":   "mock_noop",
-				"action": "pass",
-			}},
+			"rules":         cfg.StreamRules,
 		},
+		"prompt_transforms": cfg.PromptTransforms,
+		"structured_output": cfg.StructuredOutput,
+		"governance":        cfg.Governance,
 	}
 }
 
 func providers() []map[string]string {
-	return []map[string]string{
-		{"id": "local", "kind": "mock", "base_url": "http://localhost/mock/local", "credential_owner": "provider", "health": "ok"},
-		{"id": "managed", "kind": "mock", "base_url": "http://localhost/mock/managed", "credential_owner": "ingary", "health": "ok"},
+	return providersForConfig(defaultTestConfig())
+}
+
+func providersForConfig(cfg TestConfig) []map[string]string {
+	seen := map[string]bool{}
+	var providers []map[string]string
+	for _, target := range cfg.Targets {
+		id := strings.Split(target.Model, "/")[0]
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		kind := strings.TrimSpace(target.ProviderKind)
+		if kind == "" {
+			kind = "mock"
+		}
+		baseURL := strings.TrimSpace(target.ProviderBaseURL)
+		if baseURL == "" {
+			if id == "ollama" {
+				kind = "ollama"
+				baseURL = getenvDefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+			} else {
+				baseURL = "mock://" + id
+			}
+		}
+		providers = append(providers, map[string]string{"id": id, "kind": kind, "base_url": baseURL, "credential_owner": "ingary", "health": "ok"})
 	}
+	return providers
 }
 
 func defaultTestConfig() TestConfig {
@@ -452,6 +523,11 @@ func defaultTestConfig() TestConfig {
 			{Model: "managed/kimi-k2.6", ContextWindow: 262144},
 		},
 		StreamRules: []StreamRule{{ID: "mock_noop", Pattern: "", Action: "pass"}},
+		Governance: []GovernanceExample{
+			{ID: "json_object", Kind: "structured_output", Action: "validate_or_block"},
+			{ID: "xml_well_formed", Kind: "structured_output", Action: "validate_or_block"},
+			{ID: "prompt_transforms", Kind: "request_transform", Action: "prepend_append_messages"},
+		},
 	}
 }
 
@@ -512,6 +588,113 @@ func selectProviderModel(estimatedPromptTokens int, cfg TestConfig) (string, []m
 		return "unconfigured/no-target", skipped
 	}
 	return targets[len(targets)-1].Model, skipped
+}
+
+func applyPromptTransforms(req ChatCompletionRequest, cfg TestConfig) ChatCompletionRequest {
+	messages := append([]ChatMessage(nil), req.Messages...)
+	if text := strings.TrimSpace(cfg.PromptTransforms.Preamble); text != "" {
+		messages = append([]ChatMessage{{Role: "system", Content: text, Name: "ingary_preamble"}}, messages...)
+	}
+	if text := strings.TrimSpace(cfg.PromptTransforms.Postscript); text != "" {
+		messages = append(messages, ChatMessage{Role: "system", Content: text, Name: "ingary_postscript"})
+	}
+	req.Messages = messages
+	return req
+}
+
+func completeSelectedModel(selected string, req ChatCompletionRequest, cfg TestConfig) (string, string, int64, error) {
+	started := time.Now()
+	target := targetByModel(selected, cfg)
+	status := "completed"
+	if target == nil || providerKind(*target) == "mock" {
+		return "", status, time.Since(started).Milliseconds(), nil
+	}
+	switch providerKind(*target) {
+	case "ollama":
+		content, err := completeWithOllama(*target, req)
+		if err != nil {
+			status = "provider_error"
+		}
+		return content, status, time.Since(started).Milliseconds(), err
+	default:
+		return "", "provider_unsupported", time.Since(started).Milliseconds(), fmt.Errorf("unsupported provider kind %q", providerKind(*target))
+	}
+}
+
+func targetByModel(model string, cfg TestConfig) *RouteTarget {
+	for _, target := range cfg.Targets {
+		if target.Model == model {
+			copy := target
+			return &copy
+		}
+	}
+	return nil
+}
+
+func providerKind(target RouteTarget) string {
+	if target.ProviderKind != "" {
+		return strings.TrimSpace(target.ProviderKind)
+	}
+	if strings.HasPrefix(target.Model, "ollama/") {
+		return "ollama"
+	}
+	return "mock"
+}
+
+func completeWithOllama(target RouteTarget, req ChatCompletionRequest) (string, error) {
+	model := strings.TrimPrefix(target.Model, "ollama/")
+	baseURL := strings.TrimRight(target.ProviderBaseURL, "/")
+	if baseURL == "" {
+		baseURL = getenvDefault("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+	}
+	messages := make([]map[string]any, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		messages = append(messages, map[string]any{
+			"role":    message.Role,
+			"content": contentString(message.Content),
+		})
+	}
+	body := map[string]any{"model": model, "messages": messages, "stream": false}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 180 * time.Second}
+	resp, err := client.Post(baseURL+"/api/chat", "application/json", bytes.NewReader(encoded))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("ollama returned %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var parsed struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", err
+	}
+	return parsed.Message.Content, nil
+}
+
+func mockContent(selected string, model string, estimate int, cfg TestConfig) string {
+	var builder strings.Builder
+	builder.WriteString(fmt.Sprintf("Mock Ingary response routed to %s for %s. Estimated prompt tokens: %d.", selected, model, estimate))
+	if cfg.StructuredOutput != nil {
+		switch cfg.StructuredOutput.Mode {
+		case "json_object":
+			return fmt.Sprintf(`{"route":"%s","synthetic_model":"%s","estimated_prompt_tokens":%d}`, selected, model, estimate)
+		case "xml":
+			return fmt.Sprintf("<route selected_model=%q synthetic_model=%q estimated_prompt_tokens=%q />", selected, model, strconv.Itoa(estimate))
+		}
+	}
+	return builder.String()
 }
 
 func estimatePromptTokens(messages []ChatMessage) int {
@@ -607,6 +790,35 @@ func metadataTags(metadata map[string]any) []string {
 	}
 	sort.Strings(tags)
 	return tags
+}
+
+func contentString(content any) string {
+	switch typed := content.(type) {
+	case string:
+		return typed
+	case nil:
+		return ""
+	default:
+		encoded, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprint(typed)
+		}
+		return string(encoded)
+	}
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+func getenvDefault(key string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func receiptSummary(receipt Receipt) ReceiptSummary {

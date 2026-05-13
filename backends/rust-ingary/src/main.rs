@@ -27,6 +27,7 @@ const LOCAL_MODEL: &str = "local/qwen-coder";
 const MANAGED_MODEL: &str = "managed/kimi-k2.6";
 const LOCAL_CONTEXT_WINDOW: u64 = 32_768;
 const MANAGED_CONTEXT_WINDOW: u64 = 262_144;
+const SYNTHETIC_PREFIX: &str = "ingary/";
 
 #[tokio::main]
 async fn main() {
@@ -62,6 +63,7 @@ fn app(state: AppState) -> Router {
         .route("/admin/providers", get(list_providers))
         .route("/admin/storage", get(storage_health))
         .route("/admin/synthetic-models", get(list_synthetic_models))
+        .route("/__test/config", post(update_test_config))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(state)
@@ -74,12 +76,14 @@ async fn shutdown_signal() {
 #[derive(Clone)]
 struct AppState {
     receipt_store: Arc<dyn ReceiptStore>,
+    config: Arc<RwLock<TestConfig>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
         Self {
             receipt_store: Arc::new(MemoryReceiptStore::default()),
+            config: Arc::new(RwLock::new(TestConfig::default())),
         }
     }
 }
@@ -92,6 +96,8 @@ trait ReceiptStore: Send + Sync {
     fn insert_receipt<'a>(&'a self, receipt: Receipt) -> StoreFuture<'a, ()>;
 
     fn get_receipt<'a>(&'a self, receipt_id: &'a str) -> StoreFuture<'a, Option<Receipt>>;
+
+    fn clear_receipts<'a>(&'a self) -> StoreFuture<'a, ()>;
 
     fn list_receipts<'a>(
         &'a self,
@@ -144,6 +150,12 @@ impl ReceiptStore for MemoryReceiptStore {
         })
     }
 
+    fn clear_receipts<'a>(&'a self) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            self.receipts.write().await.clear();
+        })
+    }
+
     fn list_receipts<'a>(
         &'a self,
         query: &'a ReceiptQuery,
@@ -163,18 +175,20 @@ impl ReceiptStore for MemoryReceiptStore {
     }
 }
 
-async fn list_models() -> Json<Value> {
+async fn list_models(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.config.read().await.clone();
     Json(json!({
         "object": "list",
         "data": [
-            {"id": SYNTHETIC_MODEL_ID, "object": "model", "owned_by": "ingary"},
-            {"id": format!("ingary/{SYNTHETIC_MODEL_ID}"), "object": "model", "owned_by": "ingary"}
+            {"id": cfg.synthetic_model, "object": "model", "owned_by": "ingary"},
+            {"id": format!("{SYNTHETIC_PREFIX}{}", cfg.synthetic_model), "object": "model", "owned_by": "ingary"}
         ]
     }))
 }
 
-async fn list_synthetic_model_summaries() -> Json<Value> {
-    Json(json!({ "data": [synthetic_model_record()] }))
+async fn list_synthetic_model_summaries(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.config.read().await.clone();
+    Json(json!({ "data": [synthetic_model_record(&cfg)] }))
 }
 
 async fn chat_completions(
@@ -182,17 +196,23 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> Result<Response, ApiError> {
-    let normalized_model = normalize_model(request.model.as_deref()).ok_or_else(|| {
-        ApiError::bad_request("model must be coding-balanced or ingary/coding-balanced")
+    let cfg = state.config.read().await.clone();
+    let normalized_model = normalize_model(request.model.as_deref(), &cfg).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "model must be {} or {}{}",
+            cfg.synthetic_model, SYNTHETIC_PREFIX, cfg.synthetic_model
+        ))
     })?;
+    let request = apply_prompt_transforms(request, &cfg);
     let caller = caller_from(headers.clone(), request.metadata.as_ref());
-    let decision = select_route(&request);
+    let decision = select_route(&request, &cfg);
     let receipt = build_receipt(
         caller,
         normalized_model.clone(),
         Some(request.clone()),
         decision.clone(),
         "completed",
+        &cfg,
     );
 
     state.receipt_store.insert_receipt(receipt.clone()).await;
@@ -238,23 +258,29 @@ async fn chat_completions(
 async fn simulate(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<SimulationRequest>,
+    Json(mut request): Json<SimulationRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let model = request
         .model
         .as_deref()
         .or(request.request.model.as_deref());
-    let normalized_model = normalize_model(model).ok_or_else(|| {
-        ApiError::bad_request("model must be coding-balanced or ingary/coding-balanced")
+    let cfg = state.config.read().await.clone();
+    let normalized_model = normalize_model(model, &cfg).ok_or_else(|| {
+        ApiError::bad_request(format!(
+            "model must be {} or {}{}",
+            cfg.synthetic_model, SYNTHETIC_PREFIX, cfg.synthetic_model
+        ))
     })?;
+    request.request = apply_prompt_transforms(request.request, &cfg);
     let caller = caller_from(headers, request.request.metadata.as_ref());
-    let decision = select_route(&request.request);
+    let decision = select_route(&request.request, &cfg);
     let receipt = build_receipt(
         caller,
         normalized_model,
         Some(request.request),
         decision,
         "simulated",
+        &cfg,
     );
 
     state.receipt_store.insert_receipt(receipt.clone()).await;
@@ -308,82 +334,163 @@ async fn storage_health(State(state): State<AppState>) -> Json<Value> {
     Json(state.receipt_store.health().await)
 }
 
-async fn list_synthetic_models() -> Json<Value> {
-    Json(json!({ "data": [synthetic_model_record()] }))
+async fn list_synthetic_models(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.config.read().await.clone();
+    Json(json!({ "data": [synthetic_model_record(&cfg)] }))
 }
 
-fn synthetic_model_record() -> Value {
+async fn update_test_config(
+    State(state): State<AppState>,
+    Json(mut cfg): Json<TestConfig>,
+) -> Result<Json<Value>, ApiError> {
+    cfg.normalize();
+    cfg.validate().map_err(ApiError::bad_request)?;
+    state.receipt_store.clear_receipts().await;
+    *state.config.write().await = cfg.clone();
+    Ok(Json(json!({
+        "status": "ok",
+        "synthetic_model": cfg.synthetic_model,
+        "targets": cfg.targets
+    })))
+}
+
+fn synthetic_model_record(cfg: &TestConfig) -> Value {
+    let mut targets = cfg.targets.clone();
+    targets.sort_by(|left, right| {
+        left.context_window
+            .cmp(&right.context_window)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+    let target_ids: Vec<String> = targets
+        .iter()
+        .map(|target| target.model.replace('/', "."))
+        .collect();
+    let mut nodes = vec![json!({
+        "id": "dispatcher.prompt_length",
+        "type": "dispatcher",
+        "targets": target_ids,
+        "strategy": "estimated_prompt_length"
+    })];
+    for target in targets {
+        nodes.push(json!({
+            "id": target.model.replace('/', "."),
+            "type": "concrete_model",
+            "provider_id": target.model.split('/').next().unwrap_or("mock"),
+            "upstream_model_id": target.model,
+            "context_window": target.context_window
+        }));
+    }
     json!({
-        "id": SYNTHETIC_MODEL_ID,
-        "public_model_id": SYNTHETIC_MODEL_ID,
-        "active_version": SYNTHETIC_VERSION,
+        "id": cfg.synthetic_model,
+        "public_model_id": cfg.synthetic_model,
+        "active_version": cfg.version,
         "description": "Mock dispatcher that selects a local coding model for short prompts and a managed long-context model for larger prompts.",
-        "public_namespace": "prefixed",
+        "public_namespace": "flat",
         "route_type": "dispatcher",
         "status": "active",
         "traffic_24h": 0,
         "fallback_rate": 0.0,
         "stream_trigger_count_24h": 0,
         "route_graph": {
-            "root": "prompt-length-dispatcher",
-            "nodes": [
-                {
-                    "id": "prompt-length-dispatcher",
-                    "type": "dispatcher",
-                    "targets": [LOCAL_MODEL, MANAGED_MODEL],
-                    "strategy": "estimated_prompt_length"
-                },
-                {
-                    "id": LOCAL_MODEL,
-                    "type": "concrete_model",
-                    "provider_id": "local",
-                    "upstream_model_id": "qwen-coder",
-                    "context_window": LOCAL_CONTEXT_WINDOW
-                },
-                {
-                    "id": MANAGED_MODEL,
-                    "type": "concrete_model",
-                    "provider_id": "managed",
-                    "upstream_model_id": "kimi-k2.6",
-                    "context_window": MANAGED_CONTEXT_WINDOW
-                }
-            ]
+            "root": "dispatcher.prompt_length",
+            "nodes": nodes
         },
         "stream_policy": {
-            "mode": "pass_through",
-            "buffer_tokens": 0,
-            "rules": []
-        }
+            "mode": "buffered_horizon",
+            "buffer_tokens": 256,
+            "rules": cfg.stream_rules
+        },
+        "prompt_transforms": cfg.prompt_transforms,
+        "structured_output": cfg.structured_output,
+        "governance": cfg.governance
     })
 }
 
-fn normalize_model(model: Option<&str>) -> Option<String> {
-    match model {
-        Some(SYNTHETIC_MODEL_ID) => Some(SYNTHETIC_MODEL_ID.to_string()),
-        Some(value) if value == format!("ingary/{SYNTHETIC_MODEL_ID}") => {
-            Some(SYNTHETIC_MODEL_ID.to_string())
-        }
-        _ => None,
+fn normalize_model(model: Option<&str>, cfg: &TestConfig) -> Option<String> {
+    let model = model?
+        .trim()
+        .strip_prefix(SYNTHETIC_PREFIX)
+        .unwrap_or(model?.trim());
+    if model == cfg.synthetic_model {
+        Some(cfg.synthetic_model.clone())
+    } else {
+        None
     }
 }
 
-fn select_route(request: &ChatCompletionRequest) -> RouteDecision {
+fn select_route(request: &ChatCompletionRequest, cfg: &TestConfig) -> RouteDecision {
     let estimated_prompt_tokens = estimate_prompt_tokens(&request.messages);
-    let selected_model = if estimated_prompt_tokens <= LOCAL_CONTEXT_WINDOW {
-        LOCAL_MODEL
-    } else {
-        MANAGED_MODEL
-    };
+    let mut targets = cfg.targets.clone();
+    targets.sort_by(|left, right| {
+        left.context_window
+            .cmp(&right.context_window)
+            .then_with(|| left.model.cmp(&right.model))
+    });
+    let mut skipped = Vec::new();
+    let mut selected_model = targets
+        .last()
+        .map(|target| target.model.clone())
+        .unwrap_or_else(|| "unconfigured/no-target".to_string());
+    for target in targets {
+        if target.context_window >= estimated_prompt_tokens {
+            selected_model = target.model;
+            break;
+        }
+        skipped.push(json!({
+            "target": target.model,
+            "reason": "context_window_too_small",
+            "context_window": target.context_window
+        }));
+    }
 
     RouteDecision {
-        selected_model: selected_model.to_string(),
+        selected_model,
         estimated_prompt_tokens,
-        reason: if selected_model == LOCAL_MODEL {
-            "estimated prompt fits local context window".to_string()
+        reason: if skipped.is_empty() {
+            "estimated prompt fits selected context window".to_string()
         } else {
-            "estimated prompt exceeds local context window".to_string()
+            "estimated prompt exceeded smaller configured context windows".to_string()
         },
+        skipped,
     }
+}
+
+fn apply_prompt_transforms(
+    mut request: ChatCompletionRequest,
+    cfg: &TestConfig,
+) -> ChatCompletionRequest {
+    if let Some(preamble) = cfg
+        .prompt_transforms
+        .as_ref()
+        .and_then(|transforms| nonblank(transforms.preamble.as_deref()))
+    {
+        request.messages.insert(
+            0,
+            ChatMessage {
+                role: "system".to_string(),
+                content: Value::String(preamble.to_string()),
+                name: Some("ingary_preamble".to_string()),
+                extra: HashMap::new(),
+            },
+        );
+    }
+    if let Some(postscript) = cfg
+        .prompt_transforms
+        .as_ref()
+        .and_then(|transforms| nonblank(transforms.postscript.as_deref()))
+    {
+        request.messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: Value::String(postscript.to_string()),
+            name: Some("ingary_postscript".to_string()),
+            extra: HashMap::new(),
+        });
+    }
+    request
+}
+
+fn nonblank(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
 fn estimate_prompt_tokens(messages: &[ChatMessage]) -> u64 {
@@ -398,6 +505,7 @@ fn build_receipt(
     request: Option<ChatCompletionRequest>,
     decision: RouteDecision,
     status: &str,
+    cfg: &TestConfig,
 ) -> Receipt {
     let receipt_id = format!("rcpt_{}", Uuid::new_v4());
     let run_id = caller.run_id.as_ref().map(|run_id| run_id.value.clone());
@@ -406,15 +514,31 @@ fn build_receipt(
         receipt_id,
         run_id,
         synthetic_model,
-        synthetic_version: SYNTHETIC_VERSION.to_string(),
+        synthetic_version: cfg.version.clone(),
         caller,
-        request: request.map(|request| serde_json::to_value(request).unwrap_or(Value::Null)),
+        request: request.map(|request| {
+            let mut value = serde_json::to_value(request).unwrap_or(Value::Null);
+            if let Value::Object(ref mut object) = value {
+                object.insert(
+                    "prompt_transforms".to_string(),
+                    serde_json::to_value(&cfg.prompt_transforms).unwrap_or(Value::Null),
+                );
+                object.insert(
+                    "structured_output".to_string(),
+                    cfg.structured_output.clone().unwrap_or(Value::Null),
+                );
+            }
+            value
+        }),
         decision: json!({
             "strategy": "estimated_prompt_length",
             "estimated_prompt_tokens": decision.estimated_prompt_tokens,
             "selected_model": decision.selected_model,
+            "selected_provider": decision.selected_model.split('/').next().unwrap_or("mock"),
+            "skipped": decision.skipped,
             "reason": decision.reason,
-            "threshold_tokens": LOCAL_CONTEXT_WINDOW
+            "rule": "select the smallest configured context window that fits the estimated prompt",
+            "governance": cfg.governance
         }),
         attempts: vec![json!({
             "provider_id": decision.selected_model.split('/').next().unwrap_or("mock"),
@@ -551,7 +675,114 @@ struct SimulationRequest {
 struct RouteDecision {
     selected_model: String,
     estimated_prompt_tokens: u64,
+    skipped: Vec<Value>,
     reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct TestConfig {
+    synthetic_model: String,
+    #[serde(default)]
+    version: String,
+    targets: Vec<RouteTarget>,
+    #[serde(default)]
+    stream_rules: Vec<StreamRule>,
+    #[serde(default)]
+    prompt_transforms: Option<PromptTransforms>,
+    #[serde(default)]
+    structured_output: Option<Value>,
+    #[serde(default)]
+    governance: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct RouteTarget {
+    model: String,
+    context_window: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct StreamRule {
+    id: Option<String>,
+    pattern: Option<String>,
+    action: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct PromptTransforms {
+    preamble: Option<String>,
+    postscript: Option<String>,
+}
+
+impl Default for TestConfig {
+    fn default() -> Self {
+        Self {
+            synthetic_model: SYNTHETIC_MODEL_ID.to_string(),
+            version: SYNTHETIC_VERSION.to_string(),
+            targets: vec![
+                RouteTarget {
+                    model: LOCAL_MODEL.to_string(),
+                    context_window: LOCAL_CONTEXT_WINDOW,
+                },
+                RouteTarget {
+                    model: MANAGED_MODEL.to_string(),
+                    context_window: MANAGED_CONTEXT_WINDOW,
+                },
+            ],
+            stream_rules: vec![StreamRule {
+                id: Some("mock_noop".to_string()),
+                pattern: Some("".to_string()),
+                action: "pass".to_string(),
+            }],
+            prompt_transforms: None,
+            structured_output: None,
+            governance: vec![json!({
+                "id": "prompt_transforms",
+                "kind": "request_transform",
+                "action": "transform"
+            })],
+        }
+    }
+}
+
+impl TestConfig {
+    fn normalize(&mut self) {
+        if self.version.trim().is_empty() {
+            self.version = SYNTHETIC_VERSION.to_string();
+        }
+        self.synthetic_model = self.synthetic_model.trim().to_string();
+        for target in &mut self.targets {
+            target.model = target.model.trim().to_string();
+        }
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.synthetic_model.is_empty() {
+            return Err("synthetic_model must not be empty".to_string());
+        }
+        if self.synthetic_model.contains('/') {
+            return Err("synthetic_model must be unprefixed".to_string());
+        }
+        if self.targets.is_empty() {
+            return Err("targets must not be empty".to_string());
+        }
+        let mut seen = std::collections::HashSet::new();
+        for target in &self.targets {
+            if target.model.is_empty() {
+                return Err("target model must not be empty".to_string());
+            }
+            if target.context_window == 0 {
+                return Err(format!(
+                    "target {} context_window must be positive",
+                    target.model
+                ));
+            }
+            if !seen.insert(target.model.as_str()) {
+                return Err(format!("duplicate target {}", target.model));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -648,7 +879,7 @@ struct ReceiptQuery {
 impl ReceiptQuery {
     fn matches(&self, receipt: &Receipt) -> bool {
         self.model.as_deref().is_none_or(|model| {
-            normalize_model(Some(model)).as_deref() == Some(&receipt.synthetic_model)
+            normalize_model_filter(model).as_deref() == Some(&receipt.synthetic_model)
         }) && self
             .consuming_agent_id
             .as_deref()
@@ -673,6 +904,18 @@ impl ReceiptQuery {
 
 fn sourced_value(value: &Option<SourcedString>) -> Option<&str> {
     value.as_ref().map(|value| value.value.as_str())
+}
+
+fn normalize_model_filter(model: &str) -> Option<String> {
+    let model = model
+        .trim()
+        .strip_prefix(SYNTHETIC_PREFIX)
+        .unwrap_or(model.trim());
+    if model.is_empty() {
+        None
+    } else {
+        Some(model.to_string())
+    }
 }
 
 #[derive(Debug)]

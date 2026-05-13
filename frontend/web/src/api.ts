@@ -1,11 +1,3 @@
-import {
-  modelSummaries,
-  models,
-  providers,
-  receiptSummaries,
-  receipts,
-  simulateWithMocks,
-} from "./mockData";
 import type {
   Provider,
   Receipt,
@@ -33,9 +25,9 @@ export const BACKENDS: BackendTarget[] = [
 
 const STORAGE_KEY = "ingary.apiBaseUrl";
 
-type ApiStatus = "api" | "mock";
+type ApiStatus = "api" | "offline";
 
-let lastStatus: ApiStatus = "mock";
+let lastStatus: ApiStatus = "offline";
 let apiBaseUrl = readInitialBaseUrl();
 
 export function getApiStatus(): ApiStatus {
@@ -48,7 +40,7 @@ export function getApiBaseUrl(): string {
 
 export function setApiBaseUrl(nextBaseUrl: string): void {
   apiBaseUrl = nextBaseUrl;
-  lastStatus = "mock";
+  lastStatus = "offline";
   window.localStorage.setItem(STORAGE_KEY, nextBaseUrl);
 }
 
@@ -66,6 +58,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
+    lastStatus = "offline";
     throw new Error(`${response.status} ${response.statusText}`);
   }
 
@@ -73,50 +66,20 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-async function withMockFallback<T>(apiCall: () => Promise<T>, mockValue: () => T): Promise<T> {
-  try {
-    return await apiCall();
-  } catch {
-    lastStatus = "mock";
-    return mockValue();
-  }
-}
-
 export function listSyntheticModels(): Promise<SyntheticModelSummary[]> {
-  return withMockFallback(
-    async () => {
-      const result = await requestJson<{ data: SyntheticModelSummary[] }>("/v1/synthetic/models");
-      return result.data;
-    },
-    () => modelSummaries,
-  );
+  return requestJson<{ data: SyntheticModelSummary[] }>("/v1/synthetic/models").then((result) => result.data);
 }
 
 export function listAdminSyntheticModels(): Promise<SyntheticModel[]> {
-  return withMockFallback(
-    async () => {
-      const result = await requestJson<{ data: SyntheticModel[] }>("/admin/synthetic-models");
-      return result.data;
-    },
-    () => models,
-  );
+  return requestJson<{ data: SyntheticModel[] }>("/admin/synthetic-models").then((result) => result.data);
 }
 
 export function listProviders(): Promise<Provider[]> {
-  return withMockFallback(
-    async () => {
-      const result = await requestJson<{ data: Provider[] }>("/admin/providers");
-      return result.data;
-    },
-    () => providers,
-  );
+  return requestJson<{ data: Provider[] }>("/admin/providers").then((result) => result.data);
 }
 
-export function listStorageHealth(): Promise<StorageHealth | null> {
-  return withMockFallback<StorageHealth | null>(
-    () => requestJson<StorageHealth>("/admin/storage"),
-    () => null,
-  );
+export function listStorageHealth(): Promise<StorageHealth> {
+  return requestJson<StorageHealth>("/admin/storage");
 }
 
 export function searchReceipts(filters: ReceiptFilters): Promise<ReceiptSummary[]> {
@@ -125,39 +88,17 @@ export function searchReceipts(filters: ReceiptFilters): Promise<ReceiptSummary[
     if (value !== undefined && value !== "") query.set(key, String(value));
   });
 
-  return withMockFallback(
-    async () => {
-      const result = await requestJson<{ data: ReceiptSummary[] }>(`/v1/receipts?${query.toString()}`);
-      return result.data;
-    },
-    () =>
-      receiptSummaries.filter((receipt) => {
-        if (filters.model && receipt.synthetic_model !== filters.model) return false;
-        if (filters.consuming_agent_id && receipt.caller.consuming_agent_id?.value !== filters.consuming_agent_id) return false;
-        if (filters.consuming_user_id && receipt.caller.consuming_user_id?.value !== filters.consuming_user_id) return false;
-        if (filters.session_id && receipt.caller.session_id?.value !== filters.session_id) return false;
-        if (filters.run_id && receipt.caller.run_id?.value !== filters.run_id) return false;
-        if (filters.status && receipt.status !== filters.status) return false;
-        return true;
-      }),
-  );
+  return requestJson<{ data: ReceiptSummary[] }>(`/v1/receipts?${query.toString()}`).then((result) => result.data);
 }
 
 export function getReceipt(receiptId: string): Promise<Receipt> {
-  return withMockFallback(
-    () => requestJson<Receipt>(`/v1/receipts/${encodeURIComponent(receiptId)}`),
-    () => receipts.find((receipt) => receipt.receipt_id === receiptId) ?? receipts[0],
-  );
+  return requestJson<Receipt>(`/v1/receipts/${encodeURIComponent(receiptId)}`);
 }
 
 export function simulateRoute(request: SimulationRequest, headers: Record<string, string>): Promise<SimulationResult> {
-  return withMockFallback(
-    () =>
-      requestJson<SimulationResult>("/v1/synthetic/simulate", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(request),
-      }),
-    () => simulateWithMocks(request),
-  );
+  return requestJson<SimulationResult>("/v1/synthetic/simulate", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(request),
+  });
 }

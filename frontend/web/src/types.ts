@@ -60,6 +60,25 @@ export type StreamPolicy = {
   rules?: Array<Record<string, unknown>>;
 };
 
+export type PromptTransforms = {
+  preamble?: string;
+  postscript?: string;
+};
+
+export type StructuredOutput = {
+  mode?: "json_object" | "json_schema" | "xml" | "protobuf_json" | "custom";
+  schema?: Record<string, unknown>;
+  repair_tries?: number;
+};
+
+export type GovernanceRule = {
+  id: string;
+  kind: "request_transform" | "route_gate" | "stream_guard" | "structured_output" | "receipt_annotation" | "custom";
+  action: "pass" | "transform" | "validate_or_block" | "inject_reminder_and_retry" | "reroute" | "escalate" | "block_final" | "annotate";
+  engine?: string;
+  [key: string]: unknown;
+};
+
 export type SyntheticModel = {
   id: string;
   active_version: string;
@@ -67,6 +86,9 @@ export type SyntheticModel = {
   public_namespace?: "flat" | "prefixed";
   route_graph: RouteGraph;
   stream_policy?: StreamPolicy;
+  prompt_transforms?: PromptTransforms;
+  structured_output?: StructuredOutput;
+  governance?: GovernanceRule[];
 };
 
 export type ChatMessage = {
@@ -119,7 +141,7 @@ export type SimulationResult = {
 
 export type Provider = {
   id: string;
-  kind: "openai_compatible" | "litellm" | "helicone" | "openrouter" | "portkey" | "mock";
+  kind: "openai_compatible" | "litellm" | "helicone" | "openrouter" | "portkey" | "ollama" | "mock";
   base_url: string;
   credential_owner: "provider" | "ingary";
   health?: string;

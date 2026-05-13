@@ -69,6 +69,7 @@ defmodule ElixirIngary.ReceiptStore do
       "receipt_schema" => receipt["receipt_schema"],
       "synthetic_model" => receipt["synthetic_model"],
       "synthetic_version" => receipt["synthetic_version"],
+      "caller" => receipt["caller"] || %{},
       "tenant_id" => sourced_value(receipt, ["caller", "tenant_id"]),
       "application_id" => sourced_value(receipt, ["caller", "application_id"]),
       "consuming_agent_id" => sourced_value(receipt, ["caller", "consuming_agent_id"]),

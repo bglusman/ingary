@@ -711,6 +711,60 @@ call a sandboxed sidecar, or bind to a Rust policy engine.
 Programmable rules should be an advanced extension, not the only policy
 interface.
 
+The portable contract should define an engine-neutral policy ABI first:
+
+- inputs: caller context, request metadata, route graph state, selected target,
+  buffered stream window, provider event, attempt history
+- outputs: pass, transform request, annotate receipt, retry with reminder,
+  reroute, escalate, block final output
+- constraints: deterministic execution, bounded CPU/reductions, bounded memory,
+  no ambient filesystem/network/process access, explicit state handoff
+
+Starlark should be the first portable advanced policy language because model
+artifacts may outlive any one backend prototype. Keeping the policy code as
+data means the same synthetic model can run under Rust, Go, or Elixir, produce
+comparable receipts, and participate in the same artifact hub. The product
+contract still exposes a policy-engine ABI, not a promise that Starlark is the
+only possible implementation.
+
+Initial policy engine direction:
+
+- `builtin`: declarative engine for common transforms, regex/literal guards,
+  JSON/XML/protobuf-JSON validation, and bounded repair/retry actions.
+- `starlark`: first readable portable programmable engine. Rust can use a
+  native Starlark engine, Go can use the Go Starlark implementation, and Elixir
+  should prefer a shared sidecar first. A Rustler wrapper around a Rust
+  Starlark engine is a valid later optimization for trusted deployments, but it
+  is not as clean an isolation boundary as a sidecar.
+- `wasm`: later optional engine target for stronger isolation and packaged
+  extensions. WASM should be treated as an execution format, not the default
+  authoring language. If shipped, it should sit behind the same ABI used by
+  Starlark and the built-in declarative engine.
+- `external`: bring-your-own policy engine over a local API/sidecar contract for
+  operators who need a different language or isolation model.
+
+Dune is a plausible Elixir candidate for local/operator-authored policy because
+it supports allowlisted modules/functions, isolated process execution,
+configurable timeout/reduction/memory limits, stdout capture, and atom-leak
+avoidance. It should be treated as a best-effort sandbox for trusted/local
+policy experiments, not the portable artifact language and not a strong hostile
+multi-tenant security boundary.
+
+Untrusted third-party policy should run through a sidecar, WASM runtime, or
+hosted policy service with explicit trust/provenance metadata. The same
+synthetic model manifest should declare which engines it requires and whether a
+policy is inspectable, opaque remote, or packaged binary.
+
+Declarative policy should cover common cases before programmable policy is
+required:
+
+- preamble/postscript prompt transforms
+- regex/literal stream guards
+- JSON object and JSON Schema validation
+- XML well-formedness validation
+- protobuf-JSON shape validation
+- bounded repair/retry with receipt annotations
+
 Conceptual shape:
 
 ```python
@@ -1676,6 +1730,38 @@ becomes the lower-friction path.
 - Should weighted alloys be in MVP 1, or wait until route receipts and stream
   policy are solid?
 - What is the minimum UI that proves the product is differentiated?
+
+## Hosted Service And Marketplace Option
+
+Self-hosting should remain the core open-source promise, but a hosted Ingary
+service could become a credible sustainability path if the product proves useful
+for sophisticated agent builders.
+
+Hosted mode would add value by removing operator burden:
+
+- no local gateway deployment
+- managed provider credentials and rate limits
+- durable receipt storage and search
+- managed artifact hub/import flows
+- team auth, billing, and organization policy
+
+It also changes the marketplace story. In self-hosted mode, shared synthetic
+model artifacts should be inspectable by default: trust should come from tests,
+signatures, provenance, and reputation rather than opaque policy blobs. In a
+hosted marketplace, an author could offer a synthetic model as a hosted policy
+service without disclosing complex policy implementation details to consumers.
+Receipts must make that explicit: policy was evaluated remotely, policy logic
+was opaque to the consuming operator, and the author/provider identity and
+version were recorded.
+
+This is not a near-term MVP requirement, but it is worth preserving in the
+architecture:
+
+- policy engines are pluggable behind the same ABI
+- receipts distinguish inspectable local policy from opaque hosted policy
+- manifests can reference remote policy services as explicit dependencies
+- hub artifacts can be free/open, private/internal, or hosted/commercial
+- local self-hosted execution never depends on the hosted marketplace
 
 ## Naming Criteria
 

@@ -406,6 +406,14 @@ components:
           $ref: "#/components/schemas/RouteGraph"
         stream_policy:
           $ref: "#/components/schemas/StreamPolicy"
+        prompt_transforms:
+          $ref: "#/components/schemas/PromptTransforms"
+        structured_output:
+          $ref: "#/components/schemas/StructuredOutput"
+        governance:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceRule"
     RouteGraph:
       type: object
       required: [root, nodes]
@@ -443,6 +451,45 @@ components:
           items:
             type: object
             additionalProperties: true
+    PromptTransforms:
+      type: object
+      description: Engine-neutral request transformations applied before route/provider execution.
+      properties:
+        preamble:
+          type: string
+          description: Optional system/developer instruction inserted before caller messages.
+        postscript:
+          type: string
+          description: Optional system/developer instruction appended after caller messages.
+    StructuredOutput:
+      type: object
+      description: Declarative structured-output governance intent. Implementations may enforce with native validators, policy VM code, or sidecar engines.
+      properties:
+        mode:
+          type: string
+          enum: [json_object, json_schema, xml, protobuf_json, custom]
+        schema:
+          type: object
+          additionalProperties: true
+        repair_tries:
+          type: integer
+          minimum: 0
+    GovernanceRule:
+      type: object
+      description: Engine-neutral policy rule descriptor. The public contract does not expose or require a specific policy language.
+      required: [id, kind, action]
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        kind:
+          type: string
+          enum: [request_transform, route_gate, stream_guard, structured_output, receipt_annotation, custom]
+        action:
+          type: string
+          enum: [pass, transform, validate_or_block, inject_reminder_and_retry, reroute, escalate, block_final, annotate]
+        engine:
+          type: string
+          description: Optional implementation hint, such as builtin, starlark, dune, wasm, or sidecar. Not required for portable configs.
     SimulationRequest:
       type: object
       required: [request]
@@ -530,7 +577,7 @@ components:
         id: { type: string }
         kind:
           type: string
-          enum: [openai_compatible, litellm, helicone, openrouter, portkey, mock]
+          enum: [openai_compatible, litellm, helicone, openrouter, portkey, ollama, mock]
         base_url: { type: string }
         credential_owner:
           type: string
@@ -586,6 +633,14 @@ components:
               action:
                 type: string
                 enum: [pass, block_final, inject_reminder_and_retry, escalate]
+        prompt_transforms:
+          $ref: "#/components/schemas/PromptTransforms"
+        structured_output:
+          $ref: "#/components/schemas/StructuredOutput"
+        governance:
+          type: array
+          items:
+            $ref: "#/components/schemas/GovernanceRule"
     TestRouteTarget:
       type: object
       required: [model, context_window]
@@ -594,3 +649,8 @@ components:
         context_window:
           type: integer
           minimum: 1
+        provider_kind:
+          type: string
+          enum: [mock, ollama, openai_compatible]
+        provider_base_url:
+          type: string
