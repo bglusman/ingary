@@ -29,6 +29,31 @@ This is a behavioral gate, not a full OpenAPI validator. Later phases should
 add generated OpenAPI schema tests, streaming-specific tests, property tests for
 route graph invariants, and load/backpressure tests.
 
+## Storage/Sink Contract
+
+`storage_contract.py` is the first executable fixture for
+`contracts/storage-provider-contract.md`. It currently tests reference memory
+and JSON-file stores plus in-memory event/search/log sinks:
+
+```bash
+python3 tests/storage_contract.py --store all --cases 50
+```
+
+The fixture checks:
+
+- storage health and migration metadata
+- model-version immutability and rollback pointer behavior
+- receipt insert/fetch/list/filter/retention behavior
+- deterministic ordering when timestamps tie
+- durable reopen for the JSON-file reference store
+- event-stream idempotency and per-receipt ordering
+- search projection filtering and rebuild from durable receipts
+- log/telemetry redaction against forbidden prompt/completion/credential-like
+  markers
+
+Future SQLite, Postgres, search, and event-stream adapters should satisfy this
+same behavior before being treated as viable product foundations.
+
 ## Generated Model/Governance Properties
 
 `property_fuzz.py` generates random synthetic model definitions and validates

@@ -17,6 +17,7 @@ choosing a language from preference alone.
 - `contracts/openapi.yaml` - draft HTTP/OpenAI-compatible contract.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
+- `tests/storage_contract.py` - executable storage/sink behavior fixture.
 - `prototypes/backends/rust-ingary` - clean Rust backend prototype.
 - `prototypes/backends/go-ingary` - clean Go backend prototype.
 - `prototypes/backends/elixir-ingary` - clean Elixir backend prototype.
@@ -60,6 +61,12 @@ The probe checks the common OpenAI-compatible and Ingary-specific surface:
 Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. Go implements that first so the test shape can
 stabilize before porting it to Rust and Elixir.
+
+Run the storage/sink reference fixture with:
+
+```bash
+python3 tests/storage_contract.py --store all --cases 50
+```
 
 ## Storage Direction
 
