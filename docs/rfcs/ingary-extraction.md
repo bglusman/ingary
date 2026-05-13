@@ -812,16 +812,143 @@ Example:
 }
 ```
 
-Receipt storage:
+## Data Model And Storage
 
-- SQLite for local/single-node.
-- Postgres for team/server deployments.
-- Optional external telemetry sinks.
-- Prompt and completion capture disabled by default.
-- Redaction hooks before persistence when content capture is enabled.
-- Indexed caller dimensions for UI/log filtering: tenant, application,
-  consuming agent, consuming user, session, run, synthetic model, route version,
-  provider, concrete model, status, and stream-rule trigger.
+Storage is a product decision, not a replaceable implementation detail. Ingary's
+main durable objects are versioned control-plane state and high-volume receipt
+events. Those two workloads have different shapes and should be modeled
+explicitly rather than hidden behind a generic document store.
+
+### Recommendation
+
+Start with a relational event store that supports both SQLite and Postgres
+through the same logical schema:
+
+- **SQLite default** for local development, single-user installs, Calciforge
+  embedding, demos, and "no external services" deployments.
+- **Postgres production path** for team/server deployments, multi-tenant
+  installs, retention policies, concurrent writers, backups, and operational
+  analytics.
+- **Redis optional only** for ephemeral coordination: rate-limit counters,
+  short-lived route stickiness, distributed locks, and hot policy/cache state.
+  Redis must not be the system of record for receipts or model definitions.
+- **DuckDB optional later** for offline analytics over exported receipts,
+  benchmarks, and local exploration. It should not be the request-path primary
+  store in MVP 1.
+
+The practical bias: design the schema as if Postgres is the serious production
+store, but keep the SQL and migration discipline compatible with SQLite for the
+local/default product.
+
+### Why Not Pick One Store Only
+
+SQLite-only is attractive for distribution, but it becomes painful for hosted or
+team deployments that need concurrent ingestion, retention jobs, and dashboard
+queries across many agents/users.
+
+Postgres-only is operationally strong, but it weakens the "lightweight
+dependency" and Calciforge-embedded story.
+
+DuckDB is excellent for analysis, but its strengths are columnar scan and
+offline analytics, not serving the live OpenAI-compatible gateway path.
+
+Redis is useful, but making it the durable receipt store would make audit,
+backup, query, and retention semantics fragile.
+
+### Logical Entities
+
+Control-plane tables:
+
+- `providers`: provider adapter definitions and health metadata.
+- `concrete_models`: provider-owned models with capabilities, context windows,
+  price hints, data-region constraints, and status.
+- `synthetic_models`: stable public model IDs and namespace settings.
+- `synthetic_model_versions`: immutable route graph and stream policy versions.
+- `synthetic_model_aliases`: optional public aliases and compatibility names.
+- `artifact_imports`: shared model artifact provenance, license, source digest,
+  provider-role mappings, and review state.
+- `rollouts`: active/draft/canary state, percentages, predicates, and rollback
+  pointers.
+
+Receipt/event tables:
+
+- `receipts`: one row per live or simulated request with stable identifiers,
+  caller dimensions, selected model, final status, latency, and links to the
+  exact synthetic model version.
+- `receipt_events`: ordered state-machine events for planning, guards,
+  attempts, retries, stream triggers, release/hold decisions, and finalization.
+- `provider_attempts`: normalized provider call attempts, failure classes,
+  token/cost/latency data, and upstream response IDs when available.
+- `stream_triggers`: indexed stream-governance triggers with rule ID, action,
+  offset/range, release status, and resulting state transition.
+- `receipt_artifacts`: optional redacted prompt/completion/tool-call snapshots
+  when content capture is explicitly enabled.
+
+This split lets the UI render fast receipt lists from `receipts`, then drill
+into the event timeline without forcing every query to parse large JSON blobs.
+
+### JSON Boundaries
+
+Use structured columns for fields that drive filtering, retention, joins, or UI
+grouping. Store JSON for versioned payloads that need forward compatibility.
+
+Structured/indexed fields should include:
+
+- tenant ID, application ID, consuming agent ID, consuming user ID, session ID,
+  run ID, and client request ID
+- source/provenance for each caller identifier
+- synthetic model ID and immutable version ID
+- route graph root, selected provider, selected concrete model, status,
+  simulation/live flag, created timestamp, latency, token counts, and cost
+- stream trigger count, policy action, and "released to consumer" flags
+
+JSON fields are appropriate for:
+
+- raw route graph definition on immutable model versions
+- normalized request summary
+- policy VM trace details
+- provider-specific response metadata
+- redacted or user-enabled content artifacts
+
+### Migration Discipline
+
+- Every prototype should use a storage interface even if the first
+  implementation is in-memory.
+- MVP persistence should add SQLite first, with migrations committed in the
+  repo and tested from an empty database and from the previous migration.
+- Postgres should use the same logical schema, with dialect-specific migrations
+  allowed only where justified by indexing or JSON support.
+- Receipt schema versions must be explicit and immutable. New receipt fields
+  can be additive; changed semantics require a new schema version.
+- Model-version rows must be immutable once activated. Rollback creates or
+  points to another active version; it does not mutate history.
+
+### Query Requirements
+
+The UI and API must efficiently support:
+
+- filter receipts by tenant, application, consuming agent, consuming user,
+  session, run, synthetic model, version, provider, concrete model, final
+  status, simulation/live, stream-policy action, and time range
+- group receipts by consuming agent and consuming user
+- show p50/p95/p99 latency by synthetic model version and provider
+- show fallback/escalation frequency by route graph node
+- show stream rules that triggered, whether content was released, and what
+  transition happened next
+- delete or compact expired receipt artifacts without deleting the audit trail
+  required to explain a decision
+
+### Retention And Privacy
+
+- Prompt and completion capture is disabled by default.
+- Caller traceability metadata must be visible without prompt or completion
+  capture.
+- Redaction hooks run before persistence when content capture is enabled.
+- Retention policy should be independent for receipt metadata, receipt events,
+  and optional content artifacts.
+- Export paths should support NDJSON/Parquet-compatible shapes so DuckDB or
+  external warehouses can analyze history without becoming the request-path
+  store.
 
 ## Configuration
 
@@ -1300,6 +1427,13 @@ new product's gateway is already more robust than Calciforge's internal path.
   hub-sourced updates.
 - The product must run locally with SQLite and no external services.
 - Team deployments should support Postgres.
+- Redis must be optional and ephemeral, not a durable receipt or model-definition
+  dependency.
+- DuckDB should be treated as an analytics/export companion unless a later
+  prototype proves it can simplify the product without weakening live request
+  durability.
+- Receipt-list queries for the primary UI filters must use indexed structured
+  fields, not full JSON scans.
 - Provider adapters must not log bearer credentials.
 - Streaming policy latency must be configurable and visible.
 
@@ -1316,6 +1450,10 @@ new product's gateway is already more robust than Calciforge's internal path.
 - Token estimator safety margins.
 - Failure-class normalization.
 - Receipt schema serialization.
+- Receipt store interface behavior: insert, retrieve by ID, list with stable
+  ordering, filter by caller dimensions, filter by model/version/status, and
+  enforce retention boundaries.
+- Storage migration tests from empty database and previous schema.
 - Caller context normalization and provenance labels for auth, headers,
   metadata, provider records, and anonymous fallback.
 - Synthetic model artifact schema validation, import, export, provider-role
@@ -1334,6 +1472,10 @@ new product's gateway is already more robust than Calciforge's internal path.
   policy mode promises non-release.
 - Retry limits prevent infinite loops.
 - Receipt event ordering matches state transitions.
+- Receipt summary indexes remain equivalent to the full receipt/event payload
+  for generated caller/model/status filters.
+- Storage round-trips preserve receipt schema version, caller provenance,
+  skipped targets, stream triggers, and provider attempts.
 
 ### Integration Tests
 
@@ -1347,6 +1489,12 @@ new product's gateway is already more robust than Calciforge's internal path.
 - Escalation switches to configured target and records receipt.
 - Simulator and live execution produce comparable decision records.
 - SQLite receipt persistence and retrieval.
+- SQLite receipt filtering by consuming agent, consuming user, session, run,
+  synthetic model, version, status, provider, concrete model, and time range.
+- Postgres migration and query compatibility for the same logical receipt
+  schema before declaring the server deployment path stable.
+- Optional Redis loss/restart does not lose receipts, model definitions, or
+  active rollout state.
 
 ### UI Tests
 
@@ -1356,6 +1504,8 @@ new product's gateway is already more robust than Calciforge's internal path.
 - Receipt explorer shows route and stream trigger timeline.
 - Receipt explorer filters by consuming agent, consuming user, session/run,
   source/provenance, and synthetic model.
+- Receipt explorer keeps list queries responsive against persisted receipt
+  metadata without requiring prompt/completion capture.
 - Artifact hub browse/import/export/update flows land in draft mode and show
   provider-role mapping.
 - Stream policy editor validates regex and retry limits.

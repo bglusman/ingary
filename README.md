@@ -60,6 +60,21 @@ Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. Go implements that first so the test shape can
 stabilize before porting it to Rust and Elixir.
 
+## Storage Direction
+
+Ingary should treat storage as part of the product contract:
+
+- SQLite is the default local and embedded store.
+- Postgres is the intended team/server deployment store.
+- Redis is optional ephemeral infrastructure only.
+- DuckDB is a likely analytics/export companion, not the live request-path
+  system of record.
+
+The durable schema should keep frequently filtered receipt dimensions in
+structured indexed columns and reserve JSON for versioned payloads and
+provider-specific details. See `docs/rfcs/ingary-extraction.md` for the current
+data-model plan.
+
 ## License
 
 Apache-2.0.
