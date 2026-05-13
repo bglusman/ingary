@@ -861,11 +861,11 @@ This is plausible if the contract stays at the right level:
 
 The matrix should initially look like this:
 
-| Backend | Memory | SQLite | Postgres | Redis adjunct | DuckDB export |
-|---|---:|---:|---:|---:|---:|
-| Rust | required | required | candidate | optional | optional |
-| Go | required | candidate | candidate | optional | optional |
-| Elixir | required | candidate | candidate | optional | optional |
+| Backend | Memory | SQLite | Postgres | Search sink | Event stream | Redis adjunct | DuckDB export |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Rust | required | required | candidate | optional | optional | optional | optional |
+| Go | required | candidate | candidate | optional | optional | optional | optional |
+| Elixir | required | candidate | candidate | optional | optional | optional | optional |
 
 The risk is over-abstraction. If the contract hides too much, Ingary loses the
 ability to design good indexes, migrations, and retention jobs. The contract
@@ -891,11 +891,20 @@ The architecture should therefore have two related adapter families:
   events, retention, and UI queries
 - event/log sinks for redacted append-only copies of route decisions, stream
   triggers, health events, metrics, and operational diagnostics
+- search sinks for derived receipt explorer indexes, faceted search, text search
+  over redacted artifacts, and dashboard exploration
 
 The receipt writer can fan out to both surfaces. Durable storage failure is a
 product correctness issue and should fail closed or follow explicit degradation
 policy. Log-sink failure should usually degrade open with clear backpressure,
 queue, or drop policy.
+
+Elasticsearch, OpenSearch, Meilisearch, and Typesense are best considered
+search sinks first. Kafka, Redpanda, Iggy, NATS JetStream, and similar systems
+are best considered event streams first. Either category can become part of a
+storage solution if a materialized/queryable layer satisfies the storage
+contract, but neither should be assumed to replace the durable receipt store by
+default.
 
 ### Why Not Pick One Store Only
 
@@ -911,6 +920,14 @@ offline analytics, not serving the live OpenAI-compatible gateway path.
 
 Redis is useful, but making it the durable receipt store would make audit,
 backup, query, and retention semantics fragile.
+
+Search engines are useful for exploration and full-text/faceted filtering, but
+they usually make a better derived index than authoritative storage for route
+versions, rollouts, and exact receipt history.
+
+Event streams are useful for fanout, replay, async indexing, and audit
+pipelines, but they need a materialized store for the UI's query and retention
+requirements.
 
 ### Logical Entities
 

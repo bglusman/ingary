@@ -70,6 +70,9 @@ Ingary should treat storage as part of the product contract:
 - Redis is optional ephemeral infrastructure only.
 - DuckDB is a likely analytics/export companion, not the live request-path
   system of record.
+- Elasticsearch/OpenSearch-style systems are likely derived search indexes.
+- Kafka/Redpanda/Iggy-style systems are likely event streams for fanout,
+  replay, async indexing, and audit pipelines.
 
 The durable schema should keep frequently filtered receipt dimensions in
 structured indexed columns and reserve JSON for versioned payloads and
@@ -77,9 +80,10 @@ provider-specific details. See `docs/rfcs/ingary-extraction.md` for the current
 data-model plan and `contracts/storage-provider-contract.md` for the behavioral
 contract storage implementations should satisfy.
 
-Receipts and logs are related but separate surfaces: storage providers are the
-queryable system of record, while event/log sinks receive redacted append-only
-copies for observability and audit pipelines.
+Receipts, logs, search indexes, and event streams are related but separate
+surfaces: storage providers are the queryable system of record, while event/log
+sinks and search indexes receive redacted derived copies for observability,
+exploration, replay, and audit pipelines.
 
 ## License
 

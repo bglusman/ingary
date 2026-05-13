@@ -41,6 +41,10 @@ Ingary needs both concepts:
 - **Receipt events** are ordered state-machine facts that build a receipt.
 - **Logs** are operational diagnostics for humans and infrastructure.
 - **Telemetry sinks** are external copies of selected receipt/log/metric events.
+- **Search indexes** are derived query surfaces for high-cardinality text,
+  faceted exploration, and dashboard search.
+- **Event streams** are append-only transport and buffering layers for receipt,
+  log, and metric events.
 
 The storage contract owns the durable receipt and control-plane record. A log or
 telemetry adapter can receive the same events, but it does not replace the
@@ -52,16 +56,34 @@ This gives Ingary two related adapter surfaces:
   model versions, and preserve receipt history.
 - **Event/log sinks**: stream operational events to files, OpenTelemetry,
   Kafka-compatible queues, hosted observability tools, or audit pipelines.
+- **Search sinks**: index receipt summaries, event metadata, and optional
+  redacted content for operator search.
 
 The receipt writer should be modeled as an append path that can fan out to both:
 
 1. append to the durable storage provider
 2. emit a redacted event/log representation to configured sinks
+3. update derived search indexes when configured
 
 Storage failure and log-sink failure have different semantics. If durable
 receipt persistence is required, storage failure should fail closed or degrade
 according to explicit operator policy. Log-sink failure should usually degrade
 open with backpressure and drop/queue policy recorded in local health state.
+Search-index failure should not corrupt the receipt store; it should mark the
+index stale and allow a rebuild from durable receipts/events.
+
+Candidate infrastructure roles:
+
+- **Elasticsearch/OpenSearch/Meilisearch/Typesense**: search sinks for receipt
+  explorer, faceted filtering, text search over redacted artifacts, and
+  dashboard-style exploration. They are not the authoritative model-definition
+  store unless wrapped by a provider that satisfies this storage contract.
+- **Kafka/Redpanda/Iggy/NATS JetStream**: event-stream sinks for fanout,
+  buffering, replay, async indexing, warehouse export, and audit pipelines. They
+  are not by themselves the queryable receipt store unless paired with a
+  materialized store that satisfies this contract.
+- **OpenTelemetry/log files/hosted observability**: operational diagnostics and
+  metrics. They are useful outputs, not the source of truth.
 
 ## Goals
 
@@ -92,6 +114,10 @@ Capability flags should include:
 - `transactional`
 - `concurrent_writers`
 - `json_queries`
+- `full_text_search`
+- `faceted_search`
+- `event_replay`
+- `consumer_offsets`
 - `time_range_indexes`
 - `retention_jobs`
 - `advisory_locks`
@@ -188,17 +214,19 @@ Every storage provider implementation should pass these tests:
   metadata
 - provider restart preserves durable records
 - optional Redis loss does not lose durable model, rollout, or receipt state
+- optional search-index loss can be rebuilt from durable receipts/events
+- optional event-stream outage follows explicit queue/drop/backpressure policy
 
 ## Matrix Strategy
 
 The prototype matrix should treat backend language and storage implementation as
 orthogonal axes:
 
-| Backend | Memory | SQLite | Postgres | Redis adjunct | DuckDB export |
-|---|---:|---:|---:|---:|---:|
-| Rust | required | required | candidate | optional | optional |
-| Go | required | candidate | candidate | optional | optional |
-| Elixir | required | candidate | candidate | optional | optional |
+| Backend | Memory | SQLite | Postgres | Search sink | Event stream | Redis adjunct | DuckDB export |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Rust | required | required | candidate | optional | optional | optional | optional |
+| Go | required | candidate | candidate | optional | optional | optional | optional |
+| Elixir | required | candidate | candidate | optional | optional | optional | optional |
 
 `Memory` remains useful for contract tests and development, but it must be
 marked non-durable. SQLite is the first durable implementation to prove local
@@ -212,5 +240,6 @@ run against:
 2. a SQLite database file
 3. a Postgres test database or container
 
-Only after those pass should Redis and DuckDB be evaluated, because they are
-adjuncts rather than primary stores for the first product shape.
+Only after those pass should Redis, DuckDB, search engines, and event streams be
+evaluated, because they are adjuncts or derived surfaces rather than primary
+stores for the first product shape.
