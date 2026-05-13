@@ -840,6 +840,63 @@ The practical bias: design the schema as if Postgres is the serious production
 store, but keep the SQL and migration discipline compatible with SQLite for the
 local/default product.
 
+### Pluggable Storage Contract
+
+The language/runtime decision and the storage decision should be explored as a
+matrix. Each backend prototype should depend on a storage-provider interface,
+and each storage implementation should satisfy the same logical behavior
+contract. The draft contract lives at
+`contracts/storage-provider-contract.md`.
+
+This is plausible if the contract stays at the right level:
+
+- require semantic behavior, not identical physical schemas
+- require receipt/query/migration/retention behavior, not a generic ORM
+- allow each engine to use its strengths for indexes, JSON, transactions, and
+  exports
+- run the same storage fixture suite against memory, SQLite, Postgres, and any
+  later candidate
+- support native adapters for production paths and sidecar adapters for
+  cross-language experiments
+
+The matrix should initially look like this:
+
+| Backend | Memory | SQLite | Postgres | Redis adjunct | DuckDB export |
+|---|---:|---:|---:|---:|---:|
+| Rust | required | required | candidate | optional | optional |
+| Go | required | candidate | candidate | optional | optional |
+| Elixir | required | candidate | candidate | optional | optional |
+
+The risk is over-abstraction. If the contract hides too much, Ingary loses the
+ability to design good indexes, migrations, and retention jobs. The contract
+therefore defines observable behavior and logical entities; each implementation
+can choose a schema that fits its database engine.
+
+### Receipts Versus Logs
+
+Receipts and logs overlap but should remain separate product concepts.
+
+Receipts are durable product records that explain synthetic model behavior.
+They must be queryable by the UI, tied to model versions, governed by retention
+and privacy policy, and stable enough to support simulation, audit, and
+debugging.
+
+Logs are operational diagnostics and event streams. They are valuable for
+infrastructure observability, incident response, and external audit pipelines,
+but a generic log sink is not automatically a receipt store.
+
+The architecture should therefore have two related adapter families:
+
+- storage providers for model definitions, rollout state, receipts, receipt
+  events, retention, and UI queries
+- event/log sinks for redacted append-only copies of route decisions, stream
+  triggers, health events, metrics, and operational diagnostics
+
+The receipt writer can fan out to both surfaces. Durable storage failure is a
+product correctness issue and should fail closed or follow explicit degradation
+policy. Log-sink failure should usually degrade open with clear backpressure,
+queue, or drop policy.
+
 ### Why Not Pick One Store Only
 
 SQLite-only is attractive for distribution, but it becomes painful for hosted or

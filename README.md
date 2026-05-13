@@ -15,6 +15,7 @@ choosing a language from preference alone.
 ## Current Contents
 
 - `contracts/openapi.yaml` - draft HTTP/OpenAI-compatible contract.
+- `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `prototypes/backends/rust-ingary` - clean Rust backend prototype.
 - `prototypes/backends/go-ingary` - clean Go backend prototype.
@@ -73,7 +74,12 @@ Ingary should treat storage as part of the product contract:
 The durable schema should keep frequently filtered receipt dimensions in
 structured indexed columns and reserve JSON for versioned payloads and
 provider-specific details. See `docs/rfcs/ingary-extraction.md` for the current
-data-model plan.
+data-model plan and `contracts/storage-provider-contract.md` for the behavioral
+contract storage implementations should satisfy.
+
+Receipts and logs are related but separate surfaces: storage providers are the
+queryable system of record, while event/log sinks receive redacted append-only
+copies for observability and audit pipelines.
 
 ## License
 
