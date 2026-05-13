@@ -9,8 +9,8 @@ provider selection, context-window fit checks, fallback policy, stream
 governance, caller traceability, and receipts explaining every decision.
 
 This repository is intentionally prototype-heavy right now. The goal is to pick
-a foundation using a shared HTTP contract and measurable behavior rather than
-choosing a language from preference alone.
+a production foundation using a shared HTTP contract and measurable behavior
+rather than choosing a language from preference alone.
 
 ## Current Contents
 
@@ -18,14 +18,12 @@ choosing a language from preference alone.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
-- `prototypes/backends/rust-ingary` - clean Rust backend prototype.
-- `prototypes/backends/go-ingary` - clean Go backend prototype.
-- `prototypes/backends/elixir-ingary` - clean Elixir backend prototype.
-- `prototypes/backends/litellm-spike` - LiteLLM foundation/integration spike.
-- `prototypes/backends/tensorzero-spike` - TensorZero foundation/integration spike.
-- `prototypes/frontend/web` - Vite/React UI prototype.
+- `backends/rust-ingary` - clean Rust backend prototype.
+- `backends/go-ingary` - clean Go backend prototype.
+- `backends/elixir-ingary` - clean Elixir backend prototype.
+- `frontend/web` - Vite/React UI prototype.
 - `docs/rfcs/ingary-extraction.md` - product and architecture draft.
-- `docs/rfcs/ingary-presentation.html` - self-contained HTML presentation.
+- `docs/` - public docs site for `ingary.org`.
 
 ## Shared Contract Probe
 
@@ -57,12 +55,12 @@ The probe checks the common OpenAI-compatible and Ingary-specific surface:
 | Prototype | BDD scenarios | Baseline contract probe | Dynamic generated model properties |
 |---|---:|---:|---:|
 | Go | Passing | Passing | Passing |
-| Rust | Passing | Passing | Not implemented yet |
-| Elixir | Passing | Passing | Not implemented yet |
+| Rust | Passing | Passing | Passing |
+| Elixir | Passing | Passing | Passing |
 
 Dynamic generated model properties require the prototype-only
-`POST /__test/config` endpoint. Go implements that first so the test shape can
-stabilize before porting it to Rust and Elixir.
+`POST /__test/config` endpoint. It exists to keep the prototypes comparable
+while the production configuration API is still being designed.
 
 Run the storage/sink reference fixture with:
 
