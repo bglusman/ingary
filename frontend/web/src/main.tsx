@@ -1,12 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  BACKENDS,
   getApiStatus,
+  getApiBaseUrl,
   getReceipt,
   listAdminSyntheticModels,
   listProviders,
+  listStorageHealth,
   listSyntheticModels,
   searchReceipts,
+  setApiBaseUrl,
   simulateRoute,
 } from "./api";
 import { sinks, storageProviders } from "./mockData";
@@ -19,6 +23,7 @@ import type {
   ReceiptSummary,
   Sink,
   SimulationResult,
+  StorageHealth,
   StorageProvider,
   SyntheticModel,
   SyntheticModelSummary,
@@ -35,22 +40,35 @@ function App() {
   const [receipts, setReceipts] = useState<ReceiptSummary[]>([]);
   const [selectedReceipt, setSelectedReceipt] = useState<Receipt | null>(null);
   const [apiStatus, setApiStatus] = useState(getApiStatus());
+  const [apiBaseUrl, setApiBaseUrlState] = useState(getApiBaseUrl());
+  const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null);
   const [filters, setFilters] = useState<ReceiptFilters>({ limit: 50 });
   const [selectedModelId, setSelectedModelId] = useState("coding-balanced");
   const selectedModel = fullModels.find((model) => model.id === selectedModelId) ?? fullModels[0];
 
   useEffect(() => {
-    Promise.all([listSyntheticModels(), listAdminSyntheticModels(), listProviders(), searchReceipts({ limit: 50 })]).then(
-      ([modelRows, fullModelRows, providerRows, receiptRows]) => {
+    loadBackendData();
+  }, [apiBaseUrl]);
+
+  async function loadBackendData() {
+    Promise.all([listSyntheticModels(), listAdminSyntheticModels(), listProviders(), searchReceipts({ limit: 50 }), listStorageHealth()]).then(
+      ([modelRows, fullModelRows, providerRows, receiptRows, storage]) => {
         setModels(modelRows);
         setFullModels(fullModelRows);
         setProviders(providerRows);
         setReceipts(receiptRows);
+        setSelectedReceipt(null);
+        setStorageHealth(storage);
         setSelectedModelId(fullModelRows[0]?.id ?? "coding-balanced");
         setApiStatus(getApiStatus());
       },
     );
-  }, []);
+  }
+
+  function selectBackend(baseUrl: string) {
+    setApiBaseUrl(baseUrl);
+    setApiBaseUrlState(baseUrl);
+  }
 
   async function applyReceiptFilters(nextFilters = filters) {
     setFilters(nextFilters);
@@ -80,6 +98,8 @@ function App() {
         <div className="sidebarFooter">
           <span>Source</span>
           <strong>{apiStatus === "api" ? "API" : "Local mock"}</strong>
+          <span>Backend</span>
+          <strong>{BACKENDS.find((backend) => backend.baseUrl === apiBaseUrl)?.label ?? "Custom"}</strong>
         </div>
       </aside>
 
@@ -89,7 +109,19 @@ function App() {
             <p className="eyebrow">OpenAI-compatible control plane</p>
             <h1>{view}</h1>
           </div>
-          <div className="endpoint">http://127.0.0.1:8787</div>
+          <div className="backendPicker">
+            <label>
+              Backend
+              <select value={apiBaseUrl} onChange={(event) => selectBackend(event.target.value)}>
+                {BACKENDS.map((backend) => (
+                  <option value={backend.baseUrl} key={backend.id}>
+                    {backend.label} - {backend.baseUrl}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="endpoint">{apiBaseUrl}</div>
+          </div>
         </header>
 
         {view === "Catalog" && <Catalog models={models} />}
@@ -112,7 +144,7 @@ function App() {
           />
         )}
         {view === "Providers" && <Providers providers={providers} models={fullModels} selectedModel={selectedModel} />}
-        {view === "Storage" && <Storage storageProviders={storageProviders} sinks={sinks} receipts={receipts} />}
+        {view === "Storage" && <Storage storageProviders={storageProviders} storageHealth={storageHealth} sinks={sinks} receipts={receipts} />}
       </section>
     </main>
   );
@@ -433,14 +465,17 @@ function Providers({ providers, models, selectedModel }: { providers: Provider[]
 
 function Storage({
   storageProviders,
+  storageHealth,
   sinks,
   receipts,
 }: {
   storageProviders: StorageProvider[];
+  storageHealth: StorageHealth | null;
   sinks: Sink[];
   receipts: ReceiptSummary[];
 }) {
-  const primaryStore = storageProviders.find((provider) => provider.role === "system_of_record") ?? storageProviders[0];
+  const visibleStorageProviders = storageHealth ? [storageProviderFromHealth(storageHealth, receipts.length), ...storageProviders] : storageProviders;
+  const primaryStore = visibleStorageProviders.find((provider) => provider.role === "system_of_record") ?? visibleStorageProviders[0];
   const projectedReceiptCount = sinks.reduce((total, sink) => total + (sink.indexed_receipts ?? 0), 0);
   const healthySinks = sinks.filter((sink) => sink.status === "healthy").length;
 
@@ -461,7 +496,7 @@ function Storage({
           <Metric label="Indexed copies" value={String(projectedReceiptCount)} />
         </div>
         <div className="storageCards">
-          {storageProviders.map((provider) => (
+          {visibleStorageProviders.map((provider) => (
             <article className="storageCard" key={provider.id}>
               <div className="cardTitle">
                 <strong>{provider.id}</strong>
@@ -530,6 +565,24 @@ function Storage({
       </div>
     </section>
   );
+}
+
+function storageProviderFromHealth(health: StorageHealth, receiptCount: number): StorageProvider {
+  const capabilities = Object.entries(health.capabilities)
+    .filter(([, enabled]) => enabled === true)
+    .map(([name]) => name);
+  return {
+    id: `live-${health.kind}`,
+    kind: health.kind === "json-file" ? "sqlite" : health.kind,
+    role: "system_of_record",
+    status: health.read_health === "ok" && health.write_health === "ok" ? "healthy" : "degraded",
+    contract_version: health.contract_version,
+    migration_version: String(health.migration_version),
+    failure_policy: "fail_closed",
+    receipt_count: receiptCount,
+    event_count: 0,
+    capabilities,
+  };
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

@@ -55,6 +55,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/models", get(list_models))
         .route("/v1/chat/completions", post(chat_completions))
+        .route("/v1/synthetic/models", get(list_synthetic_model_summaries))
         .route("/v1/synthetic/simulate", post(simulate))
         .route("/v1/receipts", get(list_receipts))
         .route("/v1/receipts/:receipt_id", get(get_receipt))
@@ -170,6 +171,10 @@ async fn list_models() -> Json<Value> {
             {"id": format!("ingary/{SYNTHETIC_MODEL_ID}"), "object": "model", "owned_by": "ingary"}
         ]
     }))
+}
+
+async fn list_synthetic_model_summaries() -> Json<Value> {
+    Json(json!({ "data": [synthetic_model_record()] }))
 }
 
 async fn chat_completions(

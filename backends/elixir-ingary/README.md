@@ -38,11 +38,13 @@ mix test
 ## Implemented Surface
 
 - `GET /v1/models`
+- `GET /v1/synthetic/models`
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
 - `GET /v1/receipts`
 - `GET /v1/receipts/{id}`
 - `GET /admin/providers`
+- `GET /admin/storage`
 - `GET /admin/synthetic-models`
 
 The public synthetic model is available as both `coding-balanced` and

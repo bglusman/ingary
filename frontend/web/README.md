@@ -10,9 +10,15 @@ npm install
 npm run dev
 ```
 
-Vite serves the app at `http://127.0.0.1:5173`. The API client targets
-`http://127.0.0.1:8787` for every contract endpoint. When that server is not
-available, the app falls back to local mock data so the UI remains usable.
+Vite serves the app at `http://127.0.0.1:5173`. The temporary backend selector
+can switch between local prototypes:
+
+- Go: `http://127.0.0.1:8787`
+- Rust: `http://127.0.0.1:8797`
+- Elixir: `http://127.0.0.1:8791`
+
+When a selected server or endpoint is not available, the app falls back to local
+mock data so the UI remains usable.
 
 ## Screens
 

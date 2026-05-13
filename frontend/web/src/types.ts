@@ -139,6 +139,15 @@ export type StorageProvider = {
   capabilities: string[];
 };
 
+export type StorageHealth = {
+  kind: StorageProvider["kind"] | "json-file";
+  contract_version: string;
+  migration_version: number;
+  read_health: string;
+  write_health: string;
+  capabilities: Record<string, boolean | string | number>;
+};
+
 export type Sink = {
   id: string;
   kind: "search" | "event_stream" | "log" | "metrics";

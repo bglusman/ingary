@@ -12,8 +12,13 @@ defmodule ElixirIngary.Router do
     length: 1_048_576
   )
 
+  plug(:cors)
   plug(:match)
   plug(:dispatch)
+
+  options _ do
+    send_resp(conn, 204, "")
+  end
 
   get "/v1/models" do
     json(conn, 200, %{
@@ -27,6 +32,10 @@ defmodule ElixirIngary.Router do
         }
       ]
     })
+  end
+
+  get "/v1/synthetic/models" do
+    json(conn, 200, %{"data" => [ElixirIngary.synthetic_model_record()]})
   end
 
   post "/v1/chat/completions" do
@@ -349,6 +358,20 @@ defmodule ElixirIngary.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp cors(conn, _opts) do
+    conn
+    |> put_resp_header("access-control-allow-origin", "*")
+    |> put_resp_header("access-control-allow-methods", "GET, POST, OPTIONS")
+    |> put_resp_header(
+      "access-control-allow-headers",
+      "Content-Type, X-Ingary-Tenant-Id, X-Ingary-Application-Id, X-Ingary-Agent-Id, X-Ingary-User-Id, X-Ingary-Session-Id, X-Ingary-Run-Id, X-Client-Request-Id"
+    )
+    |> put_resp_header(
+      "access-control-expose-headers",
+      "X-Ingary-Receipt-Id, X-Ingary-Selected-Model"
+    )
   end
 
   defp error(conn, status, message, type, code) do

@@ -40,11 +40,13 @@ curl -s http://127.0.0.1:8787/v1/receipts
 ## Implemented Surface
 
 - `GET /v1/models`
+- `GET /v1/synthetic/models`
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
 - `GET /v1/receipts`
 - `GET /v1/receipts/{receipt_id}`
 - `GET /admin/providers`
+- `GET /admin/storage`
 - `GET /admin/synthetic-models`
 
 The public synthetic model is `coding-balanced`; requests may use either the

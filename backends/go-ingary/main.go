@@ -110,6 +110,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
+	mux.HandleFunc("/v1/synthetic/models", s.handleSyntheticModelSummaries)
 	mux.HandleFunc("/v1/synthetic/simulate", s.handleSyntheticSimulate)
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
 	mux.HandleFunc("/v1/receipts/", s.handleReceiptByID)
@@ -119,7 +120,7 @@ func main() {
 	mux.HandleFunc("/__test/config", s.handleTestConfig)
 
 	log.Printf("go-ingary mock listening on http://%s", addr)
-	if err := http.ListenAndServe(addr, requestLogger(mux)); err != nil {
+	if err := http.ListenAndServe(addr, requestLogger(corsMiddleware(mux))); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -205,6 +206,13 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			"total_tokens":      estimate + 18,
 		},
 	})
+}
+
+func (s *server) handleSyntheticModelSummaries(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": []map[string]any{syntheticModelRecord(s.currentConfig())}})
 }
 
 func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request) {
@@ -403,10 +411,16 @@ func syntheticModelRecord(cfg TestConfig) map[string]any {
 	}
 	nodes[0]["targets"] = targetIDs
 	return map[string]any{
-		"id":               cfg.SyntheticModel,
-		"active_version":   cfg.Version,
-		"description":      "Mock coding assistant synthetic model with prompt-length dispatch.",
-		"public_namespace": "flat",
+		"id":                       cfg.SyntheticModel,
+		"public_model_id":          cfg.SyntheticModel,
+		"active_version":           cfg.Version,
+		"description":              "Mock coding assistant synthetic model with prompt-length dispatch.",
+		"public_namespace":         "flat",
+		"route_type":               "dispatcher",
+		"status":                   "active",
+		"traffic_24h":              0,
+		"fallback_rate":            0.0,
+		"stream_trigger_count_24h": 0,
 		"route_graph": map[string]any{
 			"root":  "dispatcher.prompt_length",
 			"nodes": nodes,
@@ -703,6 +717,20 @@ func requestLogger(next http.Handler) http.Handler {
 		start := time.Now()
 		next.ServeHTTP(w, r)
 		log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(start).Round(time.Millisecond))
+	})
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Ingary-Tenant-Id, X-Ingary-Application-Id, X-Ingary-Agent-Id, X-Ingary-User-Id, X-Ingary-Session-Id, X-Ingary-Run-Id, X-Client-Request-Id")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Ingary-Receipt-Id, X-Ingary-Selected-Model")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

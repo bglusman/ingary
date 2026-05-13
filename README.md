@@ -40,6 +40,7 @@ python3 tests/contract_probe.py \
 The probe checks the common OpenAI-compatible and Ingary-specific surface:
 
 - `GET /v1/models`
+- `GET /v1/synthetic/models`
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
 - `GET /v1/receipts`
@@ -68,6 +69,30 @@ Run the storage/sink reference fixture with:
 ```bash
 python3 tests/storage_contract.py --store all --cases 50
 ```
+
+## Local Backend Matrix
+
+For side-by-side frontend testing, run the prototypes on separate ports:
+
+```bash
+# Go
+(cd backends/go-ingary && go run .)
+
+# Rust
+(cd backends/rust-ingary && INGARY_BIND=127.0.0.1:8797 cargo run)
+
+# Elixir
+(cd backends/elixir-ingary && INGARY_BIND=127.0.0.1:8791 mix run --no-halt)
+
+# Frontend
+(cd frontend/web && npm run dev -- --host 127.0.0.1)
+```
+
+The frontend at `http://127.0.0.1:5173` has a temporary backend selector for:
+
+- Go: `http://127.0.0.1:8787`
+- Rust: `http://127.0.0.1:8797`
+- Elixir: `http://127.0.0.1:8791`
 
 ## Storage Direction
 

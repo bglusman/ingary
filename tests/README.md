@@ -15,6 +15,7 @@ python3 tests/contract_probe.py \
 The probe checks:
 
 - `GET /v1/models`
+- `GET /v1/synthetic/models`
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
 - `GET /v1/receipts`

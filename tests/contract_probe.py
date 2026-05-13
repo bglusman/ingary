@@ -165,6 +165,16 @@ def assert_model_list(result: ProbeResult) -> None:
     )
 
 
+def assert_synthetic_model_summaries(result: ProbeResult) -> None:
+    expect(result.status == 200, f"/v1/synthetic/models status {result.status}")
+    data = result.body.get("data")
+    expect(isinstance(data, list) and data, "/v1/synthetic/models data must be non-empty list")
+    first = data[0]
+    expect(first.get("id") == "coding-balanced", "synthetic model summary must include coding-balanced")
+    expect(first.get("active_version"), "synthetic model summary must include active_version")
+    expect(first.get("route_type"), "synthetic model summary must include route_type")
+
+
 def assert_chat_response(result: ProbeResult, requested_model: str) -> str:
     expect(result.status == 200, f"chat status {result.status}: {result.body}")
     body = result.body
@@ -244,6 +254,11 @@ def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
         checks.append(("models", assert_model_list(record("models", request_json(base_url, "GET", "/v1/models")))))
     except Exception as exc:  # noqa: BLE001 - probe reports all failures uniformly.
         failures.append(f"models: {exc}")
+
+    try:
+        assert_synthetic_model_summaries(record("models", request_json(base_url, "GET", "/v1/synthetic/models")))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"synthetic_models: {exc}")
 
     receipt_ids: list[str] = []
     for i in range(fuzz_runs):

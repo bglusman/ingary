@@ -161,6 +161,16 @@ p {
   white-space: nowrap;
 }
 
+.backendPicker {
+  display: grid;
+  gap: 6px;
+  min-width: min(360px, 42vw);
+}
+
+.backendPicker select {
+  min-width: 0;
+}
+
 .panel {
   min-width: 0;
   padding: 20px;

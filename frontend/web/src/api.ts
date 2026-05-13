@@ -13,22 +13,51 @@ import type {
   ReceiptSummary,
   SimulationRequest,
   SimulationResult,
+  StorageHealth,
   SyntheticModel,
   SyntheticModelSummary,
 } from "./types";
 
-export const API_BASE_URL = "http://127.0.0.1:8787";
+export type BackendTarget = {
+  id: string;
+  label: string;
+  baseUrl: string;
+  note: string;
+};
+
+export const BACKENDS: BackendTarget[] = [
+  { id: "go", label: "Go", baseUrl: "http://127.0.0.1:8787", note: "dynamic config + property fuzz" },
+  { id: "rust", label: "Rust", baseUrl: "http://127.0.0.1:8797", note: "typed storage trait" },
+  { id: "elixir", label: "Elixir", baseUrl: "http://127.0.0.1:8791", note: "receipt filters + storage metadata" },
+];
+
+const STORAGE_KEY = "ingary.apiBaseUrl";
 
 type ApiStatus = "api" | "mock";
 
 let lastStatus: ApiStatus = "mock";
+let apiBaseUrl = readInitialBaseUrl();
 
 export function getApiStatus(): ApiStatus {
   return lastStatus;
 }
 
+export function getApiBaseUrl(): string {
+  return apiBaseUrl;
+}
+
+export function setApiBaseUrl(nextBaseUrl: string): void {
+  apiBaseUrl = nextBaseUrl;
+  lastStatus = "mock";
+  window.localStorage.setItem(STORAGE_KEY, nextBaseUrl);
+}
+
+function readInitialBaseUrl(): string {
+  return window.localStorage.getItem(STORAGE_KEY) ?? BACKENDS[0].baseUrl;
+}
+
 async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${apiBaseUrl}${path}`, {
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -80,6 +109,13 @@ export function listProviders(): Promise<Provider[]> {
       return result.data;
     },
     () => providers,
+  );
+}
+
+export function listStorageHealth(): Promise<StorageHealth | null> {
+  return withMockFallback<StorageHealth | null>(
+    () => requestJson<StorageHealth>("/admin/storage"),
+    () => null,
   );
 }
 
