@@ -45,6 +45,7 @@ The probe checks the common OpenAI-compatible and Ingary-specific surface:
 - `GET /v1/receipts`
 - `GET /v1/receipts/{receipt_id}`
 - `GET /admin/providers`
+- `GET /admin/storage`
 - `GET /admin/synthetic-models`
 - flat and `ingary/` model namespace variants
 - caller provenance and receipt fields

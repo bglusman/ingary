@@ -458,6 +458,97 @@ pre {
   overflow-wrap: anywhere;
 }
 
+.storageLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.metric {
+  display: grid;
+  gap: 4px;
+  min-height: 76px;
+  padding: 12px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.metric span {
+  color: #66727c;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.metric strong {
+  color: #17202a;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.storageCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.storageCard,
+.sinkRow {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.cardTitle {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cardTitle span {
+  display: block;
+  margin-top: 3px;
+  color: #66727c;
+  font-size: 12px;
+}
+
+.chipRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 4px 7px;
+  border: 1px solid #d5dde4;
+  border-radius: 6px;
+  color: #3a4650;
+  background: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sinkTimeline {
+  display: grid;
+  gap: 10px;
+}
+
+.sinkRow code {
+  overflow-wrap: anywhere;
+}
+
 .empty {
   display: grid;
   place-items: center;

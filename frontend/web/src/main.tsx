@@ -9,6 +9,7 @@ import {
   searchReceipts,
   simulateRoute,
 } from "./api";
+import { sinks, storageProviders } from "./mockData";
 import "./styles.css";
 import type {
   CallerContext,
@@ -16,12 +17,14 @@ import type {
   Receipt,
   ReceiptFilters,
   ReceiptSummary,
+  Sink,
   SimulationResult,
+  StorageProvider,
   SyntheticModel,
   SyntheticModelSummary,
 } from "./types";
 
-const navItems = ["Catalog", "Routes", "Simulator", "Receipts", "Providers"] as const;
+const navItems = ["Catalog", "Routes", "Simulator", "Receipts", "Providers", "Storage"] as const;
 type View = (typeof navItems)[number];
 
 function App() {
@@ -109,6 +112,7 @@ function App() {
           />
         )}
         {view === "Providers" && <Providers providers={providers} models={fullModels} selectedModel={selectedModel} />}
+        {view === "Storage" && <Storage storageProviders={storageProviders} sinks={sinks} receipts={receipts} />}
       </section>
     </main>
   );
@@ -427,6 +431,116 @@ function Providers({ providers, models, selectedModel }: { providers: Provider[]
   );
 }
 
+function Storage({
+  storageProviders,
+  sinks,
+  receipts,
+}: {
+  storageProviders: StorageProvider[];
+  sinks: Sink[];
+  receipts: ReceiptSummary[];
+}) {
+  const primaryStore = storageProviders.find((provider) => provider.role === "system_of_record") ?? storageProviders[0];
+  const projectedReceiptCount = sinks.reduce((total, sink) => total + (sink.indexed_receipts ?? 0), 0);
+  const healthySinks = sinks.filter((sink) => sink.status === "healthy").length;
+
+  return (
+    <section className="storageLayout">
+      <div className="panel">
+        <div className="panelHeader">
+          <div>
+            <h2>Receipt storage</h2>
+            <p>Durable providers keep queryable receipt history; sinks hold redacted projections.</p>
+          </div>
+          {primaryStore && <Badge value={`system of record: ${primaryStore.id}`} />}
+        </div>
+        <div className="metricGrid">
+          <Metric label="Receipts" value={String(primaryStore?.receipt_count ?? receipts.length)} />
+          <Metric label="Receipt events" value={String(primaryStore?.event_count ?? 0)} />
+          <Metric label="Healthy sinks" value={`${healthySinks}/${sinks.length}`} />
+          <Metric label="Indexed copies" value={String(projectedReceiptCount)} />
+        </div>
+        <div className="storageCards">
+          {storageProviders.map((provider) => (
+            <article className="storageCard" key={provider.id}>
+              <div className="cardTitle">
+                <strong>{provider.id}</strong>
+                <Badge value={provider.status} />
+              </div>
+              <span>{provider.kind}</span>
+              <div className="kv tight">
+                <span>Role</span>
+                <strong>{provider.role}</strong>
+                <span>Contract</span>
+                <strong>{provider.contract_version}</strong>
+                <span>Migration</span>
+                <strong>{provider.migration_version}</strong>
+                <span>Failure policy</span>
+                <strong>{provider.failure_policy}</strong>
+                <span>Retention</span>
+                <strong>{provider.retention_days ? `${provider.retention_days} days` : "export snapshot"}</strong>
+              </div>
+              <div className="chipRow">
+                {provider.capabilities.map((capability) => (
+                  <span className="chip" key={capability}>
+                    {capability}
+                  </span>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panelHeader compact">
+          <div>
+            <h2>Sinks</h2>
+            <p>Derived outputs for search, event replay, and operator diagnostics.</p>
+          </div>
+        </div>
+        <div className="sinkTimeline">
+          {sinks.map((sink) => (
+            <article className="sinkRow" key={sink.id}>
+              <div className="cardTitle">
+                <div>
+                  <strong>{sink.id}</strong>
+                  <span>{sink.kind}</span>
+                </div>
+                <Badge value={sink.status} />
+              </div>
+              <code>{sink.target}</code>
+              <div className="kv tight">
+                <span>Derived from</span>
+                <strong>{sink.derived_from}</strong>
+                <span>Delivery</span>
+                <strong>{sink.delivery}</strong>
+                <span>Lag</span>
+                <strong>{sink.lag_ms ?? 0} ms</strong>
+                <span>Backlog</span>
+                <strong>{sink.backlog ?? 0}</strong>
+                <span>Redaction</span>
+                <strong>{sink.redaction}</strong>
+                <span>Failure policy</span>
+                <strong>{sink.failure_policy}</strong>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function ReceiptDetail({ receipt }: { receipt: Receipt }) {
   return (
     <div className="receiptDetail">
@@ -440,6 +554,23 @@ function ReceiptDetail({ receipt }: { receipt: Receipt }) {
         <span>Status</span>
         <strong>{String(receipt.final.status ?? "unknown")}</strong>
       </div>
+      {receipt.persistence && (
+        <>
+          <h3>Persistence</h3>
+          <div className="kv">
+            <span>Stored</span>
+            <strong>{receipt.persistence.stored ? "yes" : "no"}</strong>
+            <span>Storage provider</span>
+            <strong>{receipt.persistence.storage_provider_id}</strong>
+            <span>Events</span>
+            <strong>{receipt.persistence.event_count}</strong>
+            <span>Sink projection</span>
+            <strong>{receipt.persistence.sink_projection_status}</strong>
+            <span>Projected sinks</span>
+            <strong>{receipt.persistence.projected_sink_ids.join(", ") || "none"}</strong>
+          </div>
+        </>
+      )}
       <h3>Caller</h3>
       <CallerTable caller={receipt.caller} />
       <h3>Decision</h3>

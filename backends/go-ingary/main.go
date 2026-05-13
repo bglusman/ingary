@@ -25,9 +25,9 @@ const (
 )
 
 type server struct {
-	mu       sync.RWMutex
-	receipts []Receipt
-	config   TestConfig
+	mu      sync.RWMutex
+	config  TestConfig
+	storage ReceiptStore
 }
 
 type TestConfig struct {
@@ -106,7 +106,7 @@ func main() {
 		addr = defaultAddr
 	}
 
-	s := &server{config: defaultTestConfig()}
+	s := newServer(defaultTestConfig(), NewMemoryReceiptStore())
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
@@ -114,6 +114,7 @@ func main() {
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
 	mux.HandleFunc("/v1/receipts/", s.handleReceiptByID)
 	mux.HandleFunc("/admin/providers", s.handleProviders)
+	mux.HandleFunc("/admin/storage", s.handleStorage)
 	mux.HandleFunc("/admin/synthetic-models", s.handleAdminSyntheticModels)
 	mux.HandleFunc("/__test/config", s.handleTestConfig)
 
@@ -121,6 +122,16 @@ func main() {
 	if err := http.ListenAndServe(addr, requestLogger(mux)); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func newServer(cfg TestConfig, storage ReceiptStore) *server {
+	if cfg.SyntheticModel == "" {
+		cfg = defaultTestConfig()
+	}
+	if storage == nil {
+		storage = NewMemoryReceiptStore()
+	}
+	return &server{config: cfg, storage: storage}
 }
 
 func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +172,11 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	caller := extractCaller(r, req.Metadata)
 	estimate := estimatePromptTokens(req.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
-	receipt := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg)
+	receipt, err := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record receipt", "server_error", "receipt_store_failed")
+		return
+	}
 
 	w.Header().Set("X-Ingary-Receipt-Id", receipt.ReceiptID)
 	w.Header().Set("X-Ingary-Selected-Model", selected)
@@ -222,7 +237,11 @@ func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request)
 	caller := extractCaller(r, body.Request.Metadata)
 	estimate := estimatePromptTokens(body.Request.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
-	receipt := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg)
+	receipt, err := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record receipt", "server_error", "receipt_store_failed")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"receipt": receipt})
 }
 
@@ -233,17 +252,18 @@ func (s *server) handleReceipts(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	limit := parseLimit(query.Get("limit"))
 	cfg := s.currentConfig()
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	summaries := make([]ReceiptSummary, 0, min(limit, len(s.receipts)))
-	for i := len(s.receipts) - 1; i >= 0 && len(summaries) < limit; i-- {
-		receipt := s.receipts[i]
-		if !matchesReceiptFilters(receipt, query.Get("model"), query.Get("consuming_agent_id"), query.Get("consuming_user_id"), query.Get("session_id"), query.Get("run_id"), query.Get("status"), cfg) {
-			continue
-		}
-		summaries = append(summaries, receiptSummary(receipt))
+	summaries, err := s.storage.ListReceiptSummaries(ReceiptFilter{
+		Model:            query.Get("model"),
+		ConsumingAgentID: query.Get("consuming_agent_id"),
+		ConsumingUserID:  query.Get("consuming_user_id"),
+		SessionID:        query.Get("session_id"),
+		RunID:            query.Get("run_id"),
+		Status:           query.Get("status"),
+		Config:           cfg,
+	}, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list receipts", "server_error", "receipt_store_failed")
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": summaries})
 }
@@ -258,13 +278,14 @@ func (s *server) handleReceiptByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, receipt := range s.receipts {
-		if receipt.ReceiptID == id {
-			writeJSON(w, http.StatusOK, receipt)
-			return
-		}
+	receipt, ok, err := s.storage.GetReceipt(id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get receipt", "server_error", "receipt_store_failed")
+		return
+	}
+	if ok {
+		writeJSON(w, http.StatusOK, receipt)
+		return
 	}
 	writeError(w, http.StatusNotFound, "receipt not found", "not_found", "receipt_not_found")
 }
@@ -274,6 +295,13 @@ func (s *server) handleProviders(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": providers()})
+}
+
+func (s *server) handleStorage(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	writeJSON(w, http.StatusOK, s.storage.Health())
 }
 
 func (s *server) handleAdminSyntheticModels(w http.ResponseWriter, r *http.Request) {
@@ -299,9 +327,12 @@ func (s *server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.Version == "" {
 		cfg.Version = modelVersion
 	}
+	if err := s.storage.ClearReceipts(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to clear receipts", "server_error", "receipt_store_failed")
+		return
+	}
 	s.mu.Lock()
 	s.config = cfg
-	s.receipts = nil
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "synthetic_model": cfg.SyntheticModel, "targets": cfg.Targets})
 }
@@ -315,7 +346,7 @@ func (s *server) currentConfig() TestConfig {
 	return s.config
 }
 
-func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, skipped []map[string]any, status string, cfg TestConfig) Receipt {
+func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, skipped []map[string]any, status string, cfg TestConfig) (Receipt, error) {
 	receiptID := "rcpt_" + randomHex(8)
 	request := map[string]any{
 		"model":                   req.Model,
@@ -356,10 +387,10 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		Final:            final,
 	}
 
-	s.mu.Lock()
-	s.receipts = append(s.receipts, receipt)
-	s.mu.Unlock()
-	return receipt
+	if err := s.storage.InsertReceipt(receipt); err != nil {
+		return Receipt{}, err
+	}
+	return receipt, nil
 }
 
 func syntheticModelRecord(cfg TestConfig) map[string]any {

@@ -78,14 +78,24 @@ defmodule ElixirIngary.Router do
         "consuming_user_id",
         "session_id",
         "run_id",
-        "status"
+        "status",
+        "tenant_id",
+        "application_id",
+        "synthetic_model",
+        "synthetic_version",
+        "selected_provider",
+        "selected_model",
+        "simulation",
+        "stream_policy_action",
+        "created_at_min",
+        "created_at_max"
       ])
       |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
       |> Map.new()
 
     limit = parse_limit(Map.get(conn.query_params, "limit"))
     receipts = ElixirIngary.ReceiptStore.list(filters, limit)
-    json(conn, 200, %{"data" => Enum.map(receipts, &receipt_summary/1)})
+    json(conn, 200, %{"data" => receipts})
   end
 
   get "/v1/receipts/:receipt_id" do
@@ -93,6 +103,10 @@ defmodule ElixirIngary.Router do
       nil -> error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
       receipt -> json(conn, 200, receipt)
     end
+  end
+
+  get "/admin/storage" do
+    json(conn, 200, ElixirIngary.ReceiptStore.health())
   end
 
   get "/admin/providers" do
@@ -122,6 +136,7 @@ defmodule ElixirIngary.Router do
   defp route_decision(request) do
     estimate = ElixirIngary.estimate_prompt_tokens(Map.get(request, "messages", []))
     selected_model = ElixirIngary.select_provider_model(estimate)
+    selected_provider = selected_model |> String.split("/", parts: 2) |> List.first()
 
     reason =
       if selected_model == ElixirIngary.local_model() do
@@ -133,6 +148,7 @@ defmodule ElixirIngary.Router do
     %{
       estimated_prompt_tokens: estimate,
       selected_model: selected_model,
+      selected_provider: selected_provider,
       reason: reason
     }
   end
@@ -219,13 +235,16 @@ defmodule ElixirIngary.Router do
 
   defp build_receipt(status, model, caller, request, decision, called_provider) do
     receipt_id = "rcpt_" <> random_hex(8)
+    created_at = System.system_time(:second)
 
     %{
       "receipt_schema" => "v1",
       "receipt_id" => receipt_id,
+      "created_at" => created_at,
       "run_id" => get_in(caller, ["run_id", "value"]),
       "synthetic_model" => model,
       "synthetic_version" => ElixirIngary.synthetic_version(),
+      "simulation" => status == "simulated",
       "caller" => caller,
       "request" => %{
         "model" => Map.get(request, "model"),
@@ -236,6 +255,7 @@ defmodule ElixirIngary.Router do
       },
       "decision" => %{
         "strategy" => "estimated_prompt_length",
+        "selected_provider" => decision.selected_provider,
         "selected_model" => decision.selected_model,
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
         "reason" => decision.reason,
@@ -256,22 +276,11 @@ defmodule ElixirIngary.Router do
         "stream_trigger_count" => 0,
         "receipt_recorded_at" =>
           DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-      }
+      },
+      "events" => receipt_events(receipt_id, created_at, status, decision, called_provider)
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
-  end
-
-  defp receipt_summary(receipt) do
-    %{
-      "receipt_id" => receipt["receipt_id"],
-      "synthetic_model" => receipt["synthetic_model"],
-      "synthetic_version" => receipt["synthetic_version"],
-      "selected_model" => get_in(receipt, ["decision", "selected_model"]),
-      "status" => get_in(receipt, ["final", "status"]),
-      "stream_trigger_count" => get_in(receipt, ["final", "stream_trigger_count"]) || 0,
-      "caller" => receipt["caller"]
-    }
   end
 
   defp chat_response(request, receipt, decision) do
@@ -359,6 +368,36 @@ defmodule ElixirIngary.Router do
       {value, ""} -> value |> max(1) |> min(500)
       _ -> 50
     end
+  end
+
+  defp receipt_events(receipt_id, created_at, status, decision, called_provider) do
+    [
+      %{
+        "event_id" => receipt_id <> ":1",
+        "receipt_id" => receipt_id,
+        "sequence" => 1,
+        "type" => "route.selected",
+        "created_at" => created_at,
+        "selected_provider" => decision.selected_provider,
+        "selected_model" => decision.selected_model
+      },
+      %{
+        "event_id" => receipt_id <> ":2",
+        "receipt_id" => receipt_id,
+        "sequence" => 2,
+        "type" => "provider.attempted",
+        "created_at" => created_at,
+        "called_provider" => called_provider
+      },
+      %{
+        "event_id" => receipt_id <> ":3",
+        "receipt_id" => receipt_id,
+        "sequence" => 3,
+        "type" => "receipt.finalized",
+        "created_at" => created_at,
+        "status" => status
+      }
+    ]
   end
 
   defp random_hex(bytes) do

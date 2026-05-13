@@ -208,6 +208,17 @@ def assert_receipt_search(result: ProbeResult) -> None:
     expect(isinstance(data, list), "receipt search data must be list")
 
 
+def assert_storage_health(result: ProbeResult) -> None:
+    expect(result.status == 200, f"storage health status {result.status}")
+    body = result.body
+    expect(body.get("kind"), "storage health must include kind")
+    expect(body.get("contract_version") == "storage-contract-v0", "storage contract version mismatch")
+    expect(isinstance(body.get("migration_version"), int), "storage migration_version must be integer")
+    expect(body.get("read_health") == "ok", "storage read_health must be ok")
+    expect(body.get("write_health") == "ok", "storage write_health must be ok")
+    expect(isinstance(body.get("capabilities"), dict), "storage capabilities must be object")
+
+
 def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
     rng = random.Random(seed)
     latencies: dict[str, list[float]] = {
@@ -264,6 +275,11 @@ def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
             expect(isinstance(result.body.get("data"), list), f"{path} data must be list")
         except Exception as exc:  # noqa: BLE001
             failures.append(f"{path}: {exc}")
+
+    try:
+        assert_storage_health(record("admin", request_json(base_url, "GET", "/admin/storage")))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"/admin/storage: {exc}")
 
     print(f"base_url={base_url} seed={seed} fuzz_runs={fuzz_runs} receipts={len(receipt_ids)}")
     for kind, values in latencies.items():

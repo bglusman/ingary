@@ -1,6 +1,8 @@
 use std::{
     collections::HashMap,
+    future::Future,
     net::SocketAddr,
+    pin::Pin,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -57,6 +59,7 @@ fn app(state: AppState) -> Router {
         .route("/v1/receipts", get(list_receipts))
         .route("/v1/receipts/:receipt_id", get(get_receipt))
         .route("/admin/providers", get(list_providers))
+        .route("/admin/storage", get(storage_health))
         .route("/admin/synthetic-models", get(list_synthetic_models))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
@@ -67,9 +70,96 @@ async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct AppState {
-    receipts: Arc<RwLock<Vec<Receipt>>>,
+    receipt_store: Arc<dyn ReceiptStore>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            receipt_store: Arc::new(MemoryReceiptStore::default()),
+        }
+    }
+}
+
+type StoreFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+trait ReceiptStore: Send + Sync {
+    fn health<'a>(&'a self) -> StoreFuture<'a, Value>;
+
+    fn insert_receipt<'a>(&'a self, receipt: Receipt) -> StoreFuture<'a, ()>;
+
+    fn get_receipt<'a>(&'a self, receipt_id: &'a str) -> StoreFuture<'a, Option<Receipt>>;
+
+    fn list_receipts<'a>(
+        &'a self,
+        query: &'a ReceiptQuery,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ReceiptSummary>>;
+}
+
+#[derive(Default)]
+struct MemoryReceiptStore {
+    receipts: RwLock<Vec<Receipt>>,
+}
+
+impl ReceiptStore for MemoryReceiptStore {
+    fn health<'a>(&'a self) -> StoreFuture<'a, Value> {
+        Box::pin(async move {
+            json!({
+                "kind": "memory",
+                "contract_version": "storage-contract-v0",
+                "migration_version": 1,
+                "read_health": "ok",
+                "write_health": "ok",
+                "capabilities": {
+                    "durable": false,
+                    "transactional": true,
+                    "concurrent_writers": false,
+                    "json_queries": true,
+                    "event_replay": true,
+                    "time_range_indexes": false,
+                    "retention_jobs": false
+                }
+            })
+        })
+    }
+
+    fn insert_receipt<'a>(&'a self, receipt: Receipt) -> StoreFuture<'a, ()> {
+        Box::pin(async move {
+            self.receipts.write().await.push(receipt);
+        })
+    }
+
+    fn get_receipt<'a>(&'a self, receipt_id: &'a str) -> StoreFuture<'a, Option<Receipt>> {
+        Box::pin(async move {
+            self.receipts
+                .read()
+                .await
+                .iter()
+                .find(|receipt| receipt.receipt_id == receipt_id)
+                .cloned()
+        })
+    }
+
+    fn list_receipts<'a>(
+        &'a self,
+        query: &'a ReceiptQuery,
+        limit: usize,
+    ) -> StoreFuture<'a, Vec<ReceiptSummary>> {
+        Box::pin(async move {
+            self.receipts
+                .read()
+                .await
+                .iter()
+                .rev()
+                .filter(|receipt| query.matches(receipt))
+                .take(limit)
+                .map(ReceiptSummary::from)
+                .collect()
+        })
+    }
 }
 
 async fn list_models() -> Json<Value> {
@@ -100,7 +190,7 @@ async fn chat_completions(
         "completed",
     );
 
-    state.receipts.write().await.push(receipt.clone());
+    state.receipt_store.insert_receipt(receipt.clone()).await;
 
     let created = unix_now();
     let reply = format!(
@@ -162,7 +252,7 @@ async fn simulate(
         "simulated",
     );
 
-    state.receipts.write().await.push(receipt.clone());
+    state.receipt_store.insert_receipt(receipt.clone()).await;
     Ok(Json(json!({ "receipt": receipt })))
 }
 
@@ -171,14 +261,7 @@ async fn list_receipts(
     Query(query): Query<ReceiptQuery>,
 ) -> Json<Value> {
     let limit = query.limit.unwrap_or(50).clamp(1, 500);
-    let receipts = state.receipts.read().await;
-    let data: Vec<ReceiptSummary> = receipts
-        .iter()
-        .rev()
-        .filter(|receipt| query.matches(receipt))
-        .take(limit)
-        .map(ReceiptSummary::from)
-        .collect();
+    let data = state.receipt_store.list_receipts(&query, limit).await;
 
     Json(json!({ "data": data }))
 }
@@ -187,11 +270,10 @@ async fn get_receipt(
     State(state): State<AppState>,
     Path(receipt_id): Path<String>,
 ) -> Result<Json<Receipt>, ApiError> {
-    let receipts = state.receipts.read().await;
-    receipts
-        .iter()
-        .find(|receipt| receipt.receipt_id == receipt_id)
-        .cloned()
+    state
+        .receipt_store
+        .get_receipt(&receipt_id)
+        .await
         .map(Json)
         .ok_or_else(|| ApiError::not_found("receipt not found"))
 }
@@ -215,6 +297,10 @@ async fn list_providers() -> Json<Value> {
             }
         ]
     }))
+}
+
+async fn storage_health(State(state): State<AppState>) -> Json<Value> {
+    Json(state.receipt_store.health().await)
 }
 
 async fn list_synthetic_models() -> Json<Value> {

@@ -20,6 +20,7 @@ The probe checks:
 - `GET /v1/receipts`
 - `GET /v1/receipts/{receipt_id}`
 - `GET /admin/providers`
+- `GET /admin/storage`
 - `GET /admin/synthetic-models`
 - flat and `ingary/` model namespace variants
 - caller metadata precedence and receipt provenance

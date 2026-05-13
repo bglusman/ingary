@@ -22,6 +22,8 @@ available, the app falls back to local mock data so the UI remains usable.
 - Receipt explorer with filters and caller provenance source badges.
 - Provider list from `/admin/providers`, showing which providers are route
   targets rather than public model IDs.
+- Storage view backed by local mock data, separating durable receipt providers
+  from redacted search/event/log sinks.
 
 ## UI / API Contract Critique
 

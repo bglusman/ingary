@@ -2,8 +2,10 @@ import type {
   Provider,
   Receipt,
   ReceiptSummary,
+  Sink,
   SimulationRequest,
   SimulationResult,
+  StorageProvider,
   SyntheticModel,
   SyntheticModelSummary,
 } from "./types";
@@ -148,6 +150,74 @@ export const providers: Provider[] = [
   },
 ];
 
+export const storageProviders: StorageProvider[] = [
+  {
+    id: "receipt-store-local",
+    kind: "sqlite",
+    role: "system_of_record",
+    status: "healthy",
+    contract_version: "storage-contract-draft",
+    migration_version: "2026_05_13_001",
+    failure_policy: "fail_closed",
+    retention_days: 30,
+    receipt_count: 3,
+    event_count: 14,
+    capabilities: ["durable", "transactional", "json_queries", "time_range_indexes", "retention_jobs"],
+  },
+  {
+    id: "warehouse-export",
+    kind: "duckdb",
+    role: "analytics_export",
+    status: "stale",
+    contract_version: "storage-contract-draft",
+    migration_version: "export_snapshot_2026_05_12",
+    failure_policy: "degrade_open",
+    receipt_count: 2,
+    event_count: 9,
+    capabilities: ["analytics_exports"],
+  },
+];
+
+export const sinks: Sink[] = [
+  {
+    id: "receipt-search",
+    kind: "search",
+    target: "memory://receipt-search-index",
+    status: "healthy",
+    derived_from: "receipt-store-local",
+    delivery: "async",
+    lag_ms: 240,
+    backlog: 0,
+    redaction: "receipt_summary",
+    failure_policy: "queue",
+    indexed_receipts: 3,
+  },
+  {
+    id: "route-events",
+    kind: "event_stream",
+    target: "memory://route-event-log",
+    status: "healthy",
+    derived_from: "receipt-store-local",
+    delivery: "sync",
+    lag_ms: 0,
+    backlog: 0,
+    redaction: "event_metadata",
+    failure_policy: "backpressure",
+  },
+  {
+    id: "operator-log",
+    kind: "log",
+    target: "stdout://redacted-receipts",
+    status: "degraded",
+    derived_from: "receipt-store-local",
+    delivery: "async",
+    lag_ms: 1400,
+    backlog: 2,
+    redaction: "event_metadata",
+    failure_policy: "drop",
+  },
+];
+
 export const receipts: Receipt[] = [
   {
     receipt_schema: "v1",
@@ -171,6 +241,13 @@ export const receipts: Receipt[] = [
       skipped: [{ node: "managed-kimi", reason: "smaller_context_target_fit" }],
     },
     attempts: [{ provider_id: "local", upstream_model_id: "qwen-coder", status: "ok", latency_ms: 1834 }],
+    persistence: {
+      storage_provider_id: "receipt-store-local",
+      stored: true,
+      event_count: 4,
+      sink_projection_status: "projected",
+      projected_sink_ids: ["receipt-search", "route-events", "operator-log"],
+    },
     final: { status: "ok", output_released: true, total_tokens: 18902, estimated_cost_usd: 0.0 },
   },
   {
@@ -194,6 +271,13 @@ export const receipts: Receipt[] = [
       skipped: [{ node: "local-qwen-coder", reason: "context_window_exceeded" }],
     },
     attempts: [{ provider_id: "managed", upstream_model_id: "kimi-k2.6", status: "ok", latency_ms: 4217 }],
+    persistence: {
+      storage_provider_id: "receipt-store-local",
+      stored: true,
+      event_count: 5,
+      sink_projection_status: "pending",
+      projected_sink_ids: ["receipt-search", "route-events"],
+    },
     final: { status: "ok", output_released: true, stream_trigger_count: 1, total_tokens: 97241, estimated_cost_usd: 0.41 },
   },
   {
@@ -220,6 +304,13 @@ export const receipts: Receipt[] = [
       { provider_id: "local", upstream_model_id: "llama-local", status: "timeout", latency_ms: 5000 },
       { provider_id: "managed", upstream_model_id: "safe-large", status: "blocked", latency_ms: 2109 },
     ],
+    persistence: {
+      storage_provider_id: "receipt-store-local",
+      stored: true,
+      event_count: 5,
+      sink_projection_status: "projected",
+      projected_sink_ids: ["receipt-search", "route-events", "operator-log"],
+    },
     final: { status: "blocked", output_released: false, stream_trigger_count: 2, reason: "pii-final" },
   },
 ];
@@ -267,6 +358,13 @@ export function simulateWithMocks(request: SimulationRequest): SimulationResult 
           })),
       },
       attempts: [{ provider_id: selected?.provider_id, upstream_model_id: selected?.upstream_model_id, status: "planned" }],
+      persistence: {
+        storage_provider_id: "preview-memory",
+        stored: false,
+        event_count: 3,
+        sink_projection_status: "skipped",
+        projected_sink_ids: [],
+      },
       final: { status: "simulated", output_released: false, estimated_tokens: estimatedTokens },
     },
   };

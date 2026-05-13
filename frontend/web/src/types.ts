@@ -109,6 +109,7 @@ export type Receipt = {
   request?: Record<string, unknown>;
   decision: Record<string, unknown>;
   attempts: Array<Record<string, unknown>>;
+  persistence?: ReceiptPersistence;
   final: Record<string, unknown>;
 };
 
@@ -122,6 +123,42 @@ export type Provider = {
   base_url: string;
   credential_owner: "provider" | "ingary";
   health?: string;
+};
+
+export type StorageProvider = {
+  id: string;
+  kind: "memory" | "sqlite" | "postgres" | "duckdb";
+  role: "system_of_record" | "analytics_export" | "ephemeral";
+  status: "healthy" | "degraded" | "stale" | "offline";
+  contract_version: string;
+  migration_version: string;
+  failure_policy: "fail_closed" | "degrade_open" | "read_only";
+  retention_days?: number;
+  receipt_count: number;
+  event_count: number;
+  capabilities: string[];
+};
+
+export type Sink = {
+  id: string;
+  kind: "search" | "event_stream" | "log" | "metrics";
+  target: string;
+  status: "healthy" | "degraded" | "stale" | "offline";
+  derived_from: string;
+  delivery: "sync" | "async";
+  lag_ms?: number;
+  backlog?: number;
+  redaction: "receipt_summary" | "event_metadata" | "metrics_only";
+  failure_policy: "queue" | "drop" | "backpressure";
+  indexed_receipts?: number;
+};
+
+export type ReceiptPersistence = {
+  storage_provider_id: string;
+  stored: boolean;
+  event_count: number;
+  sink_projection_status: "projected" | "pending" | "stale" | "skipped";
+  projected_sink_ids: string[];
 };
 
 export type ReceiptFilters = {

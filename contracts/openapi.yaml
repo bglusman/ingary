@@ -206,6 +206,17 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Provider"
+  /admin/storage:
+    get:
+      tags: [Admin]
+      summary: Get storage provider health and capability metadata
+      responses:
+        "200":
+          description: Storage health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StorageHealth"
   /admin/synthetic-models:
     get:
       tags: [Admin]
@@ -525,6 +536,20 @@ components:
           type: string
           enum: [provider, ingary]
         health: { type: string }
+    StorageHealth:
+      type: object
+      required: [kind, contract_version, migration_version, read_health, write_health, capabilities]
+      properties:
+        kind:
+          type: string
+          enum: [memory, json-file, sqlite, postgres, duckdb]
+        contract_version: { type: string }
+        migration_version: { type: integer }
+        read_health: { type: string }
+        write_health: { type: string }
+        capabilities:
+          type: object
+          additionalProperties: true
     ErrorResponse:
       type: object
       required: [error]
