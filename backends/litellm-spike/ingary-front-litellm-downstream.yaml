@@ -1,0 +1,73 @@
+# Sketch only: Ingary owns synthetic models, LiteLLM is a downstream provider.
+# This is not a LiteLLM config file. It is an Ingary-style config sketch using
+# placeholders and environment variables only.
+
+providers:
+  - id: local
+    kind: openai_compatible
+    base_url: http://127.0.0.1:11434/v1
+    credential_owner: provider
+    api_key_env: LOCAL_OPENAI_COMPAT_API_KEY
+
+  - id: managed
+    kind: litellm
+    base_url: ${LITELLM_API_BASE}
+    credential_owner: provider
+    api_key_env: LITELLM_API_KEY
+    forward_headers:
+      - X-Ingary-Tenant-Id
+      - X-Ingary-Application-Id
+      - X-Ingary-Agent-Id
+      - X-Ingary-User-Id
+      - X-Ingary-Session-Id
+      - X-Ingary-Run-Id
+      - X-Client-Request-Id
+
+concrete_models:
+  - id: local/qwen-coder
+    provider: local
+    upstream_model: qwen-coder
+    context_window: 32768
+    capabilities: [chat, tools, coding]
+
+  - id: managed/kimi-k2.6
+    provider: managed
+    upstream_model: kimi-k2.6
+    context_window: 262144
+    capabilities: [chat, tools, coding, long_context]
+
+synthetic_models:
+  - id: coding-balanced
+    public_aliases:
+      - coding-balanced
+      - ingary/coding-balanced
+    active_version: 2026-05-13.litellm-spike
+    route_graph:
+      root: prompt-length-dispatcher
+      nodes:
+        - id: prompt-length-dispatcher
+          type: dispatcher
+          strategy: smallest_context_that_fits
+          targets:
+            - local/qwen-coder
+            - managed/kimi-k2.6
+        - id: local/qwen-coder
+          type: concrete_model
+          provider_id: local
+          upstream_model_id: qwen-coder
+          context_window: 32768
+        - id: managed/kimi-k2.6
+          type: concrete_model
+          provider_id: managed
+          upstream_model_id: kimi-k2.6
+          context_window: 262144
+    stream_policy:
+      mode: buffered_horizon
+      buffer_tokens: 256
+      rules:
+        - id: no-deprecated-client
+          event: text_delta
+          match:
+            regex: "OldClient\\("
+          action: inject_reminder_and_retry
+          max_triggers_per_request: 1

@@ -1,0 +1,32 @@
+.DS_Store
+
+# Rust
+/target/
+**/target/
+
+# Go
+*.test
+
+# Elixir
+**/_build/
+**/deps/
+**/cover/
+**/doc/
+erl_crash.dump
+*.ez
+
+# Node / frontend
+**/node_modules/
+**/dist/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]

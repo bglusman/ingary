@@ -1,0 +1,44 @@
+# Sketch only: LiteLLM owns ingress, Ingary is registered as an
+# OpenAI-compatible backend. Replace environment variables at deploy time.
+
+model_list:
+  - model_name: ingary/coding-balanced
+    litellm_params:
+      model: openai/ingary/coding-balanced
+      api_base: os.environ/INGARY_API_BASE
+      api_key: os.environ/INGARY_API_KEY
+
+  - model_name: ingary/local-first-private
+    litellm_params:
+      model: openai/ingary/local-first-private
+      api_base: os.environ/INGARY_API_BASE
+      api_key: os.environ/INGARY_API_KEY
+
+  - model_name: ingary/json-extractor-cheap
+    litellm_params:
+      model: openai/ingary/json-extractor-cheap
+      api_base: os.environ/INGARY_API_BASE
+      api_key: os.environ/INGARY_API_KEY
+
+litellm_settings:
+  # Example only. Use an operator-provided value through the real deployment
+  # secret mechanism; do not hardcode keys in committed config.
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DATABASE_URL
+  request_timeout: 60
+  num_retries: 1
+  default_key_generate_params:
+    models:
+      - ingary/coding-balanced
+      - ingary/local-first-private
+      - ingary/json-extractor-cheap
+    max_budget: 25
+    budget_duration: 30d
+    metadata:
+      gateway_role: fronting-ingary
+
+general_settings:
+  # Deployment should preserve X-Ingary-* and X-Client-Request-Id headers if
+  # clients provide them. If it cannot, Ingary receipts should mark identity as
+  # provider_key or derived_anonymous rather than header.
+  store_model_in_db: true

@@ -1,0 +1,63 @@
+# Sketch only. This is not validated against a pinned TensorZero release.
+# It shows how Ingary's demo synthetic model could be represented using
+# TensorZero functions, variants, and OpenAI-compatible providers.
+
+[gateway]
+bind_address = "0.0.0.0:3000"
+observability.enabled = false
+disable_pseudonymous_usage_analytics = true
+
+[models.local_qwen_coder]
+routing = ["local_openai_compatible"]
+
+[models.local_qwen_coder.providers.local_openai_compatible]
+type = "openai"
+api_base = "http://host.docker.internal:11434/v1"
+model_name = "qwen-coder"
+api_key_location = "none"
+
+[models.managed_kimi_k2_6]
+routing = ["managed_gateway"]
+
+[models.managed_kimi_k2_6.providers.managed_gateway]
+type = "openai"
+api_base = "https://gateway.example.invalid/v1"
+model_name = "kimi-k2.6"
+api_key_location = "env::INGARY_MANAGED_GATEWAY_API_KEY"
+
+[functions.ingary_coding_balanced]
+type = "chat"
+description = "Sketch of Ingary public synthetic model ingary/coding-balanced."
+
+[functions.ingary_coding_balanced.variants.local_qwen_coder]
+type = "chat_completion"
+model = "local_qwen_coder"
+
+[functions.ingary_coding_balanced.variants.managed_kimi_k2_6]
+type = "chat_completion"
+model = "managed_kimi_k2_6"
+
+# Ingary adapter policy outside TensorZero:
+#
+# synthetic_model = "coding-balanced"
+# public_aliases = ["coding-balanced", "ingary/coding-balanced"]
+# route_type = "dispatcher"
+# strategy = "smallest_context_that_fits"
+# targets = [
+#   { variant = "local_qwen_coder", concrete_model = "local/qwen-coder", context_window = 32768 },
+#   { variant = "managed_kimi_k2_6", concrete_model = "managed/kimi-k2.6", context_window = 262144 },
+# ]
+#
+# Adapter call after route selection:
+#
+# POST /openai/v1/chat/completions
+# {
+#   "model": "tensorzero::function_name::ingary_coding_balanced",
+#   "messages": [...],
+#   "tensorzero::variant_name": "local_qwen_coder",
+#   "tensorzero::tags": {
+#     "ingary.synthetic_model": "coding-balanced",
+#     "ingary.synthetic_version": "2026-05-13.a",
+#     "ingary.selected_model": "local/qwen-coder"
+#   }
+# }

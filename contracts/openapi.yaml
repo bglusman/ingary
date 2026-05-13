@@ -1,0 +1,508 @@
+openapi: 3.1.0
+info:
+  title: Ingary Synthetic Model Platform API
+  version: 0.1.0-draft
+  description: |
+    Draft contract for backend and frontend prototypes. The serving surface is
+    OpenAI-compatible where possible, with additional synthetic-model,
+    simulation, receipt, and admin endpoints.
+servers:
+  - url: http://127.0.0.1:8787
+    description: Local prototype server
+tags:
+  - name: OpenAI Compatible
+  - name: Synthetic Models
+  - name: Receipts
+  - name: Admin
+paths:
+  /v1/models:
+    get:
+      tags: [OpenAI Compatible]
+      summary: List public synthetic models
+      responses:
+        "200":
+          description: OpenAI-compatible model list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+  /v1/chat/completions:
+    post:
+      tags: [OpenAI Compatible]
+      summary: Execute an OpenAI-compatible chat completion through a synthetic model
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/RunId"
+        - $ref: "#/components/parameters/ClientRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: Chat completion response or SSE stream when stream=true
+          headers:
+            X-Ingary-Receipt-Id:
+              schema:
+                type: string
+            X-Ingary-Selected-Model:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "502":
+          $ref: "#/components/responses/Error"
+  /v1/synthetic/models:
+    get:
+      tags: [Synthetic Models]
+      summary: List synthetic models with active versions
+      responses:
+        "200":
+          description: Synthetic model summaries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SyntheticModelSummary"
+  /v1/synthetic/models/{model_id}:
+    get:
+      tags: [Synthetic Models]
+      summary: Get a synthetic model definition
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Synthetic model definition
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyntheticModel"
+        "404":
+          $ref: "#/components/responses/Error"
+  /v1/synthetic/simulate:
+    post:
+      tags: [Synthetic Models]
+      summary: Simulate route selection without calling providers
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/ApplicationId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/SessionId"
+        - $ref: "#/components/parameters/RunId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimulationRequest"
+      responses:
+        "200":
+          description: Route simulation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationResult"
+        "400":
+          $ref: "#/components/responses/Error"
+  /v1/receipts:
+    get:
+      tags: [Receipts]
+      summary: Search receipts
+      parameters:
+        - name: model
+          in: query
+          schema: { type: string }
+        - name: consuming_agent_id
+          in: query
+          schema: { type: string }
+        - name: consuming_user_id
+          in: query
+          schema: { type: string }
+        - name: session_id
+          in: query
+          schema: { type: string }
+        - name: run_id
+          in: query
+          schema: { type: string }
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+      responses:
+        "200":
+          description: Receipt search results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ReceiptSummary"
+  /v1/receipts/{receipt_id}:
+    get:
+      tags: [Receipts]
+      summary: Get one receipt
+      parameters:
+        - name: receipt_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Receipt
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Receipt"
+        "404":
+          $ref: "#/components/responses/Error"
+  /admin/providers:
+    get:
+      tags: [Admin]
+      summary: List provider adapters
+      responses:
+        "200":
+          description: Provider adapter list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Provider"
+  /admin/synthetic-models:
+    get:
+      tags: [Admin]
+      summary: List full synthetic model admin records
+      responses:
+        "200":
+          description: Synthetic model records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SyntheticModel"
+components:
+  parameters:
+    TenantId:
+      name: X-Ingary-Tenant-Id
+      in: header
+      schema: { type: string }
+    ApplicationId:
+      name: X-Ingary-Application-Id
+      in: header
+      schema: { type: string }
+    AgentId:
+      name: X-Ingary-Agent-Id
+      in: header
+      schema: { type: string }
+    UserId:
+      name: X-Ingary-User-Id
+      in: header
+      schema: { type: string }
+    SessionId:
+      name: X-Ingary-Session-Id
+      in: header
+      schema: { type: string }
+    RunId:
+      name: X-Ingary-Run-Id
+      in: header
+      schema: { type: string }
+    ClientRequestId:
+      name: X-Client-Request-Id
+      in: header
+      schema: { type: string }
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+  schemas:
+    ModelList:
+      type: object
+      required: [object, data]
+      properties:
+        object:
+          type: string
+          const: list
+        data:
+          type: array
+          items:
+            type: object
+            required: [id, object]
+            properties:
+              id: { type: string }
+              object:
+                type: string
+                const: model
+              owned_by:
+                type: string
+                default: ingary
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      additionalProperties: true
+      properties:
+        model:
+          type: string
+          description: Synthetic model ID, optionally prefixed as ingary/{id}
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        stream:
+          type: boolean
+          default: false
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Optional caller metadata. Header values win when trusted.
+    ChatMessage:
+      type: object
+      required: [role]
+      additionalProperties: true
+      properties:
+        role:
+          type: string
+          enum: [system, user, assistant, tool, developer]
+        content:
+          oneOf:
+            - type: string
+            - type: "null"
+            - type: array
+              items:
+                type: object
+                additionalProperties: true
+        name:
+          type: string
+    ChatCompletionResponse:
+      type: object
+      required: [id, object, created, model, choices]
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        object:
+          type: string
+          const: chat.completion
+        created:
+          type: integer
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        usage:
+          type: object
+          additionalProperties: true
+    SyntheticModelSummary:
+      type: object
+      required: [id, active_version, route_type, status]
+      properties:
+        id: { type: string }
+        public_model_id: { type: string }
+        active_version: { type: string }
+        route_type: { type: string }
+        status: { type: string }
+        traffic_24h: { type: integer }
+        fallback_rate: { type: number }
+        stream_trigger_count_24h: { type: integer }
+    SyntheticModel:
+      type: object
+      required: [id, active_version, route_graph]
+      properties:
+        id: { type: string }
+        active_version: { type: string }
+        description: { type: string }
+        public_namespace:
+          type: string
+          enum: [flat, prefixed]
+        route_graph:
+          $ref: "#/components/schemas/RouteGraph"
+        stream_policy:
+          $ref: "#/components/schemas/StreamPolicy"
+    RouteGraph:
+      type: object
+      required: [root, nodes]
+      properties:
+        root: { type: string }
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/RouteNode"
+    RouteNode:
+      type: object
+      required: [id, type]
+      additionalProperties: true
+      properties:
+        id: { type: string }
+        type:
+          type: string
+          enum: [alias, dispatcher, cascade, alloy, guard, concrete_model]
+        targets:
+          type: array
+          items: { type: string }
+        provider_id: { type: string }
+        upstream_model_id: { type: string }
+        context_window: { type: integer }
+    StreamPolicy:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [pass_through, buffered_horizon, semantic_boundary, full_buffer]
+        buffer_tokens:
+          type: integer
+        rules:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    SimulationRequest:
+      type: object
+      required: [request]
+      properties:
+        model:
+          type: string
+          description: Optional override. Defaults to request.model.
+        request:
+          $ref: "#/components/schemas/ChatCompletionRequest"
+    SimulationResult:
+      type: object
+      required: [receipt]
+      properties:
+        receipt:
+          $ref: "#/components/schemas/Receipt"
+    CallerContext:
+      type: object
+      properties:
+        tenant_id:
+          $ref: "#/components/schemas/SourcedString"
+        application_id:
+          $ref: "#/components/schemas/SourcedString"
+        consuming_agent_id:
+          $ref: "#/components/schemas/SourcedString"
+        consuming_user_id:
+          $ref: "#/components/schemas/SourcedString"
+        session_id:
+          $ref: "#/components/schemas/SourcedString"
+        run_id:
+          $ref: "#/components/schemas/SourcedString"
+        tags:
+          type: array
+          items: { type: string }
+    SourcedString:
+      type: object
+      required: [value, source]
+      properties:
+        value: { type: string }
+        source:
+          type: string
+          enum: [trusted_auth, header, body_metadata, provider_key, derived_anonymous]
+    ReceiptSummary:
+      type: object
+      required: [receipt_id, synthetic_model, synthetic_version, status, caller]
+      properties:
+        receipt_id: { type: string }
+        synthetic_model: { type: string }
+        synthetic_version: { type: string }
+        selected_model: { type: string }
+        status: { type: string }
+        stream_trigger_count: { type: integer }
+        caller:
+          $ref: "#/components/schemas/CallerContext"
+    Receipt:
+      type: object
+      required: [receipt_schema, receipt_id, synthetic_model, synthetic_version, caller, decision, attempts, final]
+      properties:
+        receipt_schema:
+          type: string
+          const: v1
+        receipt_id: { type: string }
+        run_id: { type: string }
+        synthetic_model: { type: string }
+        synthetic_version: { type: string }
+        caller:
+          $ref: "#/components/schemas/CallerContext"
+        request:
+          type: object
+          additionalProperties: true
+        decision:
+          type: object
+          additionalProperties: true
+        attempts:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        final:
+          type: object
+          additionalProperties: true
+    Provider:
+      type: object
+      required: [id, kind, base_url, credential_owner]
+      properties:
+        id: { type: string }
+        kind:
+          type: string
+          enum: [openai_compatible, litellm, helicone, openrouter, portkey, mock]
+        base_url: { type: string }
+        credential_owner:
+          type: string
+          enum: [provider, ingary]
+        health: { type: string }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message: { type: string }
+            type: { type: string }
+            code: { type: string }
