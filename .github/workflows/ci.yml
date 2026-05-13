@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: backends/go-ingary/go.mod
+      - run: go test ./...
+        working-directory: backends/go-ingary
+
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+      - name: Check formatting
+        run: cargo fmt --check
+        working-directory: backends/rust-ingary
+      - name: Run tests
+        run: cargo test
+        working-directory: backends/rust-ingary
+
+  elixir:
+    name: elixir
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@8251c48667b97e88a0a24ec512f5b72a039fcea7 # v1
+        with:
+          otp-version: "27"
+          elixir-version: "1.17"
+      - name: Install deps
+        run: mix deps.get
+        working-directory: backends/elixir-ingary
+      - name: Check formatting
+        run: mix format --check-formatted
+        working-directory: backends/elixir-ingary
+      - name: Run tests
+        run: mix test
+        working-directory: backends/elixir-ingary
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/web/package-lock.json
+      - run: npm ci
+        working-directory: frontend/web
+      - run: npm run build
+        working-directory: frontend/web
+
+  contracts:
+    name: contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+      - name: Compile Python test harnesses
+        run: python3 -m py_compile tests/*.py
+      - name: Run storage contract fixture
+        run: python3 tests/storage_contract.py --store all --cases 50
+      - name: Check docs links
+        run: ruby scripts/check-docs-site.rb
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    needs: [go, rust, elixir, frontend, contracts]
+    if: always()
+    steps:
+      - name: Verify required jobs
+        env:
+          GO_RESULT: ${{ needs.go.result }}
+          RUST_RESULT: ${{ needs.rust.result }}
+          ELIXIR_RESULT: ${{ needs.elixir.result }}
+          FRONTEND_RESULT: ${{ needs.frontend.result }}
+          CONTRACTS_RESULT: ${{ needs.contracts.result }}
+        run: |
+          set -euo pipefail
+          for result in "$GO_RESULT" "$RUST_RESULT" "$ELIXIR_RESULT" "$FRONTEND_RESULT" "$CONTRACTS_RESULT"; do
+            if [ "$result" != "success" ]; then
+              echo "A required job failed or was skipped"
+              exit 1
+            fi
+          done

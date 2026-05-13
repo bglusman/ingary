@@ -26,6 +26,7 @@ vite.config.d.ts
 .env
 .env.*
 !.env.example
+.gitleaks.local.toml
 
 # Python
 __pycache__/

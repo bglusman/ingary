@@ -1,0 +1,30 @@
+# .gitleaks.local.toml.example — Template for per-deployment disclosure rules.
+#
+# Copy this file to `.gitleaks.local.toml` and add patterns for identifiers that
+# should never be committed from your own environment. This file is intentionally
+# an example; `.gitleaks.local.toml` is gitignored.
+
+title = "personal local-only infra-leak rules"
+
+[extend]
+path = "./.gitleaks.toml"
+
+# Examples only. Replace or delete before use.
+#
+# [[rules]]
+# id = "personal-domain-primary"
+# description = "Primary personal domain — do not commit any subdomain"
+# regex = '''[a-z0-9-]+\.yourdomain\.com'''
+# tags = ["infra-leak", "personal"]
+#
+# [[rules]]
+# id = "personal-ddns"
+# description = "Dynamic-DNS hostname used by this deployment"
+# regex = '''[a-z0-9-]+\.yourddns\.net'''
+# tags = ["infra-leak", "personal"]
+#
+# [[rules]]
+# id = "private-model-name"
+# description = "Model identifiers that exist only in this deployment"
+# regex = '''\b(?:internal-foo|private-bar)-[a-z0-9-]+\b'''
+# tags = ["infra-leak", "personal"]

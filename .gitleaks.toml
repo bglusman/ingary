@@ -1,0 +1,67 @@
+# .gitleaks.toml — Public generic secret + infrastructure-disclosure scanner.
+
+title = "ingary secret + infra-leak rules"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "rfc1918-192-168"
+description = "RFC 1918 private range 192.168.0.0/16"
+regex = '''\b192\.168\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\b'''
+tags = ["infra-leak"]
+
+[[rules]]
+id = "rfc1918-10-net"
+description = "RFC 1918 private range 10.0.0.0/8"
+regex = '''\b10\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\b'''
+tags = ["infra-leak"]
+
+[[rules]]
+id = "rfc6598-cgnat"
+description = "RFC 6598 CGNAT range 100.64.0.0/10"
+regex = '''\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\.(?:25[0-5]|2[0-4]\d|1\d\d|\d\d?)\b'''
+tags = ["infra-leak"]
+
+[[rules]]
+id = "bearer-token-in-header"
+description = "Hardcoded Bearer token in an Authorization header string literal"
+regex = '''[Aa]uthorization["']?\s*:\s*["']?Bearer\s+[A-Za-z0-9_\-\.]{16,}'''
+tags = ["secret"]
+
+[[rules]]
+id = "basic-auth-in-url"
+description = "user:password@ credentials embedded in a URL"
+regex = '''https?://[^/\s:@]+:[^/\s@]{4,}@[^/\s]+'''
+tags = ["secret"]
+
+[allowlist]
+description = "Known-safe paths and literals"
+paths = [
+    '''\.gitleaks\.toml$''',
+    '''\.gitleaks\.local\.toml$''',
+    '''\.gitleaks\.local\.toml\.example$''',
+    '''\.github/workflows/secret-scan\.yml$''',
+    '''CLAUDE\.md$''',
+    '''(?i).*\.example\..*''',
+    '''tests/.*/fixtures/.*''',
+    '''docs/rfcs/.*\.md$''',
+    '''Cargo\.lock$''',
+    '''mix\.lock$''',
+    '''package-lock\.json$''',
+    '''yarn\.lock$''',
+    '''bun\.lock$''',
+]
+regexes = [
+    '''127\.0\.0\.1''',
+    '''0\.0\.0\.0''',
+    '''::1''',
+    '''localhost''',
+    '''192\.0\.2\.\d{1,3}''',
+    '''198\.51\.100\.\d{1,3}''',
+    '''203\.0\.113\.\d{1,3}''',
+    '''example\.com''',
+    '''example\.net''',
+    '''example\.org''',
+    '''example\.test''',
+]

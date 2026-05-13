@@ -765,6 +765,85 @@ required:
 - protobuf-JSON shape validation
 - bounded repair/retry with receipt annotations
 
+### Policy Demonstration Hypotheses
+
+Ingary should not be positioned as primarily a security product. Security is one
+useful demonstration category, especially because failure cost is easy to
+understand, but the broader thesis is that agentic workflows need a separate
+point of control, experimentation, and visibility around otherwise hard-to-
+predict model behavior.
+
+The strongest early demos should use constrained domains with known failure
+modes. Each demo should be falsifiable: the policy either reduces failure
+frequency, reduces failure cost, or improves failure visibility in receipts and
+operator alerts.
+
+Candidate demos:
+
+1. **Loop and tool-spam governor**
+   - Domain: support/refund agent, browser agent, coding agent.
+   - Failure: repeated calls to the same tool with equivalent arguments or
+     equivalent result hashes.
+   - Ingary action: alert operator, inject a "change tactic" reminder, switch to
+     a stronger model, or stop with a receipt explaining repeated state.
+   - Test signal: same tool/result pair seen N times within a run.
+
+2. **Ambiguous-success governor**
+   - Domain: booking, billing, task execution, CI repair.
+   - Failure: agent treats partial or empty success as complete.
+   - Ingary action: require structured evidence fields before final answer;
+     alert if final answer lacks required observations.
+   - Test signal: final answer says done while required receipt fields or tool
+     evidence are absent.
+
+3. **Structured-output repair governor**
+   - Domain: extraction, CRM update, ticket triage, workflow automation.
+   - Failure: malformed JSON/XML/protobuf-JSON or semantically invalid fields.
+   - Ingary action: buffer output, validate, retry with schema-specific repair
+     prompt, block after max attempts, record validation errors.
+   - Test signal: invalid output never reaches consumer in enforced mode.
+
+4. **Escalation-on-uncertainty governor**
+   - Domain: medical intake, legal intake, financial customer support, internal
+     approvals.
+   - Failure: confident answer despite missing evidence or low confidence.
+   - Ingary action: page/handoff to human, downgrade to draft answer, or ask for
+     missing fields.
+   - Test signal: answer contains uncertainty markers, missing required facts,
+     or contradictory extracted fields.
+
+5. **Cost and context budget governor**
+   - Domain: coding agents, research agents, long-running analysis jobs.
+   - Failure: context saturation, repeated retries, or runaway token spend.
+   - Ingary action: summarize-and-continue, switch model, require operator
+     approval, or stop before budget explosion.
+   - Test signal: token/tool-call thresholds crossed with no new evidence.
+
+6. **Prompt-management experiment governor**
+   - Domain: constrained customer-support or extraction workflows.
+   - Failure: one prompt variant works for common cases but fails tail cases.
+   - Ingary action: versioned preamble/postscript, canary prompt variants,
+     receipt-level comparison by user/agent/session segment.
+   - Test signal: policy receipts show prompt variant, route, structured
+     validation result, and downstream outcome.
+
+7. **Security guard as example, not identity**
+   - Domain: coding agents, data agents, internal tools.
+   - Failure: prompt injection, credential leakage, hidden prompt extraction,
+     unsafe tool instructions.
+   - Ingary action: block, rewrite, route to human review, or annotate receipt.
+   - Test signal: known injection/leak markers are caught on input and output.
+
+Human alerting should be a first-class policy action:
+
+```text
+policy condition -> receipt event -> alert sink -> operator link to trace
+```
+
+Alerts may be emitted in addition to, or instead of, changing model behavior.
+This is important because some policies are observability hypotheses before they
+are enforcement rules.
+
 Conceptual shape:
 
 ```python
