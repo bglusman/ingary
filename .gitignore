@@ -6,6 +6,7 @@
 
 # Go
 *.test
+**/.hegel/
 
 # Elixir
 **/_build/
@@ -27,6 +28,8 @@ vite.config.d.ts
 .env.*
 !.env.example
 .gitleaks.local.toml
+fnox.toml
+.ingary.local/
 
 # Python
 __pycache__/

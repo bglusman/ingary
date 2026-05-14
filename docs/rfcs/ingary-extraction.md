@@ -880,6 +880,40 @@ It should not expose:
 - arbitrary process execution
 - secrets
 
+### Code-First Visualization Spike
+
+Starlark policy may still be product-grade if Ingary treats visualization as an
+AST plus trace problem rather than a static-proof problem. Typical policies are
+expected to be small, so a simple visual projection can carry a lot of value:
+
+- parse functions, branches, comparisons, calls, and return/action constructors
+- classify host API calls as detectors, cache reads, route mutations, stream
+  actions, final-output actions, or unknown effects
+- preserve source spans so the UI can highlight the exact code that produced a
+  decision
+- run the same generated scenarios used by structured policies
+- overlay traces on the AST graph: branch taken, cache count observed, regex
+  matched, model switched, stream aborted, retry requested, output blocked
+- show scenario diffs between policy versions and pin counterexamples as
+  regression fixtures
+
+Parser choices should follow the spike goal:
+
+- Go `go.starlark.net/syntax` is likely the fastest AST projection prototype.
+- Rust `starlark` / `starlark_syntax` is the likely runtime-aligned parser if
+  Rust becomes authoritative.
+- `tree-sitter-starlark` is useful for source-aware editor visualization and
+  incremental parsing.
+- Python `ast` is acceptable for an early Starlark-like subset prototype if the
+  spike explicitly rejects unsupported Python nodes and validates activation
+  with a real Starlark parser later.
+
+This spike should be compared against the structured-primitives workbench using
+the same policies and scenarios: TTSR, recent-history count/comparison rules,
+and dynamic model switching. The win condition is not maximum expressiveness;
+it is whether technical policy authors can predict, trust, review, and debug
+behavior faster.
+
 ## Receipts
 
 Receipt schema should be stable and versioned.
@@ -1399,6 +1433,44 @@ Hub
 +--------------------------------------------------------------------------------+
 ```
 
+### Wireframe: Governance Authoring Workbench
+
+```text
++--------------------------------------------------------------------------------+
+| Governance draft: no-deprecated-client                         [Ask assistant] |
++--------------------------------------------------------------------------------+
+| Intent                                                                         |
+| +------------------------------------------------------------------------------+
+| | Do not let streamed code use OldClient(. Retry once with a reminder, then    |
+| | block if the retry still violates the rule.                                  |
+| +------------------------------------------------------------------------------+
+| Assistant model: [local/ollama-qwen v]  Data sharing: [policy text only v]     |
+| [Draft rule] [Review existing] [Generate counterexamples]                      |
++--------------------------------------------------------------------------------+
+| Policy graph                                                                   |
+| request.received --> route.selecting --> response.streaming --> output.final   |
+|                                      |                                         |
+|                                      +-- no-deprecated-client                  |
+|                                          phase: stream                         |
+|                                          effects: reads stream.window          |
+|                                                   writes retry/reminder        |
+|                                          arbitration: ordered priority 50      |
+|                                          status: parallel-safe detector        |
++--------------------------------------------------------------------------------+
+| Compiler and conflict review                                                   |
+| ✓ schema valid       ✓ regex bounded enough for 4096 byte horizon              |
+| ✓ one-shot session   ! retry_with_reminder conflicts with block rule priority  |
+| Suggested fix: make block-on-second-violation the on_retry_violation action.   |
++--------------------------------------------------------------------------------+
+| Draft artifact                                      | Plain-language summary   |
+| kind: ingary.governance.policy                      | Holds 4096 bytes of the  |
+| rules:                                              | stream, watches for      |
+|   - id: no-deprecated-client                        | OldClient(, aborts       |
+|     phase: response.streaming                       | before release, retries  |
+|     ...                                             | once, then blocks.       |
++--------------------------------------------------------------------------------+
+```
+
 ### Wireframe: Simulator
 
 ```text
@@ -1417,6 +1489,29 @@ Hub
 | +------------------------------------+  +--------------------------------------+ |
 |                                                                                |
 | [Run route only] [Run full stream] [Compare active vs draft]                    |
++--------------------------------------------------------------------------------+
+```
+
+### Wireframe: Stream Counterexample Viewer
+
+```text
++--------------------------------------------------------------------------------+
+| Generated stream checks for no-deprecated-client                 11 passed 1 failed |
++--------------------------------------------------------------------------------+
+| Failed property: violating bytes must not be released before trigger            |
+| Minimal stream: "safe Old" + "Client("                                          |
+| Chunk sizes: [8, 7]                                                             |
+| Holdback: 8 bytes                                                               |
+|                                                                                |
+| Timeline                                                                        |
+| held:     safe Old                                                              |
+| released: safe                                                                  |
+| held:          OldClient(                                                       |
+| trigger:              ^ regex OldClient\(                                      |
+|                                                                                |
+| Diagnosis: holdback is smaller than the trigger span plus chunk boundary risk.  |
+| Suggested fixes: increase holdback to 16 bytes, or switch to full_buffer mode.  |
+| [Pin as regression] [Apply suggested fix] [Ask assistant to explain]            |
 +--------------------------------------------------------------------------------+
 ```
 

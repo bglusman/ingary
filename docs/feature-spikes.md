@@ -38,6 +38,10 @@ bounded release latency.
 |---|---|---|---|---|
 | Structured output repair | JSON/XML drift is common and easy to test. | Final-output validator with retry-or-block. | Medium latency from retries; parser/schema design. | Lower invalid-output rate against fixtures. |
 | Streaming TTSR | Known bad patterns can be stopped before consumers see them. | Buffered horizon, literal/regex trigger, retry with reminder. | Hard streaming semantics; visible latency. | Violating bytes never released in buffered mode. |
+| Governance authoring assistant | Most users should describe desired behavior, not hand-write policy DSL. | Permissioned model selection, draft artifact generation, diff review, and simulation-guided revision. | Must avoid treating AI output as authoritative policy; prompt/data redaction matters. | User intent compiles to a valid rule with generated tests and human-approved artifact diff. |
+| Policy graph and conflict workbench | Complex policies need visible ordering, parallel-safe groups, and conflict review. | Phase graph, rule cards, effect sets, arbitration badges, and conflict diagnostics. | UI can become too abstract unless grounded in examples and receipts. | Users can explain why a rule runs in parallel, ordered, or rejected before activation. |
+| Starlark AST and trace workbench | Code-first policy might be viable if behavior can be visualized through AST projection and simulation traces. | Small Starlark policy editor, parsed branch/call graph, source-span highlights, scenario trace overlay, and opaque-branch warnings. | Static AST can imply more understanding than exists; runtime traces must be authoritative. | Users can identify which code branch/action caused a scenario difference without reading the full policy. |
+| Structured-vs-code policy comparison | The primary authoring model is still an open product decision. | Build the same TTSR, cache-count, and model-switch policies in structured primitives and Starlark-first UIs against the same scenarios. | Parallel spikes can split focus unless they share scenarios and success criteria. | One approach clearly improves prediction, review, debugging, or trust for technical policy authors. |
 | Tool-loop detector | Retry loops are expensive and diagnosable from session facts. | Session rolling counter keyed by tool/args/result hashes. | Needs agent/tool metadata standardization. | Fewer repeated equivalent calls in generated traces. |
 | Async alert sinks | Makes policy value visible before full approval workflow exists. | Receipt event plus webhook/Telegram/Slack sink adapter. | Sink failure/backpressure semantics. | Policy trip reliably creates auditable delivery record. |
 | Approval gate | Valuable for irreversible operations, but not just a notification. | Pending request state, approve/edit/reject, timeout. | Requires durable state and client UX contract. | Resumable approval tests pass without duplicate side effects. |
@@ -68,6 +72,8 @@ Each example needs:
 - a generated/property variant
 - a receipt fixture
 - a UI state that shows the trigger, action, latency, and release status
+- an assistant prompt fixture that can regenerate or explain the rule draft
+- a policy graph summary showing phase, effect set, and arbitration behavior
 
 ## What Not To Overbuild Yet
 
@@ -79,3 +85,6 @@ Each example needs:
   persistence/resume semantics are real.
 - Provider-specific prompt management parity: record prompt transforms and
   variants first; broader A/B analytics can wait until receipts are richer.
+- AI-authored opaque policy: the assistant may draft and review artifacts, but
+  the runtime policy must remain compiled, deterministic, inspectable, and
+  simulator-verifiable.

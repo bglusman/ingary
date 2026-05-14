@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestMemoryReceiptStoreListsNewestFirstAndFilters(t *testing.T) {
 	store := NewMemoryReceiptStore()
@@ -100,6 +105,78 @@ func TestMemoryReceiptStoreHealth(t *testing.T) {
 	}
 	if capabilities["durable"] != false {
 		t.Fatalf("durable capability = %v, want false", capabilities["durable"])
+	}
+}
+
+func TestOpenAICompatibleProviderUsesCredentialEnvAndUpstreamModel(t *testing.T) {
+	t.Setenv("INGARY_TEST_PROVIDER_KEY", "test-secret")
+	var sawAuthorization string
+	var sawModel string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("request path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		sawAuthorization = r.Header.Get("Authorization")
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		sawModel, _ = body["model"].(string)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]string{"content": "provider content"},
+			}},
+		})
+	}))
+	defer server.Close()
+
+	content, err := completeWithOpenAICompatible(RouteTarget{
+		Model:           "openai/gpt-test",
+		ContextWindow:   128000,
+		ProviderKind:    "openai-compatible",
+		ProviderBaseURL: server.URL + "/v1",
+		CredentialEnv:   "INGARY_TEST_PROVIDER_KEY",
+	}, ChatCompletionRequest{
+		Model:    "coding-balanced",
+		Messages: []ChatMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("complete with provider: %v", err)
+	}
+	if content != "provider content" {
+		t.Fatalf("content = %q, want provider content", content)
+	}
+	if sawAuthorization != "Bearer test-secret" {
+		t.Fatalf("authorization header = %q, want bearer token", sawAuthorization)
+	}
+	if sawModel != "gpt-test" {
+		t.Fatalf("provider model = %q, want upstream model suffix", sawModel)
+	}
+}
+
+func TestProviderMetadataReportsCredentialSourceWithoutValue(t *testing.T) {
+	providers := providersForConfig(TestConfig{
+		SyntheticModel: syntheticModel,
+		Version:        modelVersion,
+		Targets: []RouteTarget{{
+			Model:           "openai/gpt-test",
+			ContextWindow:   128000,
+			ProviderKind:    "openai-compatible",
+			ProviderBaseURL: "https://example.com/v1",
+			CredentialEnv:   "INGARY_TEST_PROVIDER_KEY",
+		}},
+	})
+	if len(providers) != 1 {
+		t.Fatalf("provider count = %d, want 1", len(providers))
+	}
+	if providers[0]["credential_source"] != "env" {
+		t.Fatalf("credential_source = %v, want env", providers[0]["credential_source"])
+	}
+	if _, ok := providers[0]["credential_env"]; ok {
+		t.Fatal("provider metadata must not expose credential env names")
+	}
+	if _, ok := providers[0]["credential"]; ok {
+		t.Fatal("provider metadata must not expose credential values")
 	}
 }
 

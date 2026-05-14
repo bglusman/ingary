@@ -27,8 +27,167 @@ import type {
   SyntheticModelSummary,
 } from "./types";
 
-const navItems = ["Catalog", "Routes", "Simulator", "Receipts", "Providers", "Storage"] as const;
+const navItems = ["Catalog", "Routes", "Governance", "Simulator", "Receipts", "Providers", "Storage"] as const;
 type View = (typeof navItems)[number];
+
+type GovernanceRuleCard = {
+  id: string;
+  phase: string;
+  match: string;
+  action: string;
+  arbitration: "parallel-safe" | "ordered" | "hard-conflict";
+  priority: number;
+  effects: string[];
+  summary: string;
+};
+
+type GovernancePhase = {
+  id: string;
+  title: string;
+  description: string;
+  rules: GovernanceRuleCard[];
+};
+
+type TimelineChunk = {
+  id: string;
+  label: string;
+  text: string;
+  status: "released" | "held" | "matched" | "aborted" | "retry";
+};
+
+const assistantModels = ["Local backend model", "Ollama review model", "Managed reviewer with explicit permission"];
+
+const governancePhases: GovernancePhase[] = [
+  {
+    id: "request",
+    title: "Request",
+    description: "Normalize intent, caller scope, and cache visibility before routing.",
+    rules: [
+      {
+        id: "cache-context-window",
+        phase: "request",
+        match: "caller.session_id has recent retry failures >= 2",
+        action: "annotate request risk",
+        arbitration: "parallel-safe",
+        priority: 20,
+        effects: ["reads policy_cache.session", "writes request.annotations"],
+        summary: "Reads bounded recent cache data and adds a risk annotation without changing the prompt.",
+      },
+    ],
+  },
+  {
+    id: "route",
+    title: "Route",
+    description: "Choose providers after request annotations and hard route gates are known.",
+    rules: [
+      {
+        id: "cloud-escalation-gate",
+        phase: "route",
+        match: "request.annotations contains private-data-risk",
+        action: "require local route",
+        arbitration: "ordered",
+        priority: 40,
+        effects: ["reads request.annotations", "writes route.allowed_targets"],
+        summary: "Forces local-only routing when upstream request analysis marks a private-data risk.",
+      },
+    ],
+  },
+  {
+    id: "stream",
+    title: "Stream",
+    description: "Watch provider deltas with bounded horizons before content is released.",
+    rules: [
+      {
+        id: "no-old-client",
+        phase: "response.streaming",
+        match: 'regex "OldClient\\(" within 4096 bytes',
+        action: "abort, inject reminder, retry once",
+        arbitration: "ordered",
+        priority: 50,
+        effects: ["reads stream.window", "writes attempt.retry", "writes request.system_reminder"],
+        summary: "TTSR rule holds a bounded stream window, aborts before the bad span is released, then retries with a reminder.",
+      },
+      {
+        id: "secret-shape-block",
+        phase: "response.streaming",
+        match: "known token-shaped text in stream window",
+        action: "block final",
+        arbitration: "hard-conflict",
+        priority: 90,
+        effects: ["reads stream.window", "writes final.status"],
+        summary: "Blocks final output if a high-confidence secret-shaped span appears in the unreleased stream.",
+      },
+    ],
+  },
+  {
+    id: "final",
+    title: "Final",
+    description: "Validate the final response, persist receipts, and emit operator signals.",
+    rules: [
+      {
+        id: "receipt-policy-trace",
+        phase: "final",
+        match: "any policy action occurred",
+        action: "persist receipt events",
+        arbitration: "parallel-safe",
+        priority: 10,
+        effects: ["reads policy.events", "writes receipt.events"],
+        summary: "Adds deterministic policy events to the receipt without changing the model answer.",
+      },
+    ],
+  },
+];
+
+const timelineChunks: TimelineChunk[] = [
+  { id: "chunk-1", label: "chunk 1", text: "Use the new adapter and", status: "released" },
+  { id: "chunk-2", label: "chunk 2", text: " avoid introducing ", status: "held" },
+  { id: "chunk-3", label: "chunk 3", text: "OldClient(", status: "matched" },
+  { id: "chunk-4", label: "abort", text: "provider stream closed before release", status: "aborted" },
+  { id: "chunk-5", label: "retry", text: "system reminder injected for second attempt", status: "retry" },
+];
+
+const generatedChecks = [
+  "Trigger split across stream chunks",
+  "Trigger at 4096-byte horizon boundary",
+  "Near-miss text remains releasable",
+  "Retry violation blocks final output",
+  "Receipt includes abort and retry events",
+];
+
+const receiptPreview = {
+  receipt_id: "simulated-policy-receipt",
+  synthetic_model: "coding-balanced",
+  policy_version: "draft.ttsr.001",
+  stream: {
+    rule_matched: "no-old-client",
+    released_to_consumer: false,
+    abort_offset: 42,
+    retry_attempted: true,
+  },
+  events: [
+    { type: "stream.window_held", rule_id: "no-old-client", horizon_bytes: 4096 },
+    { type: "stream.rule_matched", rule_id: "no-old-client", match_kind: "regex" },
+    { type: "attempt.aborted", reason: "tts_rule_matched" },
+    { type: "attempt.retry_requested", reminder_id: "no-old-client.reminder" },
+  ],
+};
+
+const governanceDslPreview = `kind: ingary.governance.policy
+version: v1
+id: coding-balanced-governance-draft
+rules:
+  - id: no-old-client
+    phase: response.streaming
+    match:
+      regex: "OldClient\\\\("
+    mode:
+      type: buffered_horizon
+      bytes: 4096
+    action:
+      type: retry_with_reminder
+      max_retries: 1
+      on_retry_violation: block_final
+    priority: 50`;
 
 function App() {
   const [view, setView] = useState<View>("Catalog");
@@ -126,6 +285,7 @@ function App() {
         {view === "Routes" && (
           <Routes fullModels={fullModels} providers={providers} selectedModelId={selectedModelId} setSelectedModelId={setSelectedModelId} />
         )}
+        {view === "Governance" && <GovernanceWorkbench />}
         {view === "Simulator" && <Simulator models={fullModels} onStatus={() => setApiStatus(getApiStatus())} />}
         {view === "Receipts" && (
           <Receipts
@@ -361,6 +521,206 @@ function Simulator({ models, onStatus }: { models: SyntheticModel[]; onStatus: (
       <div className="panel">
         <h2>Simulation receipt</h2>
         {result ? <ReceiptDetail receipt={result.receipt} /> : <Empty message="Run a simulation to inspect route decisions." />}
+      </div>
+    </section>
+  );
+}
+
+function GovernanceWorkbench() {
+  const [intent, setIntent] = useState(
+    "When streamed code mentions OldClient(, stop it before users see it, retry once with a precise reminder, then block if the retry still violates.",
+  );
+  const [assistantModel, setAssistantModel] = useState(assistantModels[0]);
+  const [assistantAllowed, setAssistantAllowed] = useState(false);
+  const [selectedRuleId, setSelectedRuleId] = useState("no-old-client");
+  const selectedRule =
+    governancePhases.flatMap((phase) => phase.rules).find((rule) => rule.id === selectedRuleId) ?? governancePhases[2].rules[0];
+
+  return (
+    <section className="governanceLayout">
+      <div className="panel governanceIntent">
+        <div className="panelHeader compact">
+          <div>
+            <h2>Policy authoring</h2>
+            <p>Draft rules from plain-language intent, then review the deterministic artifact before activation.</p>
+          </div>
+          <Badge value="local mock" />
+        </div>
+        <label>
+          Intent
+          <textarea value={intent} onChange={(event) => setIntent(event.target.value)} rows={5} />
+        </label>
+        <div className="assistantBox">
+          <div className="assistantControls">
+            <label>
+              Assistant model
+              <select value={assistantModel} onChange={(event) => setAssistantModel(event.target.value)}>
+                {assistantModels.map((model) => (
+                  <option value={model} key={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="check">
+              <input type="checkbox" checked={assistantAllowed} onChange={(event) => setAssistantAllowed(event.target.checked)} />
+              Allow this draft to be sent to the selected model
+            </label>
+          </div>
+          <div className="assistantDraft">
+            <Badge value={assistantAllowed ? "permission granted" : "permission required"} />
+            <strong>Assistant draft review</strong>
+            <p>
+              Proposed TTSR rule: watch an unreleased 4096-byte stream horizon for <code>OldClient(</code>, abort before release, retry once with a
+              system reminder, then block final output on repeat violation.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panelHeader compact">
+          <div>
+            <h2>Governance pipeline</h2>
+            <p>Detector rules can run together; mutating actions are resolved by the arbiter.</p>
+          </div>
+          <Badge value="draft policy" />
+        </div>
+        <div className="phaseGraph">
+          {governancePhases.map((phase) => (
+            <article className="phaseColumn" key={phase.id}>
+              <div className="phaseHeader">
+                <strong>{phase.title}</strong>
+                <span>{phase.description}</span>
+              </div>
+              <div className="ruleStack">
+                {phase.rules.map((rule) => (
+                  <button className={selectedRule.id === rule.id ? "ruleCard selected" : "ruleCard"} key={rule.id} onClick={() => setSelectedRuleId(rule.id)}>
+                    <div>
+                      <strong>{rule.id}</strong>
+                      <Badge value={rule.arbitration} />
+                    </div>
+                    <span>{rule.action}</span>
+                    <small>priority {rule.priority}</small>
+                  </button>
+                ))}
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <section className="split governanceSplit">
+        <div className="panel">
+          <div className="panelHeader compact">
+            <div>
+              <h2>Selected rule</h2>
+              <p>{selectedRule.summary}</p>
+            </div>
+            <Badge value={selectedRule.phase} />
+          </div>
+          <div className="kv">
+            <span>Match</span>
+            <strong>{selectedRule.match}</strong>
+            <span>Action</span>
+            <strong>{selectedRule.action}</strong>
+            <span>Arbitration</span>
+            <strong>{selectedRule.arbitration}</strong>
+            <span>Priority</span>
+            <strong>{selectedRule.priority}</strong>
+          </div>
+          <h3>Effects</h3>
+          <div className="chipRow">
+            {selectedRule.effects.map((effect) => (
+              <span className="chip" key={effect}>
+                {effect}
+              </span>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panelHeader compact">
+            <div>
+              <h2>Conflict review</h2>
+              <p>Static labels show which rules need ordering before they can mutate runtime state.</p>
+            </div>
+          </div>
+          <div className="conflictList">
+            <div>
+              <Badge value="parallel-safe" />
+              <span>Cache annotation and receipt trace rules only write independent metadata.</span>
+            </div>
+            <div>
+              <Badge value="ordered" />
+              <span>TTSR retry and route gates mutate request or route state and use explicit priority.</span>
+            </div>
+            <div>
+              <Badge value="hard-conflict" />
+              <span>Secret blocking overrides retry actions when both match the same unreleased stream window.</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="split governanceSplit">
+        <div className="panel">
+          <div className="panelHeader compact">
+            <div>
+              <h2>Stream simulation</h2>
+              <p>Mock timeline for held, released, matched, aborted, and retried stream chunks.</p>
+            </div>
+            <Badge value="TTSR" />
+          </div>
+          <div className="timeline">
+            {timelineChunks.map((chunk) => (
+              <div className={`timelineChunk ${chunk.status}`} key={chunk.id}>
+                <span>{chunk.label}</span>
+                <strong>{chunk.text}</strong>
+                <Badge value={chunk.status} />
+              </div>
+            ))}
+          </div>
+          <h3>Generated checks</h3>
+          <div className="checkGrid">
+            {generatedChecks.map((check) => (
+              <div key={check}>
+                <Badge value="planned" />
+                <span>{check}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panelHeader compact">
+            <div>
+              <h2>Counterexample panel</h2>
+              <p>Static placeholder for property failures and pinned regression fixtures.</p>
+            </div>
+            <Badge value="not wired" />
+          </div>
+          <div className="counterexample">
+            <strong>Boundary case to test next</strong>
+            <span>
+              Regex match begins 3 bytes before the release horizon and completes in the next chunk. Expected: keep the prefix held until the detector can
+              decide whether to abort.
+            </span>
+          </div>
+          <h3>Receipt preview</h3>
+          <pre>{JSON.stringify(receiptPreview, null, 2)}</pre>
+        </div>
+      </section>
+
+      <div className="panel">
+        <div className="panelHeader compact">
+          <div>
+            <h2>Review artifact</h2>
+            <p>Advanced editor surface for the compiled deterministic DSL, not the primary user workflow.</p>
+          </div>
+          <Badge value="YAML draft" />
+        </div>
+        <pre>{governanceDslPreview}</pre>
       </div>
     </section>
   );

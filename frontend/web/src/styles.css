@@ -474,6 +474,189 @@ pre {
   gap: 18px;
 }
 
+.governanceLayout {
+  display: grid;
+  gap: 18px;
+}
+
+.governanceIntent {
+  display: grid;
+  gap: 14px;
+}
+
+.assistantBox {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  gap: 12px;
+}
+
+.assistantControls,
+.assistantDraft {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.assistantDraft strong {
+  font-size: 14px;
+}
+
+.assistantDraft p {
+  margin-bottom: 0;
+}
+
+.phaseGraph {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.phaseColumn {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  min-width: 0;
+}
+
+.phaseHeader {
+  display: grid;
+  gap: 5px;
+  min-height: 98px;
+  padding: 12px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  background: #f3f6f8;
+}
+
+.phaseHeader span {
+  color: #5e6b76;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ruleStack {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
+.ruleCard {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  min-height: 118px;
+  padding: 12px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  text-align: left;
+  background: #fbfcfd;
+}
+
+.ruleCard:hover,
+.ruleCard.selected {
+  border-color: #6f879c;
+  background: #eef3f6;
+}
+
+.ruleCard div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ruleCard span,
+.ruleCard small {
+  color: #5e6b76;
+}
+
+.governanceSplit {
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.82fr);
+}
+
+.conflictList {
+  display: grid;
+  gap: 9px;
+}
+
+.conflictList div,
+.checkGrid div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.conflictList span,
+.checkGrid span,
+.counterexample span {
+  color: #5e6b76;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.timeline {
+  display: grid;
+  gap: 8px;
+}
+
+.timelineChunk {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) max-content;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #d5dde4;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.timelineChunk > span {
+  color: #66727c;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.timelineChunk.held {
+  border-color: #d9bd72;
+  background: #fffaf0;
+}
+
+.timelineChunk.matched,
+.timelineChunk.aborted {
+  border-color: #df9a9a;
+  background: #fff5f5;
+}
+
+.timelineChunk.retry {
+  border-color: #94c7b5;
+  background: #f0faf6;
+}
+
+.checkGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 8px;
+}
+
+.counterexample {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid #d9bd72;
+  border-radius: 8px;
+  background: #fffaf0;
+}
+
 .metricGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -598,7 +781,13 @@ pre {
   }
 
   .split,
-  .receiptsSplit {
+  .receiptsSplit,
+  .governanceSplit {
+    grid-template-columns: 1fr;
+  }
+
+  .phaseGraph,
+  .assistantBox {
     grid-template-columns: 1fr;
   }
 }
@@ -621,5 +810,9 @@ pre {
 
   .endpoint {
     white-space: normal;
+  }
+
+  .timelineChunk {
+    grid-template-columns: 1fr;
   }
 }

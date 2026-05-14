@@ -45,10 +45,29 @@ defmodule ElixirIngary.Router do
          {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
-      {request, policy} = apply_request_policies(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
+      {request, policy} = apply_request_policies(request, caller)
       decision = route_decision(request)
-      receipt = build_receipt("completed", model, caller, request, decision, true, policy)
+
+      provider =
+        if Map.get(request, "stream") == true do
+          %{
+            content: nil,
+            status: "completed",
+            latency_ms: 0,
+            error: nil,
+            called_provider: false,
+            mock: true
+          }
+        else
+          ElixirIngary.complete_selected_model(decision.selected_model, request)
+        end
+
+      receipt =
+        provider.status
+        |> build_receipt(model, caller, request, decision, provider.called_provider, policy)
+        |> apply_provider_outcome(provider)
+
       ElixirIngary.ReceiptStore.insert(receipt)
 
       conn =
@@ -59,7 +78,7 @@ defmodule ElixirIngary.Router do
       if Map.get(request, "stream") == true do
         stream_chat(conn, request, decision)
       else
-        json(conn, 200, chat_response(request, receipt, decision))
+        json(conn, 200, chat_response(request, receipt, decision, provider.content))
       end
     else
       {:error, message} -> error(conn, 400, message, "invalid_request", "bad_request")
@@ -73,8 +92,8 @@ defmodule ElixirIngary.Router do
          {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
-      {request, policy} = apply_request_policies(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
+      {request, policy} = apply_request_policies(request, caller)
       decision = route_decision(request)
       receipt = build_receipt("simulated", model, caller, request, decision, false, policy)
       ElixirIngary.ReceiptStore.insert(receipt)
@@ -122,6 +141,26 @@ defmodule ElixirIngary.Router do
 
   get "/admin/storage" do
     json(conn, 200, ElixirIngary.ReceiptStore.health())
+  end
+
+  post "/v1/policy-cache/events" do
+    with {:ok, event} <- ElixirIngary.PolicyCache.add(conn.body_params) do
+      json(conn, 201, %{"event" => event})
+    else
+      {:error, message} ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_cache_event")
+    end
+  end
+
+  get "/v1/policy-cache/recent" do
+    filter = %{
+      "kind" => blank_to_nil(Map.get(conn.query_params, "kind")),
+      "key" => blank_to_nil(Map.get(conn.query_params, "key")),
+      "scope" => cache_scope_from_query(conn.query_params)
+    }
+
+    limit = parse_limit(Map.get(conn.query_params, "limit"))
+    json(conn, 200, %{"data" => ElixirIngary.PolicyCache.recent(filter, limit)})
   end
 
   get "/admin/providers" do
@@ -180,7 +219,7 @@ defmodule ElixirIngary.Router do
     Map.put(request, "messages", messages)
   end
 
-  defp apply_request_policies(request) do
+  defp apply_request_policies(request, caller) do
     text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
 
     Enum.reduce(
@@ -189,76 +228,81 @@ defmodule ElixirIngary.Router do
       fn rule, {request, policy} ->
         kind = Map.get(rule, "kind", "")
 
-        if kind in ["request_guard", "request_transform", "receipt_annotation"] &&
-             policy_match?(text, Map.get(rule, "contains")) do
-          action = Map.get(rule, "action", "annotate")
-          rule_id = Map.get(rule, "id", "policy")
+        cond do
+          kind == "history_threshold" ->
+            apply_history_threshold_rule(rule, caller, request, policy)
 
-          message =
-            rule |> Map.get("message", "request policy matched") |> blank_to_nil() ||
-              "request policy matched"
+          kind in ["request_guard", "request_transform", "receipt_annotation"] &&
+              policy_match?(text, Map.get(rule, "contains")) ->
+            action = Map.get(rule, "action", "annotate")
+            rule_id = Map.get(rule, "id", "policy")
 
-          severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
+            message =
+              rule |> Map.get("message", "request policy matched") |> blank_to_nil() ||
+                "request policy matched"
 
-          action_record = %{
-            "rule_id" => rule_id,
-            "kind" => kind,
-            "action" => action,
-            "matched" => true,
-            "message" => message,
-            "severity" => severity
-          }
+            severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
 
-          case action do
-            "escalate" ->
-              event = %{
-                "type" => "policy.alert",
-                "rule_id" => rule_id,
-                "message" => message,
-                "severity" => severity
-              }
+            action_record = %{
+              "rule_id" => rule_id,
+              "kind" => kind,
+              "action" => action,
+              "matched" => true,
+              "message" => message,
+              "severity" => severity
+            }
 
-              {request,
-               policy
-               |> Map.update!("actions", &[action_record | &1])
-               |> Map.update!("events", &[event | &1])
-               |> Map.update!("alert_count", &(&1 + 1))}
+            case action do
+              "escalate" ->
+                event = %{
+                  "type" => "policy.alert",
+                  "rule_id" => rule_id,
+                  "message" => message,
+                  "severity" => severity
+                }
 
-            action when action in ["inject_reminder_and_retry", "transform"] ->
-              reminder = rule |> Map.get("reminder", message) |> blank_to_nil() || message
+                {request,
+                 policy
+                 |> Map.update!("actions", &[action_record | &1])
+                 |> Map.update!("events", &[event | &1])
+                 |> Map.update!("alert_count", &(&1 + 1))}
 
-              message_record = %{
-                "role" => "system",
-                "name" => "ingary_policy_reminder",
-                "content" => reminder
-              }
+              action when action in ["inject_reminder_and_retry", "transform"] ->
+                reminder = rule |> Map.get("reminder", message) |> blank_to_nil() || message
 
-              request =
-                Map.update(request, "messages", [message_record], fn messages ->
-                  messages ++ [message_record]
-                end)
+                message_record = %{
+                  "role" => "system",
+                  "name" => "ingary_policy_reminder",
+                  "content" => reminder
+                }
 
-              action_record = Map.put(action_record, "reminder_injected", true)
-              {request, Map.update!(policy, "actions", &[action_record | &1])}
+                request =
+                  Map.update(request, "messages", [message_record], fn messages ->
+                    messages ++ [message_record]
+                  end)
 
-            "annotate" ->
-              event = %{
-                "type" => "policy.annotated",
-                "rule_id" => rule_id,
-                "message" => message,
-                "severity" => severity
-              }
+                action_record = Map.put(action_record, "reminder_injected", true)
+                {request, Map.update!(policy, "actions", &[action_record | &1])}
 
-              {request,
-               policy
-               |> Map.update!("actions", &[action_record | &1])
-               |> Map.update!("events", &[event | &1])}
+              "annotate" ->
+                event = %{
+                  "type" => "policy.annotated",
+                  "rule_id" => rule_id,
+                  "message" => message,
+                  "severity" => severity
+                }
 
-            _ ->
-              {request, Map.update!(policy, "actions", &[action_record | &1])}
-          end
-        else
-          {request, policy}
+                {request,
+                 policy
+                 |> Map.update!("actions", &[action_record | &1])
+                 |> Map.update!("events", &[event | &1])}
+
+              _ ->
+                {request, Map.update!(policy, "actions", &[action_record | &1])}
+            end
+
+          true ->
+            {request, policy}
         end
       end
     )
@@ -273,6 +317,65 @@ defmodule ElixirIngary.Router do
   end
 
   defp empty_policy, do: %{"actions" => [], "events" => [], "alert_count" => 0}
+
+  defp apply_history_threshold_rule(rule, caller, request, policy) do
+    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+
+    filter = %{
+      "kind" => blank_to_nil(Map.get(rule, "cache_kind")),
+      "key" => blank_to_nil(Map.get(rule, "cache_key")),
+      "scope" => cache_scope_from_caller(caller, Map.get(rule, "cache_scope", ""))
+    }
+
+    count = ElixirIngary.PolicyCache.count(filter)
+
+    if count < threshold do
+      {request, policy}
+    else
+      action = Map.get(rule, "action", "annotate")
+      rule_id = Map.get(rule, "id", "policy")
+
+      message =
+        rule |> Map.get("message", "policy cache threshold matched") |> blank_to_nil() ||
+          "policy cache threshold matched"
+
+      severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
+
+      action_record = %{
+        "rule_id" => rule_id,
+        "kind" => "history_threshold",
+        "action" => action,
+        "matched" => true,
+        "message" => message,
+        "severity" => severity,
+        "cache_kind" => Map.get(rule, "cache_kind", ""),
+        "cache_key" => Map.get(rule, "cache_key", ""),
+        "cache_scope" => Map.get(rule, "cache_scope", ""),
+        "history_count" => count,
+        "threshold" => threshold
+      }
+
+      policy = Map.update!(policy, "actions", &[action_record | &1])
+
+      if action == "escalate" do
+        event = %{
+          "type" => "policy.alert",
+          "rule_id" => rule_id,
+          "message" => message,
+          "severity" => severity,
+          "history_count" => count,
+          "threshold" => threshold
+        }
+
+        {request,
+         policy
+         |> Map.update!("events", &[event | &1])
+         |> Map.update!("alert_count", &(&1 + 1))}
+      else
+        {request, policy}
+      end
+    end
+  end
 
   defp policy_match?(_text, value) when value in [nil, ""], do: false
 
@@ -378,6 +481,46 @@ defmodule ElixirIngary.Router do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
 
+  defp cache_scope_from_query(params) do
+    [
+      "tenant_id",
+      "application_id",
+      "consuming_agent_id",
+      "consuming_user_id",
+      "session_id",
+      "run_id"
+    ]
+    |> Enum.reduce(%{}, fn key, acc ->
+      case blank_to_nil(Map.get(params, key)) do
+        nil -> acc
+        value -> Map.put(acc, key, value)
+      end
+    end)
+  end
+
+  defp cache_scope_from_caller(_caller, scope_name) when scope_name in [nil, ""], do: %{}
+
+  defp cache_scope_from_caller(caller, scope_name) do
+    scope_name = metadata_string(scope_name)
+
+    case get_in(caller, [scope_name, "value"]) do
+      nil -> %{}
+      "" -> %{}
+      value -> %{scope_name => value}
+    end
+  end
+
+  defp integer_value(value) when is_integer(value), do: value
+
+  defp integer_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _ -> nil
+    end
+  end
+
+  defp integer_value(_), do: nil
+
   defp build_receipt(status, model, caller, request, decision, called_provider, policy) do
     receipt_id = "rcpt_" <> random_hex(8)
     created_at = System.system_time(:second)
@@ -435,8 +578,32 @@ defmodule ElixirIngary.Router do
     |> Map.new()
   end
 
-  defp chat_response(request, receipt, decision) do
+  defp apply_provider_outcome(receipt, provider) do
+    receipt
+    |> update_in(["attempts", Access.at(0)], fn attempt ->
+      attempt
+      |> Map.put("status", provider.status)
+      |> Map.put("mock", provider.mock)
+      |> Map.put("called_provider", provider.called_provider)
+      |> Map.put("latency_ms", provider.latency_ms)
+      |> put_if_present("provider_error", provider.error)
+    end)
+    |> update_in(["final"], fn final ->
+      final
+      |> Map.put("status", provider.status)
+      |> put_if_present("provider_error", provider.error)
+    end)
+  end
+
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
+
+  defp chat_response(request, receipt, decision, provider_content) do
     completion_tokens = 18
+
+    content =
+      provider_content ||
+        "Mock Ingary response routed to #{decision.selected_model}. Estimated prompt tokens: #{decision.estimated_prompt_tokens}."
 
     %{
       "id" => "chatcmpl_" <> receipt["receipt_id"],
@@ -448,8 +615,7 @@ defmodule ElixirIngary.Router do
           "index" => 0,
           "message" => %{
             "role" => "assistant",
-            "content" =>
-              "Mock Ingary response routed to #{decision.selected_model}. Estimated prompt tokens: #{decision.estimated_prompt_tokens}."
+            "content" => content
           },
           "finish_reason" => "stop"
         }

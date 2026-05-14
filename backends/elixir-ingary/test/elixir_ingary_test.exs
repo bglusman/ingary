@@ -1,5 +1,6 @@
 defmodule ElixirIngaryTest do
   use ExUnit.Case, async: false
+  use ExUnitProperties
   import Plug.Conn
   import Plug.Test
 
@@ -8,7 +9,113 @@ defmodule ElixirIngaryTest do
   setup do
     ElixirIngary.reset_config()
     ElixirIngary.ReceiptStore.clear()
+    ElixirIngary.PolicyCache.reset()
     :ok
+  end
+
+  property "policy cache eviction keeps deterministic youngest entries" do
+    check all(
+            capacity <- integer(1..20),
+            timestamps <- list_of(integer(0..50), max_length: 80)
+          ) do
+      ElixirIngary.PolicyCache.configure(%{"max_entries" => capacity, "recent_limit" => capacity})
+
+      inserted =
+        Enum.map(timestamps, fn timestamp ->
+          {:ok, event} =
+            ElixirIngary.PolicyCache.add(%{
+              "kind" => "tool_call",
+              "key" => "shell:ls",
+              "scope" => %{"session_id" => "session-a"},
+              "created_at_unix_ms" => timestamp
+            })
+
+          {event["sequence"], timestamp}
+        end)
+
+      expected =
+        inserted
+        |> Enum.sort_by(fn {sequence, timestamp} -> {timestamp, sequence} end)
+        |> Enum.take(-capacity)
+        |> Enum.map(fn {sequence, _timestamp} -> sequence end)
+        |> MapSet.new()
+
+      recent =
+        ElixirIngary.PolicyCache.recent(
+          %{
+            "kind" => "tool_call",
+            "key" => "shell:ls",
+            "scope" => %{"session_id" => "session-a"}
+          },
+          capacity
+        )
+
+      assert length(recent) == MapSet.size(expected)
+      assert Enum.all?(recent, &MapSet.member?(expected, &1["sequence"]))
+    end
+  end
+
+  test "history threshold policy reads only configured cache scope" do
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 8, "recent_limit" => 8})
+      |> Map.put("governance", [
+        %{
+          "id" => "repeat-tool",
+          "kind" => "history_threshold",
+          "action" => "escalate",
+          "cache_kind" => "tool_call",
+          "cache_key" => "shell:ls",
+          "cache_scope" => "session_id",
+          "threshold" => 2,
+          "severity" => "warning"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    assert call(:post, "/v1/policy-cache/events", %{
+             kind: "tool_call",
+             key: "shell:ls",
+             scope: %{session_id: "session-a"}
+           }).status == 201
+
+    assert call(:post, "/v1/policy-cache/events", %{
+             kind: "tool_call",
+             key: "shell:ls",
+             scope: %{session_id: "session-b"}
+           }).status == 201
+
+    miss =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
+        [{"x-ingary-session-id", "session-a"}]
+      )
+
+    assert miss.status == 200
+    assert get_in(Jason.decode!(miss.resp_body), ["receipt", "final", "alert_count"]) == 0
+
+    assert call(:post, "/v1/policy-cache/events", %{
+             kind: "tool_call",
+             key: "shell:ls",
+             scope: %{session_id: "session-a"}
+           }).status == 201
+
+    hit =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
+        [{"x-ingary-session-id", "session-a"}]
+      )
+
+    body = Jason.decode!(hit.resp_body)
+    assert get_in(body, ["receipt", "final", "alert_count"]) == 1
+
+    assert get_in(body, ["receipt", "decision", "policy_actions", Access.at(0), "history_count"]) ==
+             2
   end
 
   test "lists flat and prefixed public models" do
@@ -154,6 +261,31 @@ defmodule ElixirIngaryTest do
                "retention_jobs" => false
              }
            }
+  end
+
+  test "provider metadata reports credential source without secret reference names" do
+    System.put_env("INGARY_ALLOW_TEST_CREDENTIALS", "1")
+    on_exit(fn -> System.delete_env("INGARY_ALLOW_TEST_CREDENTIALS") end)
+
+    {:ok, _config} =
+      ElixirIngary.put_config(%{
+        "synthetic_model" => "coding-balanced",
+        "version" => "2026-05-13.mock",
+        "targets" => [
+          %{
+            "model" => "openai/gpt-test",
+            "context_window" => 128_000,
+            "provider_kind" => "openai-compatible",
+            "provider_base_url" => "https://example.com/v1",
+            "credential_env" => "INGARY_TEST_PROVIDER_KEY"
+          }
+        ]
+      })
+
+    assert [provider] = ElixirIngary.providers()
+    assert provider["credential_source"] == "env"
+    refute Map.has_key?(provider, "credential_env")
+    refute Map.has_key?(provider, "credential")
   end
 
   test "admin storage endpoint exposes receipt store health" do
