@@ -1,0 +1,36 @@
+{
+  "synthetic_model": "coding-balanced",
+  "version": "2026-05-14.example",
+  "targets": [
+    {
+      "model": "ollama/example-local-model",
+      "context_window": 32768,
+      "provider_kind": "ollama",
+      "provider_base_url": "http://127.0.0.1:11434"
+    },
+    {
+      "model": "openai/example-model",
+      "context_window": 128000,
+      "provider_kind": "openai-compatible",
+      "provider_base_url": "https://api.openai.com/v1",
+      "credential_fnox_key": "EXAMPLE_OPENAI_KEY"
+    },
+    {
+      "model": "groq/example-model",
+      "context_window": 128000,
+      "provider_kind": "openai-compatible",
+      "provider_base_url": "https://api.groq.com/openai/v1",
+      "credential_fnox_key": "EXAMPLE_GROQ_KEY"
+    },
+    {
+      "model": "kimi/example-model",
+      "context_window": 128000,
+      "provider_kind": "openai-compatible",
+      "provider_base_url": "https://api.kimi.com/coding/v1",
+      "provider_headers": {
+        "User-Agent": "kimi-cli/1.0"
+      },
+      "credential_fnox_key": "EXAMPLE_KIMI_KEY"
+    }
+  ]
+}

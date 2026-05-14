@@ -32,6 +32,12 @@ Policy language is less important than the policy ABI:
 - what actions it can return
 - how receipts explain the decision
 
+The user experience should be visual, conversational, and simulation-first. The
+deterministic policy artifact is the storage and review format, not the primary
+interface. Operators should be able to describe the behavior they want, let an
+AI-assisted authoring flow draft a rule, inspect the compiled policy graph, run
+generated simulations, and approve the exact artifact before activation.
+
 ## Initial Use-Case Matrix
 
 | Use case | Policy phase | Required data | Required state | Actions |
@@ -412,3 +418,165 @@ The first real policy engine should ship with:
 Starlark should initially target the same ABI and scopes. If a use case cannot
 be expressed with the ABI, that is a signal to adjust the ABI, not to give the
 policy language direct storage or network access.
+
+## Rule Composition And Arbitration
+
+Governance rules should not be one unordered bag of effects. Ingary should
+separate rule evaluation from action arbitration:
+
+1. **Detectors** inspect phase inputs and emit proposed actions. Literal,
+   regex, parser, route, metadata, counter, and cache checks can usually run in
+   parallel because they are pure reads.
+2. **Arbiters** combine proposed actions into a single deterministic phase
+   decision. Any action that mutates a request, route, stream, retry state, or
+   final output must pass through arbitration.
+
+Every rule should declare an effect set:
+
+```yaml
+id: no-deprecated-client
+phase: response.streaming
+match:
+  regex: "OldClient\\("
+mode:
+  type: buffered_horizon
+  holdback_bytes: 4096
+action:
+  type: retry_with_reminder
+  reminder: "Do not use OldClient. Use NewClient instead."
+  max_retries: 1
+once_per:
+  scope: session
+effects:
+  reads: [stream.window, session.triggered_rules]
+  writes: [attempt.retry, request.system_reminder]
+priority: 50
+```
+
+Validation should classify rule interactions before activation:
+
+- **parallel-safe**: detectors have no writes, or only write independent
+  annotations and alerts.
+- **ordered**: multiple rules may propose compatible but ordered effects, such
+  as two candidate retries. These require explicit priority or a named
+  arbitration strategy.
+- **conflicting**: actions make incompatible promises, such as one rule needing
+  pass-through streaming while another requires non-release guarantees for the
+  same span.
+- **ambiguous**: overlapping rewrites, competing reminders, or route overrides
+  that need user confirmation before they can run.
+
+The UI should surface those classes directly. If a policy can run detectors in
+parallel and arbitrate safely, it should say so. If a policy depends on order,
+priority, or conflict resolution, the user should see that before activation.
+
+## AI-Assisted Authoring
+
+Ingary should include a policy-authoring assistant that uses an operator-
+selected backing model to help draft, explain, review, and refine governance
+rules. This assistant is not the runtime policy engine. It proposes artifacts;
+the compiler, validator, simulator, and human review path remain authoritative.
+
+The assistant should support:
+
+- translating plain-language intent into a draft governance artifact
+- asking clarifying questions when intent is underspecified
+- explaining latency, release, retry, and conflict tradeoffs
+- generating adversarial examples and expected outcomes
+- reviewing diffs between draft and active policy versions
+- summarizing compiled behavior in plain language
+- proposing fixes when generated simulations find counterexamples
+
+Because the assistant may use the user's configured provider credentials, every
+assistant run should make model choice and data sharing explicit:
+
+- ask permission before sending policy text or examples to a provider
+- allow local models such as Ollama when configured
+- never send provider credentials, hidden config, or raw private receipts unless
+  the user explicitly includes them
+- record assistant provenance on drafts: model ID, prompt template version,
+  timestamp, and whether the user approved the result
+
+The storage artifact should be deterministic YAML or TOML that can be reviewed,
+diffed, signed, and activated. Advanced users can edit it directly, but normal
+users should work through the assistant, graph, simulator, and review UI.
+
+## Simulation And Generated Tests As UX
+
+Simulation should be a first-class policy authoring surface, not only a CI test.
+For each draft rule, Ingary should generate examples and counterexamples that
+make the policy's promise visible.
+
+For TTSR rules, generated cases should include:
+
+- trigger split across stream chunks
+- trigger at the holdback boundary
+- near-miss strings that must not trigger
+- multiple matching rules in the same stream
+- retry output that violates the same rule again
+- Unicode or multibyte boundary cases
+- pass-through or too-small-horizon configurations that cannot promise
+  non-release
+
+The UI should show generated checks as user-readable evidence:
+
+- which properties passed
+- which counterexample failed
+- the minimal stream/chunk sequence that demonstrates the failure
+- the exact receipt events that would be recorded
+- whether violating bytes reached the consumer
+
+Users should be able to pin a generated counterexample as a regression fixture.
+That creates a direct loop: describe policy, compile artifact, simulate, inspect
+counterexample, revise, and activate only when the behavior matches intent.
+
+## Code-First Policy Visualization
+
+Programmable policy does not automatically make simulation harder. It makes
+pre-execution explanation harder unless the host exposes a constrained policy
+API and enough trace data to connect source code to runtime behavior.
+
+Ingary should evaluate two authoring MVPs in parallel:
+
+1. **Structured primitives first**: policy authors compose built-in detectors,
+   counters, stream guards, route switches, and arbiters. The UI can visualize
+   the rule graph before simulation because the policy shape is explicit.
+2. **Starlark-first / code-first**: policy authors write small deterministic
+   policy functions against the same ABI. The UI visualizes syntax structure,
+   source spans, execution traces, scenario deltas, and opaque branches instead
+   of pretending it can statically understand arbitrary code perfectly.
+
+The Starlark-first UI should project code into a policy-shaped graph:
+
+- functions and entrypoints
+- branches and conditions
+- calls to the Ingary policy host API
+- cache reads, route mutations, stream actions, final-output actions
+- declared or inferred effects such as `reads_cache`, `switches_model`,
+  `retries_stream`, and `blocks_output`
+- unknown or opaque subtrees that cannot be safely classified
+
+Simulation then overlays execution evidence onto that projection:
+
+- which branches evaluated true or false
+- which cache counts, regex matches, and stream windows drove a decision
+- which source spans produced each action
+- which scenarios differ between two policy versions
+- which generated counterexamples are now pinned as regressions
+
+Implementation options should be chosen for the layer being tested:
+
+- `go.starlark.net/syntax` is a strong first parser for AST-to-policy-graph
+  prototyping because it exposes a Starlark parser, AST nodes, and walking API.
+- Rust `starlark` / `starlark_syntax` is the natural runtime-aligned parser if
+  Rust owns policy execution.
+- `tree-sitter-starlark` is useful for editor-grade concrete syntax,
+  highlighting, source spans, and incremental UI feedback.
+- Python `ast` can be a fast exploratory parser for a Starlark-like subset, but
+  it must reject unsupported Python nodes and must not become the activation
+  validator because Python accepts syntax and semantics Starlark should reject.
+
+The decisive comparison is not expressiveness. Programmable policy will always
+be more expressive. The product question is whether a technical policy author
+can predict, review, and debug behavior faster with structured primitives or
+with code plus AST/trace visualization.

@@ -13,6 +13,7 @@ defmodule ElixirIngary.Application do
     children =
       [
         ElixirIngary.ReceiptStore,
+        ElixirIngary.PolicyCache,
         http_child(host, port)
       ]
       |> Enum.reject(&is_nil/1)

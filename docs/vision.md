@@ -35,6 +35,48 @@ as shareable artifacts:
 The key distinction is that the public model name is not just an alias for one
 provider model. It is a governed contract.
 
+## Requirements Direction
+
+The first product audience is technical policy authors: people who can reason
+about model/provider behavior, receipts, rules, and rollout risk, but who should
+not need to be backend developers to author or review policy. Nontechnical
+authoring help remains valuable, but it should be delivered through guided
+assistant workflows, summaries, simulation, and visualization rather than by
+weakening the underlying governance model.
+
+Near-term product priority is correctness plus policy authoring quality. That
+means Ingary should optimize for:
+
+- deterministic enforcement semantics across request, route, stream, and final
+  output phases
+- authoring workflows that make policy behavior predictable before activation
+- simulation and generated counterexamples that reveal policy mistakes
+- receipts and traces that explain why a request took a specific route or
+  action
+- explicit comparison of backend semantics when Go, Rust, and Elixir prototypes
+  differ in meaningful ways
+
+The first coherent policy set should cover:
+
+- TTSR-style stream reactions and rewrites that can stop known-bad output before
+  it is released
+- recent-history count/comparison rules, including regex counts over recent
+  requests, responses, tool calls, or receipt events
+- dynamic model-switching and route-selection logic driven by policy state
+- conflict and arbitration rules for actions that cannot safely run in parallel
+
+Policy authoring should remain UI- and config-centered. Natural language,
+assistant review, visual graphs, simulation, and deterministic YAML/TOML/JSON
+artifacts are the primary workflow. Direct snippets are appropriate when they
+map closely to a rule or runtime hook, but arbitrary programmable policy should
+be evaluated as an advanced authoring mode, not assumed to be the default.
+
+The major open product question is the primary policy authoring model. Ingary
+should run comparable spikes for structured policy primitives and code-first
+Starlark policy. Both spikes must use the same realistic policy scenarios so
+the decision is based on authoring clarity, simulation quality, review safety,
+and debugging speed rather than raw expressiveness.
+
 ## Request Flow
 
 <div class="flow">
@@ -88,8 +130,10 @@ The first durable implementation should prioritize:
 1. a small, clear OpenAI-compatible gateway surface
 2. real receipt storage and queryability
 3. policy hooks for request, route, stream, and output phases
-4. a portable policy-engine contract, with explicit state scopes and Starlark as the first advanced option
-5. a UI that exposes model definitions, live behavior, receipts, and policy outcomes
+4. a portable policy-engine contract, with explicit state scopes and Starlark as
+   the first advanced option to test against structured primitives
+5. a UI that exposes model definitions, live behavior, receipts, policy
+   outcomes, simulations, and policy-shape explanations
 
 See [Use Cases](use-cases.html) for the first policy examples that should drive
 tests, docs, and UI workflows.

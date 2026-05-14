@@ -31,6 +31,7 @@ defmodule ElixirIngary do
       "stream_rules" => [%{"id" => "mock_noop", "pattern" => "", "action" => "pass"}],
       "prompt_transforms" => %{},
       "structured_output" => nil,
+      "policy_cache" => %{"max_entries" => 64, "recent_limit" => 20},
       "governance" => [
         %{"id" => "prompt_transforms", "kind" => "request_transform", "action" => "transform"}
       ]
@@ -43,6 +44,7 @@ defmodule ElixirIngary do
 
   def reset_config do
     :persistent_term.put({__MODULE__, :config}, default_config())
+    ElixirIngary.PolicyCache.configure(default_config()["policy_cache"])
   end
 
   def put_config(config) when is_map(config) do
@@ -50,6 +52,7 @@ defmodule ElixirIngary do
 
     with :ok <- validate_config(config) do
       :persistent_term.put({__MODULE__, :config}, config)
+      ElixirIngary.PolicyCache.configure(config["policy_cache"])
       {:ok, config}
     end
   end
@@ -197,17 +200,62 @@ defmodule ElixirIngary do
   def providers do
     current_config()
     |> Map.get("targets", [])
-    |> Enum.map(fn target -> target["model"] |> String.split("/", parts: 2) |> List.first() end)
-    |> Enum.uniq()
-    |> Enum.map(fn provider ->
+    |> Enum.reduce(%{}, fn target, acc ->
+      provider = target["model"] |> String.split("/", parts: 2) |> List.first()
+      Map.put_new(acc, provider, target)
+    end)
+    |> Enum.map(fn {provider, target} ->
+      {kind, base_url} = provider_kind_and_base_url(provider, target)
+
       %{
         "id" => provider,
-        "kind" => "mock",
-        "base_url" => "mock://#{provider}",
+        "kind" => kind,
+        "base_url" => base_url,
         "credential_owner" => "ingary",
+        "credential_source" => credential_source(target),
         "health" => "healthy"
       }
     end)
+  end
+
+  def complete_selected_model(selected_model, request) do
+    started = System.monotonic_time(:millisecond)
+
+    target =
+      current_config()
+      |> Map.get("targets", [])
+      |> Enum.find(fn target -> target["model"] == selected_model end)
+
+    case target do
+      nil ->
+        provider_outcome(nil, "completed", started, nil, false, true)
+
+      target ->
+        case provider_kind(target) do
+          "mock" ->
+            provider_outcome(nil, "completed", started, nil, false, true)
+
+          "ollama" ->
+            target
+            |> complete_with_ollama(request)
+            |> provider_outcome_from_result(started)
+
+          "openai-compatible" ->
+            target
+            |> complete_with_openai_compatible(request)
+            |> provider_outcome_from_result(started)
+
+          kind ->
+            provider_outcome(
+              nil,
+              "provider_error",
+              started,
+              "unsupported provider kind #{inspect(kind)}",
+              true,
+              false
+            )
+        end
+    end
   end
 
   defp normalize_config(config) do
@@ -229,15 +277,36 @@ defmodule ElixirIngary do
         |> Enum.map(fn target ->
           %{
             "model" => target |> Map.get("model", "") |> to_string() |> String.trim(),
-            "context_window" => integer_value(Map.get(target, "context_window"))
+            "context_window" => integer_value(Map.get(target, "context_window")),
+            "provider_kind" =>
+              target |> Map.get("provider_kind", "") |> to_string() |> String.trim(),
+            "provider_base_url" =>
+              target |> Map.get("provider_base_url", "") |> to_string() |> String.trim(),
+            "provider_headers" => normalize_headers(Map.get(target, "provider_headers", %{})),
+            "credential_env" =>
+              target |> Map.get("credential_env", "") |> to_string() |> String.trim(),
+            "credential_fnox_key" =>
+              target |> Map.get("credential_fnox_key", "") |> to_string() |> String.trim()
           }
+          |> Enum.reject(fn {_key, value} -> value == "" end)
+          |> Map.new()
         end),
       "stream_rules" => Map.get(config, "stream_rules", []),
       "prompt_transforms" => Map.get(config, "prompt_transforms", %{}),
       "structured_output" => Map.get(config, "structured_output"),
+      "policy_cache" => normalize_policy_cache(Map.get(config, "policy_cache", %{})),
       "governance" => Map.get(config, "governance", [])
     }
   end
+
+  defp normalize_policy_cache(config) when is_map(config) do
+    %{
+      "max_entries" => positive_integer(Map.get(config, "max_entries"), 64),
+      "recent_limit" => positive_integer(Map.get(config, "recent_limit"), 20)
+    }
+  end
+
+  defp normalize_policy_cache(_), do: %{"max_entries" => 64, "recent_limit" => 20}
 
   defp validate_config(%{"synthetic_model" => synthetic_model, "targets" => targets}) do
     cond do
@@ -267,6 +336,11 @@ defmodule ElixirIngary do
         MapSet.member?(seen, target["model"]) ->
           {:halt, {:error, "duplicate target #{target["model"]}"}}
 
+        credential_reference?(target) and System.get_env("INGARY_ALLOW_TEST_CREDENTIALS") != "1" ->
+          {:halt,
+           {:error,
+            "credential references in __test/config require INGARY_ALLOW_TEST_CREDENTIALS=1"}}
+
         true ->
           {:cont, MapSet.put(seen, target["model"])}
       end
@@ -279,6 +353,205 @@ defmodule ElixirIngary do
 
   defp node_id(model), do: String.replace(model, "/", ".")
 
+  defp credential_reference?(target) do
+    Map.get(target, "credential_env", "") != "" or
+      Map.get(target, "credential_fnox_key", "") != ""
+  end
+
+  defp provider_kind_and_base_url(provider, target) do
+    kind = provider_kind(target)
+    base_url = Map.get(target, "provider_base_url", "")
+
+    cond do
+      base_url != "" ->
+        {kind, base_url}
+
+      provider == "ollama" ->
+        {"ollama", System.get_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434")}
+
+      true ->
+        {kind, "mock://#{provider}"}
+    end
+  end
+
+  defp provider_kind(target) do
+    cond do
+      Map.get(target, "provider_kind", "") != "" -> target["provider_kind"]
+      String.starts_with?(target["model"], "ollama/") -> "ollama"
+      true -> "mock"
+    end
+  end
+
+  defp credential_source(target) do
+    cond do
+      Map.get(target, "credential_fnox_key", "") != "" -> "fnox"
+      Map.get(target, "credential_env", "") != "" -> "env"
+      true -> "none"
+    end
+  end
+
+  defp complete_with_ollama(target, request) do
+    model = provider_model(target)
+
+    base_url =
+      Map.get(target, "provider_base_url") ||
+        System.get_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+
+    body =
+      Jason.encode!(%{
+        model: model,
+        messages: request_messages(request),
+        stream: false
+      })
+
+    http_post("#{String.trim_trailing(base_url, "/")}/api/chat", body, [])
+    |> case do
+      {:ok, response} -> {:ok, get_in(response, ["message", "content"]) || ""}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp complete_with_openai_compatible(target, request) do
+    with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
+         {:ok, credential} <- provider_credential(target) do
+      body =
+        Jason.encode!(%{
+          model: provider_model(target),
+          messages: request_messages(request),
+          stream: false
+        })
+
+      headers = provider_headers(target) ++ [{~c"authorization", ~c"Bearer #{credential}"}]
+
+      "#{String.trim_trailing(base_url, "/")}/chat/completions"
+      |> http_post(body, headers)
+      |> case do
+        {:ok, response} ->
+          {:ok, get_in(response, ["choices", Access.at(0), "message", "content"]) || ""}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      "" -> {:error, "provider_base_url is required for openai-compatible targets"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp http_post(url, body, headers) do
+    request = {
+      String.to_charlist(url),
+      [{~c"content-type", ~c"application/json"} | headers],
+      ~c"application/json",
+      body
+    }
+
+    case :httpc.request(:post, request, [{:timeout, 180_000}], body_format: :binary) do
+      {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
+        Jason.decode(response_body)
+
+      {:ok, {{_, status, _}, _headers, _response_body}} ->
+        {:error, "provider returned #{status}"}
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  defp provider_credential(target) do
+    cond do
+      Map.get(target, "credential_env", "") != "" ->
+        key = target["credential_env"]
+
+        case System.get_env(key) |> blank_to_nil() do
+          nil -> {:error, "credential env var #{key} is not set"}
+          value -> {:ok, value}
+        end
+
+      Map.get(target, "credential_fnox_key", "") != "" ->
+        key = target["credential_fnox_key"]
+
+        case System.cmd("fnox", ["get", key], stderr_to_stdout: false) do
+          {value, 0} ->
+            case blank_to_nil(value) do
+              nil -> {:error, "fnox credential #{key} is empty"}
+              value -> {:ok, value}
+            end
+
+          {_output, _status} ->
+            {:error, "fnox credential #{key} is unavailable"}
+        end
+
+      true ->
+        {:error, "credential_env or credential_fnox_key is required"}
+    end
+  end
+
+  defp provider_model(target) do
+    target["model"]
+    |> String.split("/", parts: 2)
+    |> case do
+      [_provider, model] -> model
+      [model] -> model
+    end
+  end
+
+  defp normalize_headers(headers) when is_map(headers) do
+    headers
+    |> Enum.map(fn {key, value} ->
+      {key |> to_string() |> String.trim(), value |> to_string() |> String.trim()}
+    end)
+    |> Enum.reject(fn {key, value} ->
+      key == "" or value == "" or String.downcase(key) == "authorization"
+    end)
+    |> Map.new()
+  end
+
+  defp normalize_headers(_), do: %{}
+
+  defp provider_headers(target) do
+    target
+    |> Map.get("provider_headers", %{})
+    |> Enum.map(fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
+  end
+
+  defp request_messages(request) do
+    request
+    |> Map.get("messages", [])
+    |> Enum.map(fn message ->
+      %{
+        role: Map.get(message, "role", ""),
+        content: content_string(Map.get(message, "content"))
+      }
+    end)
+  end
+
+  defp content_string(value) when is_binary(value), do: value
+  defp content_string(nil), do: ""
+  defp content_string(value), do: Jason.encode!(value)
+
+  defp provider_outcome_from_result({:ok, content}, started) do
+    provider_outcome(content, "completed", started, nil, true, false)
+  end
+
+  defp provider_outcome_from_result({:error, reason}, started) do
+    provider_outcome(nil, "provider_error", started, reason, true, false)
+  end
+
+  defp provider_outcome(content, status, started, error, called_provider, mock) do
+    %{
+      content: content,
+      status: status,
+      latency_ms: max(0, System.monotonic_time(:millisecond) - started),
+      error: error,
+      called_provider: called_provider,
+      mock: mock
+    }
+  end
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
+
   defp integer_value(value) when is_integer(value), do: value
 
   defp integer_value(value) when is_binary(value) do
@@ -289,4 +562,11 @@ defmodule ElixirIngary do
   end
 
   defp integer_value(_), do: nil
+
+  defp positive_integer(value, default) do
+    case integer_value(value) do
+      value when is_integer(value) and value > 0 -> value
+      _ -> default
+    end
+  end
 end

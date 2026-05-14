@@ -27,6 +27,18 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from ttsr_simulator import (
+    TtsrAttemptInput,
+    TtsrRule,
+    generated_ttsr_scenarios,
+    report_json,
+    run_generated_scenario,
+    simulate_attempt,
+    simulate_ttsr,
+    split_text,
+    utf8_len,
+)
+
 
 HEADERS = {
     "Content-Type": "application/json",
@@ -245,6 +257,128 @@ def stream_governance_oracle(rng: random.Random, cases: int) -> None:
             expect(not triggered, "non-violating stream triggered rule")
 
 
+def ttsr_scenario_properties() -> list[dict[str, Any]]:
+    reports: list[dict[str, Any]] = []
+    for scenario in generated_ttsr_scenarios():
+        result = run_generated_scenario(scenario)
+        reports.append({"scenario": scenario.as_dict(), "result": result.as_counterexample()})
+        first_attempt = result.attempts[0]
+        expect(
+            result.status == scenario.expected_status,
+            f"TTSR scenario {scenario.name} status mismatch:\n{report_json(reports[-1])}",
+        )
+        expect(
+            first_attempt.triggered == scenario.expect_first_trigger,
+            f"TTSR scenario {scenario.name} first trigger mismatch:\n{report_json(reports[-1])}",
+        )
+        if first_attempt.triggered:
+            expect(
+                first_attempt.trigger_text not in first_attempt.released_text,
+                f"TTSR scenario {scenario.name} released trigger before abort:\n{report_json(reports[-1])}",
+            )
+            expect(
+                any(event["type"] == "stream.rule_matched" for event in result.receipt_preview),
+                f"TTSR scenario {scenario.name} did not preview rule receipt event",
+            )
+        if scenario.name == "unsafe_horizon_counterexample":
+            expect(result.validation_warnings, "unsafe horizon scenario did not explain the authoring risk")
+            expect(
+                "SECRET" in first_attempt.released_text and not first_attempt.triggered,
+                "unsafe horizon counterexample did not release the undetected trigger",
+            )
+    return reports
+
+
+def ttsr_stream_properties(rng: random.Random, cases: int) -> None:
+    alphabet = string.ascii_letters + string.digits
+    for i in range(cases):
+        marker = "TRIP" + "".join(rng.choice(alphabet) for _ in range(rng.randint(3, 12)))
+        prefix = "".join(rng.choice("safe-_ ") for _ in range(rng.randint(0, 24)))
+        suffix = "".join(rng.choice("tail-_ ") for _ in range(rng.randint(0, 24)))
+        stream = prefix + marker + suffix
+        cut_points = sorted(rng.sample(range(1, len(stream)), rng.randint(1, min(5, len(stream) - 1)))) if len(stream) > 1 else []
+        widths: list[int] = []
+        cursor = 0
+        for cut_point in cut_points:
+            widths.append(cut_point - cursor)
+            cursor = cut_point
+        widths.append(len(stream) - cursor)
+        chunks = split_text(stream, widths)
+        rule = TtsrRule(
+            id=f"generated-ttsr-{i}",
+            matcher_kind=rng.choice(["literal", "regex"]),
+            pattern=marker if rng.random() < 0.7 else re.escape(marker),
+            horizon_bytes=utf8_len(marker) + rng.randint(0, 24),
+            max_retries=1,
+        )
+        if rule.matcher_kind == "regex":
+            rule = TtsrRule(
+                id=rule.id,
+                matcher_kind="regex",
+                pattern=re.escape(marker),
+                horizon_bytes=rule.horizon_bytes,
+                max_retries=rule.max_retries,
+            )
+        attempt_result = simulate_attempt(rule, TtsrAttemptInput(chunks), 0)
+        expect(attempt_result.triggered, f"TTSR generated stream did not trigger for {marker!r}")
+        expect(
+            marker not in attempt_result.released_text,
+            f"TTSR generated stream released marker before abort: {attempt_result.as_counterexample()}",
+        )
+        expect(
+            attempt_result.chunks_seen <= len(chunks),
+            "TTSR generated stream consumed more chunks than provided",
+        )
+
+        near_replacements = [candidate for candidate in [")", "_", "x"] if candidate != marker[-1]]
+        near_miss = prefix + marker[:-1] + rng.choice(near_replacements) + suffix
+        near_chunks = split_text(near_miss, widths)
+        near_result = simulate_attempt(
+            TtsrRule(
+                id=f"generated-ttsr-near-{i}",
+                matcher_kind="literal",
+                pattern=marker,
+                horizon_bytes=utf8_len(marker) + rng.randint(0, 24),
+            ),
+            TtsrAttemptInput(near_chunks),
+            0,
+        )
+        expect(not near_result.triggered, f"TTSR near miss triggered for {marker!r}")
+        expect(near_result.released_text == near_miss, "TTSR near miss did not release original stream")
+
+        retry_result = simulate_ttsr(
+            TtsrRule(
+                id=f"generated-ttsr-retry-{i}",
+                matcher_kind="literal",
+                pattern=marker,
+                horizon_bytes=utf8_len(marker),
+                max_retries=1,
+            ),
+            [TtsrAttemptInput(chunks, "initial"), TtsrAttemptInput(chunks, "retry")],
+        )
+        expect(retry_result.status == "blocked", "TTSR retry violation did not block final output")
+        expect(retry_result.retry_count == 1, "TTSR retry violation did not record exactly one retry")
+        expect(
+            sum(1 for event in retry_result.receipt_preview if event["type"] == "stream.rule_matched") == 2,
+            "TTSR retry violation did not record both matches",
+        )
+
+
+def policy_cache_eviction_oracle(rng: random.Random, cases: int) -> None:
+    for _i in range(cases):
+        capacity = rng.randint(1, 20)
+        timestamps = [rng.randint(0, 50) for _ in range(rng.randint(0, 80))]
+        inserted = [(index + 1, timestamp) for index, timestamp in enumerate(timestamps)]
+        expected = set(
+            sequence
+            for sequence, _timestamp in sorted(inserted, key=lambda item: (item[1], item[0]))[-capacity:]
+        )
+        expect(len(expected) <= capacity, "cache oracle kept more events than capacity")
+        if inserted:
+            oldest = sorted(inserted, key=lambda item: (item[1], item[0]))[: max(0, len(inserted) - capacity)]
+            expect(not any(sequence in expected for sequence, _timestamp in oldest), "cache oracle retained an evicted event")
+
+
 def configure_backend(base_url: str, model: ModelDef) -> bool:
     status, _headers, body, _elapsed = request_json(base_url, "POST", "/__test/config", model_config_payload(model))
     if status == 404:
@@ -307,21 +441,104 @@ def http_dynamic_properties(base_url: str, rng: random.Random, cases: int) -> tu
     return executed, latencies
 
 
+def http_policy_cache_properties(base_url: str, rng: random.Random, cases: int) -> tuple[int, list[float]]:
+    latencies: list[float] = []
+    executed = 0
+    for i in range(cases):
+        model = generated_model(rng, 10_000 + i)
+        payload = model_config_payload(model)
+        payload["policy_cache"] = {"max_entries": 8, "recent_limit": 8}
+        payload["governance"] = [
+            {
+                "id": "repeat-tool",
+                "kind": "history_threshold",
+                "action": "escalate",
+                "cache_kind": "tool_call",
+                "cache_key": "shell:ls",
+                "cache_scope": "session_id",
+                "threshold": 2,
+                "severity": "warning",
+            }
+        ]
+        status, _headers, body, elapsed = request_json(base_url, "POST", "/__test/config", payload)
+        latencies.append(elapsed)
+        if status == 404:
+            print("backend does not support /__test/config; skipped HTTP policy cache properties")
+            return executed, latencies
+        expect(status == 200, f"/__test/config for policy cache failed: {status} {body}")
+
+        for session_id in ["property-session", "other-session"]:
+            status, _headers, body, elapsed = request_json(
+                base_url,
+                "POST",
+                "/v1/policy-cache/events",
+                {
+                    "kind": "tool_call",
+                    "key": "shell:ls",
+                    "scope": {"session_id": session_id},
+                    "created_at_unix_ms": rng.randint(0, 50),
+                },
+            )
+            latencies.append(elapsed)
+            expect(status == 201, f"policy cache event insert failed: {status} {body}")
+
+        request = chat_body(model.synthetic_model, min(target.context_window for target in model.targets))
+        status, _headers, response, elapsed = request_json(base_url, "POST", "/v1/synthetic/simulate", {"request": request})
+        latencies.append(elapsed)
+        expect(status == 200, f"policy cache miss simulate failed: {status} {response}")
+        expect(response["receipt"]["final"]["alert_count"] == 0, "policy cache counted another session")
+
+        status, _headers, body, elapsed = request_json(
+            base_url,
+            "POST",
+            "/v1/policy-cache/events",
+            {
+                "kind": "tool_call",
+                "key": "shell:ls",
+                "scope": {"session_id": "property-session"},
+                "created_at_unix_ms": rng.randint(0, 50),
+            },
+        )
+        latencies.append(elapsed)
+        expect(status == 201, f"second policy cache event insert failed: {status} {body}")
+
+        status, _headers, response, elapsed = request_json(base_url, "POST", "/v1/synthetic/simulate", {"request": request})
+        latencies.append(elapsed)
+        expect(status == 200, f"policy cache hit simulate failed: {status} {response}")
+        receipt = response["receipt"]
+        expect(receipt["final"]["alert_count"] == 1, "policy cache threshold did not alert")
+        actions = receipt.get("decision", {}).get("policy_actions", [])
+        expect(actions and actions[0].get("history_count") == 2, "policy cache action did not report matching count")
+        executed += 1
+    return executed, latencies
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default=None, help="Backend URL for HTTP dynamic properties.")
     parser.add_argument("--cases", type=int, default=100)
     parser.add_argument("--http-cases", type=int, default=25)
     parser.add_argument("--seed", type=int, default=20260513)
+    parser.add_argument("--show-ttsr-examples", action="store_true", help="Print generated TTSR scenario reports as JSON.")
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
     pure_route_properties(rng, args.cases)
     stream_governance_oracle(rng, args.cases)
-    print(f"pure properties passed cases={args.cases} seed={args.seed}")
+    ttsr_reports = ttsr_scenario_properties()
+    ttsr_stream_properties(rng, args.cases)
+    policy_cache_eviction_oracle(rng, args.cases)
+    if args.show_ttsr_examples:
+        print(f"pure properties passed cases={args.cases} seed={args.seed}", file=sys.stderr)
+        print(json.dumps({"ttsr_examples": ttsr_reports}, indent=2, sort_keys=True))
+    else:
+        print(f"pure properties passed cases={args.cases} seed={args.seed}")
 
     if args.base_url:
         executed, latencies = http_dynamic_properties(args.base_url, rng, args.http_cases)
+        cache_executed, cache_latencies = http_policy_cache_properties(args.base_url, rng, args.http_cases)
+        executed += cache_executed
+        latencies.extend(cache_latencies)
         if executed:
             latencies_sorted = sorted(latencies)
             p50 = latencies_sorted[len(latencies_sorted) // 2]

@@ -14,7 +14,7 @@ defmodule ElixirIngary.MixProject do
   # Run "mix help compile.app" to learn about applications.
   def application do
     [
-      extra_applications: [:logger, :crypto],
+      extra_applications: [:logger, :crypto, :inets, :ssl],
       mod: {ElixirIngary.Application, []}
     ]
   end
@@ -23,7 +23,8 @@ defmodule ElixirIngary.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
-      {:plug_cowboy, "~> 2.7"}
+      {:plug_cowboy, "~> 2.7"},
+      {:stream_data, "~> 1.3", only: :test}
     ]
   end
 end

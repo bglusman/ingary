@@ -10,7 +10,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +31,7 @@ type server struct {
 	mu      sync.RWMutex
 	config  TestConfig
 	storage ReceiptStore
+	cache   *MemoryPolicyCache
 }
 
 type TestConfig struct {
@@ -39,13 +42,17 @@ type TestConfig struct {
 	PromptTransforms PromptTransforms    `json:"prompt_transforms,omitempty"`
 	StructuredOutput *StructuredOutput   `json:"structured_output,omitempty"`
 	Governance       []GovernanceExample `json:"governance,omitempty"`
+	PolicyCache      PolicyCacheConfig   `json:"policy_cache,omitempty"`
 }
 
 type RouteTarget struct {
-	Model           string `json:"model"`
-	ContextWindow   int    `json:"context_window"`
-	ProviderKind    string `json:"provider_kind,omitempty"`
-	ProviderBaseURL string `json:"provider_base_url,omitempty"`
+	Model           string            `json:"model"`
+	ContextWindow   int               `json:"context_window"`
+	ProviderKind    string            `json:"provider_kind,omitempty"`
+	ProviderBaseURL string            `json:"provider_base_url,omitempty"`
+	ProviderHeaders map[string]string `json:"provider_headers,omitempty"`
+	CredentialEnv   string            `json:"credential_env,omitempty"`
+	CredentialFnox  string            `json:"credential_fnox_key,omitempty"`
 }
 
 type StreamRule struct {
@@ -66,13 +73,53 @@ type StructuredOutput struct {
 }
 
 type GovernanceExample struct {
-	ID       string `json:"id"`
-	Kind     string `json:"kind"`
-	Action   string `json:"action"`
-	Contains string `json:"contains,omitempty"`
-	Message  string `json:"message,omitempty"`
-	Severity string `json:"severity,omitempty"`
-	Reminder string `json:"reminder,omitempty"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Action     string `json:"action"`
+	Contains   string `json:"contains,omitempty"`
+	Message    string `json:"message,omitempty"`
+	Severity   string `json:"severity,omitempty"`
+	Reminder   string `json:"reminder,omitempty"`
+	CacheKind  string `json:"cache_kind,omitempty"`
+	CacheKey   string `json:"cache_key,omitempty"`
+	CacheScope string `json:"cache_scope,omitempty"`
+	Threshold  int    `json:"threshold,omitempty"`
+}
+
+type PolicyCacheConfig struct {
+	MaxEntries  int `json:"max_entries,omitempty"`
+	RecentLimit int `json:"recent_limit,omitempty"`
+}
+
+type PolicyCacheEventInput struct {
+	Kind            string            `json:"kind"`
+	Key             string            `json:"key,omitempty"`
+	Scope           map[string]string `json:"scope,omitempty"`
+	Value           map[string]any    `json:"value,omitempty"`
+	CreatedAtUnixMS int64             `json:"created_at_unix_ms,omitempty"`
+}
+
+type PolicyCacheEvent struct {
+	ID              string            `json:"id"`
+	Sequence        uint64            `json:"sequence"`
+	Kind            string            `json:"kind"`
+	Key             string            `json:"key,omitempty"`
+	Scope           map[string]string `json:"scope,omitempty"`
+	Value           map[string]any    `json:"value,omitempty"`
+	CreatedAtUnixMS int64             `json:"created_at_unix_ms"`
+}
+
+type PolicyCacheFilter struct {
+	Kind  string
+	Key   string
+	Scope map[string]string
+}
+
+type MemoryPolicyCache struct {
+	mu     sync.Mutex
+	config PolicyCacheConfig
+	next   uint64
+	events []PolicyCacheEvent
 }
 
 type ChatCompletionRequest struct {
@@ -139,6 +186,8 @@ func main() {
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("/v1/synthetic/models", s.handleSyntheticModelSummaries)
 	mux.HandleFunc("/v1/synthetic/simulate", s.handleSyntheticSimulate)
+	mux.HandleFunc("/v1/policy-cache/events", s.handlePolicyCacheEvents)
+	mux.HandleFunc("/v1/policy-cache/recent", s.handlePolicyCacheRecent)
 	mux.HandleFunc("/v1/receipts", s.handleReceipts)
 	mux.HandleFunc("/v1/receipts/", s.handleReceiptByID)
 	mux.HandleFunc("/admin/providers", s.handleProviders)
@@ -159,7 +208,8 @@ func newServer(cfg TestConfig, storage ReceiptStore) *server {
 	if storage == nil {
 		storage = NewMemoryReceiptStore()
 	}
-	return &server{config: cfg, storage: storage}
+	cache := NewMemoryPolicyCache(cfg.PolicyCache)
+	return &server{config: normalizeTestConfig(cfg), storage: storage, cache: cache}
 }
 
 func (s *server) handleModels(w http.ResponseWriter, r *http.Request) {
@@ -199,7 +249,7 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	caller := extractCaller(r, req.Metadata)
 	req = applyPromptTransforms(req, cfg)
-	policy := evaluateRequestPolicies(&req, cfg)
+	policy := s.evaluateRequestPolicies(&req, cfg, caller)
 	estimate := estimatePromptTokens(req.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
 	receipt, err := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg, policy)
@@ -226,6 +276,10 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	receipt.Attempts[0]["status"] = providerStatus
 	receipt.Attempts[0]["latency_ms"] = providerLatency
 	receipt.Attempts[0]["provider_error"] = errorString(providerErr)
+	if target := targetByModel(selected, cfg); target != nil && providerKind(*target) != "mock" {
+		receipt.Attempts[0]["mock"] = false
+		receipt.Attempts[0]["called_provider"] = true
+	}
 	receipt.Final["status"] = providerStatus
 	receipt.Final["provider_error"] = errorString(providerErr)
 	if err := s.storage.InsertReceipt(receipt); err != nil {
@@ -291,7 +345,7 @@ func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request)
 
 	caller := extractCaller(r, body.Request.Metadata)
 	body.Request = applyPromptTransforms(body.Request, cfg)
-	policy := evaluateRequestPolicies(&body.Request, cfg)
+	policy := s.evaluateRequestPolicies(&body.Request, cfg, caller)
 	estimate := estimatePromptTokens(body.Request.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
 	receipt, err := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg, policy)
@@ -388,6 +442,7 @@ func (s *server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.Version == "" {
 		cfg.Version = modelVersion
 	}
+	cfg = normalizeTestConfig(cfg)
 	if err := s.storage.ClearReceipts(); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to clear receipts", "server_error", "receipt_store_failed")
 		return
@@ -395,7 +450,40 @@ func (s *server) handleTestConfig(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.config = cfg
 	s.mu.Unlock()
+	s.cache.Configure(cfg.PolicyCache)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "synthetic_model": cfg.SyntheticModel, "targets": cfg.Targets})
+}
+
+func (s *server) handlePolicyCacheEvents(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodPost) {
+		return
+	}
+	var input PolicyCacheEventInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "invalid_json")
+		return
+	}
+	event, err := s.cache.Add(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request", "invalid_policy_cache_event")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"event": event})
+}
+
+func (s *server) handlePolicyCacheRecent(w http.ResponseWriter, r *http.Request) {
+	if !requireMethod(w, r, http.MethodGet) {
+		return
+	}
+	query := r.URL.Query()
+	filter := PolicyCacheFilter{
+		Kind:  strings.TrimSpace(query.Get("kind")),
+		Key:   strings.TrimSpace(query.Get("key")),
+		Scope: scopeFromQuery(query),
+	}
+	limit := parseLimit(query.Get("limit"))
+	events := s.cache.Recent(filter, limit)
+	writeJSON(w, http.StatusOK, map[string]any{"data": events})
 }
 
 func (s *server) currentConfig() TestConfig {
@@ -405,6 +493,110 @@ func (s *server) currentConfig() TestConfig {
 		return defaultTestConfig()
 	}
 	return s.config
+}
+
+func NewMemoryPolicyCache(config PolicyCacheConfig) *MemoryPolicyCache {
+	cache := &MemoryPolicyCache{}
+	cache.Configure(config)
+	return cache
+}
+
+func (c *MemoryPolicyCache) Configure(config PolicyCacheConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if config.MaxEntries == 0 {
+		config.MaxEntries = 64
+	}
+	if config.RecentLimit == 0 {
+		config.RecentLimit = 20
+	}
+	c.config = config
+	c.next = 0
+	c.events = nil
+}
+
+func (c *MemoryPolicyCache) Add(input PolicyCacheEventInput) (PolicyCacheEvent, error) {
+	kind := strings.TrimSpace(input.Kind)
+	if kind == "" {
+		return PolicyCacheEvent{}, errors.New("kind must not be empty")
+	}
+	if input.CreatedAtUnixMS < 0 {
+		return PolicyCacheEvent{}, errors.New("created_at_unix_ms must not be negative")
+	}
+	key := strings.TrimSpace(input.Key)
+	scope := cleanScope(input.Scope)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.config.MaxEntries < 1 {
+		return PolicyCacheEvent{}, errors.New("policy cache is disabled")
+	}
+	c.next++
+	event := PolicyCacheEvent{
+		ID:              fmt.Sprintf("pc_%016x", c.next),
+		Sequence:        c.next,
+		Kind:            kind,
+		Key:             key,
+		Scope:           scope,
+		Value:           cloneMap(input.Value),
+		CreatedAtUnixMS: input.CreatedAtUnixMS,
+	}
+	c.events = append(c.events, event)
+	c.evictLocked()
+	return event, nil
+}
+
+func (c *MemoryPolicyCache) Recent(filter PolicyCacheFilter, limit int) []PolicyCacheEvent {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit < 1 || limit > c.config.RecentLimit {
+		limit = c.config.RecentLimit
+	}
+	if limit < 1 {
+		return nil
+	}
+	var events []PolicyCacheEvent
+	for i := len(c.events) - 1; i >= 0 && len(events) < limit; i-- {
+		event := c.events[i]
+		if policyCacheMatches(event, filter) {
+			events = append(events, clonePolicyCacheEvent(event))
+		}
+	}
+	return events
+}
+
+func (c *MemoryPolicyCache) Count(filter PolicyCacheFilter) int {
+	return len(c.Recent(filter, c.config.MaxEntries))
+}
+
+func (c *MemoryPolicyCache) evictLocked() {
+	sort.SliceStable(c.events, func(i, j int) bool {
+		if c.events[i].CreatedAtUnixMS == c.events[j].CreatedAtUnixMS {
+			return c.events[i].Sequence < c.events[j].Sequence
+		}
+		return c.events[i].CreatedAtUnixMS < c.events[j].CreatedAtUnixMS
+	})
+	for len(c.events) > c.config.MaxEntries {
+		c.events = c.events[1:]
+	}
+	sort.SliceStable(c.events, func(i, j int) bool {
+		return c.events[i].Sequence < c.events[j].Sequence
+	})
+}
+
+func policyCacheMatches(event PolicyCacheEvent, filter PolicyCacheFilter) bool {
+	if filter.Kind != "" && event.Kind != filter.Kind {
+		return false
+	}
+	if filter.Key != "" && event.Key != filter.Key {
+		return false
+	}
+	for key, value := range filter.Scope {
+		if event.Scope[key] != value {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, skipped []map[string]any, status string, cfg TestConfig, policy PolicyResult) (Receipt, error) {
@@ -494,13 +686,13 @@ func syntheticModelRecord(cfg TestConfig) map[string]any {
 	}
 }
 
-func providers() []map[string]string {
+func providers() []map[string]any {
 	return providersForConfig(defaultTestConfig())
 }
 
-func providersForConfig(cfg TestConfig) []map[string]string {
+func providersForConfig(cfg TestConfig) []map[string]any {
 	seen := map[string]bool{}
-	var providers []map[string]string
+	var providers []map[string]any
 	for _, target := range cfg.Targets {
 		id := strings.Split(target.Model, "/")[0]
 		if seen[id] {
@@ -520,7 +712,14 @@ func providersForConfig(cfg TestConfig) []map[string]string {
 				baseURL = "mock://" + id
 			}
 		}
-		providers = append(providers, map[string]string{"id": id, "kind": kind, "base_url": baseURL, "credential_owner": "ingary", "health": "ok"})
+		providers = append(providers, map[string]any{
+			"id":                id,
+			"kind":              kind,
+			"base_url":          baseURL,
+			"credential_owner":  "ingary",
+			"credential_source": credentialSource(target),
+			"health":            "ok",
+		})
 	}
 	return providers
 }
@@ -539,7 +738,18 @@ func defaultTestConfig() TestConfig {
 			{ID: "xml_well_formed", Kind: "structured_output", Action: "validate_or_block"},
 			{ID: "prompt_transforms", Kind: "request_transform", Action: "prepend_append_messages"},
 		},
+		PolicyCache: PolicyCacheConfig{MaxEntries: 64, RecentLimit: 20},
 	}
+}
+
+func normalizeTestConfig(cfg TestConfig) TestConfig {
+	if cfg.PolicyCache.MaxEntries == 0 {
+		cfg.PolicyCache.MaxEntries = 64
+	}
+	if cfg.PolicyCache.RecentLimit == 0 {
+		cfg.PolicyCache.RecentLimit = 20
+	}
+	return cfg
 }
 
 func validateTestConfig(cfg TestConfig) error {
@@ -552,6 +762,12 @@ func validateTestConfig(cfg TestConfig) error {
 	if len(cfg.Targets) == 0 {
 		return errors.New("targets must not be empty")
 	}
+	if cfg.PolicyCache.MaxEntries < 0 {
+		return errors.New("policy_cache.max_entries must not be negative")
+	}
+	if cfg.PolicyCache.RecentLimit < 0 {
+		return errors.New("policy_cache.recent_limit must not be negative")
+	}
 	seen := map[string]bool{}
 	for _, target := range cfg.Targets {
 		if strings.TrimSpace(target.Model) == "" {
@@ -563,9 +779,16 @@ func validateTestConfig(cfg TestConfig) error {
 		if seen[target.Model] {
 			return fmt.Errorf("duplicate target %s", target.Model)
 		}
+		if hasCredentialReference(target) && os.Getenv("INGARY_ALLOW_TEST_CREDENTIALS") != "1" {
+			return errors.New("credential references in __test/config require INGARY_ALLOW_TEST_CREDENTIALS=1")
+		}
 		seen[target.Model] = true
 	}
 	return nil
+}
+
+func hasCredentialReference(target RouteTarget) bool {
+	return strings.TrimSpace(target.CredentialEnv) != "" || strings.TrimSpace(target.CredentialFnox) != ""
 }
 
 func normalizeModel(model string, cfg TestConfig) (string, error) {
@@ -620,9 +843,68 @@ type PolicyResult struct {
 }
 
 func evaluateRequestPolicies(req *ChatCompletionRequest, cfg TestConfig) PolicyResult {
+	return evaluateRequestPoliciesWithCache(req, cfg, CallerContext{}, nil)
+}
+
+func (s *server) evaluateRequestPolicies(req *ChatCompletionRequest, cfg TestConfig, caller CallerContext) PolicyResult {
+	return evaluateRequestPoliciesWithCache(req, cfg, caller, s.cache)
+}
+
+func evaluateRequestPoliciesWithCache(req *ChatCompletionRequest, cfg TestConfig, caller CallerContext, cache *MemoryPolicyCache) PolicyResult {
 	var result PolicyResult
 	text := strings.ToLower(requestText(req.Messages))
 	for _, rule := range cfg.Governance {
+		if rule.Kind == "history_threshold" {
+			count := 0
+			if cache != nil {
+				count = cache.Count(PolicyCacheFilter{
+					Kind:  strings.TrimSpace(rule.CacheKind),
+					Key:   strings.TrimSpace(rule.CacheKey),
+					Scope: scopeFromCaller(caller, rule.CacheScope),
+				})
+			}
+			threshold := rule.Threshold
+			if threshold < 1 {
+				threshold = 1
+			}
+			if count < threshold {
+				continue
+			}
+			message := strings.TrimSpace(rule.Message)
+			if message == "" {
+				message = "policy cache threshold matched"
+			}
+			severity := strings.TrimSpace(rule.Severity)
+			if severity == "" {
+				severity = "info"
+			}
+			action := map[string]any{
+				"rule_id":       rule.ID,
+				"kind":          rule.Kind,
+				"action":        rule.Action,
+				"matched":       true,
+				"message":       message,
+				"severity":      severity,
+				"cache_kind":    strings.TrimSpace(rule.CacheKind),
+				"cache_key":     strings.TrimSpace(rule.CacheKey),
+				"cache_scope":   strings.TrimSpace(rule.CacheScope),
+				"history_count": count,
+				"threshold":     threshold,
+			}
+			result.Actions = append(result.Actions, action)
+			if rule.Action == "escalate" {
+				result.AlertCount++
+				result.Events = append(result.Events, map[string]any{
+					"type":          "policy.alert",
+					"rule_id":       rule.ID,
+					"message":       message,
+					"severity":      severity,
+					"history_count": count,
+					"threshold":     threshold,
+				})
+			}
+			continue
+		}
 		if rule.Kind != "request_guard" && rule.Kind != "request_transform" && rule.Kind != "receipt_annotation" {
 			continue
 		}
@@ -700,6 +982,12 @@ func completeSelectedModel(selected string, req ChatCompletionRequest, cfg TestC
 			status = "provider_error"
 		}
 		return content, status, time.Since(started).Milliseconds(), err
+	case "openai-compatible":
+		content, err := completeWithOpenAICompatible(*target, req)
+		if err != nil {
+			status = "provider_error"
+		}
+		return content, status, time.Since(started).Milliseconds(), err
 	default:
 		return "", "provider_unsupported", time.Since(started).Milliseconds(), fmt.Errorf("unsupported provider kind %q", providerKind(*target))
 	}
@@ -765,6 +1053,110 @@ func completeWithOllama(target RouteTarget, req ChatCompletionRequest) (string, 
 		return "", err
 	}
 	return parsed.Message.Content, nil
+}
+
+func completeWithOpenAICompatible(target RouteTarget, req ChatCompletionRequest) (string, error) {
+	model := providerModel(target)
+	baseURL := strings.TrimRight(target.ProviderBaseURL, "/")
+	if baseURL == "" {
+		return "", errors.New("provider_base_url is required for openai-compatible targets")
+	}
+	secret, err := providerCredential(target)
+	if err != nil {
+		return "", err
+	}
+	messages := make([]map[string]any, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		messages = append(messages, map[string]any{
+			"role":    message.Role,
+			"content": contentString(message.Content),
+		})
+	}
+	body := map[string]any{"model": model, "messages": messages, "stream": false}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	httpReq, err := http.NewRequest(http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(encoded))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	for key, value := range target.ProviderHeaders {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" && !strings.EqualFold(key, "Authorization") {
+			httpReq.Header.Set(key, value)
+		}
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+secret)
+
+	client := &http.Client{Timeout: 180 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("provider returned %d", resp.StatusCode)
+	}
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", err
+	}
+	if len(parsed.Choices) == 0 {
+		return "", errors.New("provider response had no choices")
+	}
+	return parsed.Choices[0].Message.Content, nil
+}
+
+func providerModel(target RouteTarget) string {
+	if parts := strings.SplitN(target.Model, "/", 2); len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
+		return strings.TrimSpace(parts[1])
+	}
+	return strings.TrimSpace(target.Model)
+}
+
+func credentialSource(target RouteTarget) string {
+	switch {
+	case strings.TrimSpace(target.CredentialFnox) != "":
+		return "fnox"
+	case strings.TrimSpace(target.CredentialEnv) != "":
+		return "env"
+	default:
+		return "none"
+	}
+}
+
+func providerCredential(target RouteTarget) (string, error) {
+	if key := strings.TrimSpace(target.CredentialEnv); key != "" {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value, nil
+		}
+		return "", fmt.Errorf("credential env var %s is not set", key)
+	}
+	if key := strings.TrimSpace(target.CredentialFnox); key != "" {
+		cmd := exec.Command("fnox", "get", key)
+		raw, err := cmd.Output()
+		if err != nil {
+			return "", fmt.Errorf("fnox credential %s is unavailable", key)
+		}
+		if value := strings.TrimSpace(string(raw)); value != "" {
+			return value, nil
+		}
+		return "", fmt.Errorf("fnox credential %s is empty", key)
+	}
+	return "", errors.New("credential_env or credential_fnox_key is required")
 }
 
 func mockContent(selected string, model string, estimate int, cfg TestConfig) string {
@@ -874,6 +1266,90 @@ func metadataTags(metadata map[string]any) []string {
 	}
 	sort.Strings(tags)
 	return tags
+}
+
+func scopeFromCaller(caller CallerContext, scopeName string) map[string]string {
+	scopeName = strings.TrimSpace(scopeName)
+	if scopeName == "" {
+		return nil
+	}
+	var value string
+	switch scopeName {
+	case "tenant_id":
+		value = sourcedValue(caller.TenantID)
+	case "application_id":
+		value = sourcedValue(caller.ApplicationID)
+	case "consuming_agent_id":
+		value = sourcedValue(caller.ConsumingAgentID)
+	case "consuming_user_id":
+		value = sourcedValue(caller.ConsumingUserID)
+	case "session_id":
+		value = sourcedValue(caller.SessionID)
+	case "run_id":
+		value = sourcedValue(caller.RunID)
+	default:
+		return nil
+	}
+	if value == "" {
+		return nil
+	}
+	return map[string]string{scopeName: value}
+}
+
+func scopeFromQuery(query url.Values) map[string]string {
+	scope := map[string]string{}
+	for _, key := range []string{"tenant_id", "application_id", "consuming_agent_id", "consuming_user_id", "session_id", "run_id"} {
+		if value := strings.TrimSpace(query.Get(key)); value != "" {
+			scope[key] = value
+		}
+	}
+	if len(scope) == 0 {
+		return nil
+	}
+	return scope
+}
+
+func cleanScope(input map[string]string) map[string]string {
+	scope := map[string]string{}
+	for key, value := range input {
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key != "" && value != "" {
+			scope[key] = value
+		}
+	}
+	if len(scope) == 0 {
+		return nil
+	}
+	return scope
+}
+
+func cloneMap(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]any, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func cloneStringMap(input map[string]string) map[string]string {
+	if len(input) == 0 {
+		return nil
+	}
+	output := make(map[string]string, len(input))
+	for key, value := range input {
+		output[key] = value
+	}
+	return output
+}
+
+func clonePolicyCacheEvent(event PolicyCacheEvent) PolicyCacheEvent {
+	event.Scope = cloneStringMap(event.Scope)
+	event.Value = cloneMap(event.Value)
+	return event
 }
 
 func contentString(content any) string {
