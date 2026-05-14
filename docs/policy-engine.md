@@ -243,6 +243,35 @@ Instead, model definitions should declare the facts or recent-record caches
 they need. Ingary can then decide what to track, how to index it, and how to
 expose it to the policy engine.
 
+Policies that enforce behavior need a stronger cache contract than policies
+that merely annotate receipts. Ingary should distinguish two classes:
+
+- **deterministic policy working sets**: used for `block`, `reroute`, `retry`,
+  `require_human_approval`, rate-limit, and other enforcement actions.
+- **best-effort observability caches**: used for UI context, analytics,
+  non-blocking annotations, and exploratory policy experiments.
+
+MVP should use deterministic policy working sets for enforcement. If a record is
+inside the configured window, it must be visible to the policy query. If it is
+outside any configured eviction dimension, it must not be visible. No approximate
+LRU, probabilistic summaries, background-lag surprises, or "maybe still in
+cache" behavior should affect enforcement decisions.
+
+Deterministic eviction can still be configurable, but the semantics need to be
+simple:
+
+- `max_age_seconds`: evict anything older than the cutoff.
+- `max_items`: keep the newest N records in a stable ordering.
+- `max_bytes`: keep newest records while total retained encoded size is under
+  the limit.
+- combinations use intersection semantics: a record must satisfy every bound to
+  be visible.
+
+That gives policy authors a predictable rule: inside every configured bound
+means visible; outside any configured bound means invisible. If that proves too
+hard to guarantee efficiently, MVP should prefer fewer supported eviction modes
+over best-effort behavior in enforcement paths.
+
 Example:
 
 ```yaml
@@ -272,6 +301,12 @@ policy_context:
     - id: session_receipts
       api: receipts
       scope: session
+      eviction:
+        deterministic: true
+        order: newest_first
+        max_items: 50
+        max_age_seconds: 1800
+        max_bytes: 262144
       max_items: 50
       max_age_seconds: 1800
       fields:
@@ -325,6 +360,10 @@ The query is deterministic, scoped, authorized, served from a bounded cache, and
 visible in the synthetic model's overhead estimate. If a policy asks for data
 outside the configured cache, Ingary should return an explicit "not available"
 policy fact rather than silently scanning durable history.
+
+For observability-only caches, Ingary may later allow approximate or
+best-effort eviction. Those caches must be labeled as such and should not be
+available to actions that change model behavior.
 
 ## Action Model
 
