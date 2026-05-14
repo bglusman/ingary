@@ -138,6 +138,13 @@ namespace assumptions.
 
 The bakeoff suites use `uv`, `pytest`, `hypothesis`, and `jsonschema`.
 
+Bakeoff evaluation has two layers:
+
+- visible contract packs under `docs/bakeoff-contracts/`, which agents may read
+  and translate into native tests
+- held-out Python backend oracles, which are run externally after an agent
+  finishes and must not be available inside the implementation worktree
+
 Pure oracle/property tests:
 
 ```bash
@@ -177,12 +184,14 @@ uv run pytest -m live_llm tests/test_bakeoff_live_llm_smoke.py
 
 Set `INGARY_LIVE_LLM_API_KEY` when the target endpoint requires bearer auth.
 
-Bakeoff agents may run the shared Python tests during implementation, but the
-required development loop is native-first: translate the contract into the
-backend's native test framework, implement until native tests pass, then run the
-shared Python suite as an independent final oracle. Extra tests are encouraged
-when a live LLM run, mutation test, or code review exposes a vacuous pass or
-untested branch.
+Bakeoff agents may run or adapt optional live-LLM discovery tests during
+implementation, but they must not run the held-out Python backend oracle. The
+required development loop is native-first: translate the visible contract into
+the backend's native test framework, implement until native tests pass, and
+reduce useful live-LLM failures into deterministic native regression fixtures.
+The held-out Python backend oracle is an external final judge, not a development
+tool. Extra native tests are encouraged when a live LLM run, mutation test, or
+code review exposes a vacuous pass or untested branch.
 
 ## BDD Scenarios
 
@@ -205,7 +214,7 @@ Current scenarios:
 
 ## Native Backend Tests
 
-The shared Python tests are intentionally backend-neutral. Each prototype also
+The visible contracts are intentionally backend-neutral. Each prototype also
 needs local tests for its own route, policy, and receipt implementation:
 
 - Go: storage behavior, model normalization, route selection, prompt

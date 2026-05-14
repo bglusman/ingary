@@ -7,7 +7,9 @@
     "actions": 1,
     "commands": 1,
     "failed_actions": 0,
-    "git_status_changed": false
+    "git_status_changed": false,
+    "git_head_changed": false,
+    "git_commits_added": 0
   },
   "actions": [
     {

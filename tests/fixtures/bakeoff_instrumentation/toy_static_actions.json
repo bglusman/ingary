@@ -7,7 +7,9 @@
     "actions": 4,
     "commands": 3,
     "failed_actions": 0,
-    "git_status_changed": false
+    "git_status_changed": false,
+    "git_head_changed": false,
+    "git_commits_added": 0
   },
   "actions": [
     {
@@ -18,7 +20,7 @@
     {
       "id": "bakeoff_doc_mentions",
       "kind": "command",
-      "cmd": ["rg", "-n", "bakeoff|scoring|rubric|shared Python", "docs/prototype-bakeoff-plan.md"]
+      "cmd": ["rg", "-n", "bakeoff|scoring|rubric|held-out", "docs/prototype-bakeoff-plan.md"]
     },
     {
       "id": "stable_latency_probe",

@@ -57,7 +57,7 @@ Required behavior:
   validation errors, guard events, repair attempts, retry count, and final
   status
 
-The shared tests should include valid output, syntax-invalid output,
+The visible contract and held-out oracle should cover valid output, syntax-invalid output,
 schema-invalid output, semantically-invalid output, schema alternative
 selection, tolerated optional/missing fields, recovery after one or more guard
 events, and exhausted-loop failure.
@@ -85,7 +85,7 @@ Required behavior:
 - expose receipt events explaining count, scope, threshold, action, and cache
   working set size
 
-The shared tests should include scope isolation, regex match counts, equivalent
+The visible contract and held-out oracle should cover scope isolation, regex match counts, equivalent
 events arriving concurrently within one session, deterministic eviction,
 threshold non-trigger, threshold trigger, irrelevant in-scope events that do not
 match the rule, out-of-scope events that would match but must not count, and
@@ -109,7 +109,7 @@ Required behavior:
   closed according to config
 - keep alert delivery side effects idempotent by alert id
 
-The shared tests should include fast sink, slow sink, failing-then-recovering
+The visible contract and held-out oracle should cover fast sink, slow sink, failing-then-recovering
 sink, full queue behavior, duplicate alert idempotency, and request-latency
 budget under sink pressure.
 
@@ -148,49 +148,58 @@ counterexamples are captured as regression fixtures.
 
 ## Test-First Workflow
 
-Every bakeoff starts with shared tests before implementation branches are
-created. The Python tests are the contract-level source of truth.
+Every bakeoff starts with a reviewed visible contract and a separate held-out
+evaluation oracle before implementation branches are created.
 
-1. Write `tests/bakeoff_<feature>.py` with fixtures, BDD-style scenarios,
-   generated/property cases where useful, and a clear skip message for
-   unsupported endpoints.
-2. Add example config fixtures under `tests/fixtures/<feature>/`.
-3. Confirm the shared Python tests fail against all three backends for the
+1. Write a visible contract pack under `docs/bakeoff-contracts/<feature>.md`.
+   It should describe public API behavior, policy semantics, expected receipt
+   shape, native-test translation requirements, and optional live-LLM discovery
+   guidance. Agents may read this contract.
+2. Add visible example fixtures only when they clarify the contract. These
+   fixtures are translation material, not the final judge.
+3. Write the final Python backend oracle separately from the agent worktree.
+   It should hit only public/prototype test APIs and assert externally visible
+   behavior. Agents must not run this oracle during implementation.
+4. Confirm the held-out Python oracle fails against all three backends for the
    expected missing-feature reasons.
-4. Hold a human review gate on the shared Python tests before implementation
-   starts. The review should judge whether the scenarios, data generation,
-   edge cases, and failure messages are strong enough to guide the bakeoff.
-5. Create the three implementation branches from the same `main` commit.
-6. In each branch, translate the shared scenarios into native tests first:
-   Go `testing`, Rust unit/property tests, Elixir ExUnit/StreamData.
-   Agents may inspect and run the shared Python tests while developing, but
-   copied-only Python coverage is not enough. The native translation is part of
-   the evaluated work product.
-7. Implement until native tests pass. Agents are encouraged to add additional
+5. Hold a human review gate on both the visible contract and held-out oracle.
+   The review should judge whether scenarios, data generation, edge cases, and
+   failure messages are strong enough to guide the bakeoff and catch shallow
+   implementations.
+6. Create the three implementation branches from the same `main` commit, using
+   worktrees that expose the visible contract but not the held-out oracle.
+7. In each branch, translate the visible contract into native tests first:
+   Go `testing`, Rust unit/property tests, Elixir ExUnit/StreamData. The native
+   translation is part of the evaluated work product.
+8. Implement until native tests pass. Agents are encouraged to add additional
    native tests when they observe vacuous passes, untested branches, or live
    counterexamples.
-8. Run the same Python tests against the backend as the final correctness gate.
-9. Run the normal repo checks and collect metrics.
+9. Agents may run optional `live_llm` discovery tests during development when
+   credentials or local models are available, including local Ollama. They may
+   adapt those live tests for the backend they are building. Live tests are
+   discovery and realism tools, not CI gates and not the final oracle.
+10. After each agent finishes, run the held-out Python backend oracle externally
+   against the completed backend as the final correctness gate.
+11. Run the normal repo checks and collect metrics.
 
 Native tests are part of the scoring. A backend should not get full credit for
-passing the Python harness if the native test translation is shallow or tests
+passing the held-out oracle if the native test translation is shallow or tests
 implementation details instead of behavior.
 
-Agents may run optional `live_llm` tests during development when credentials or
-local models are available, including local Ollama. Live tests are discovery and
-realism tools, not CI gates. Useful live failures should be reduced into
-deterministic fixtures before the implementation is considered complete.
+Useful live failures should be reduced into deterministic native regression
+fixtures before the implementation is considered complete.
 
 Agents should also consider lightweight mutation testing before declaring a
 feature done: deliberately break a condition, branch, guard action, eviction
-rule, or receipt field and confirm either the native tests or shared Python
-tests fail for the intended reason.
+rule, or receipt field and confirm the native tests fail for the intended
+reason. Held-out Python oracle failures are measured externally after the agent
+finishes.
 
-## Shared Test Quality Bar
+## Contract And Oracle Quality Bar
 
-The shared Python tests are not smoke tests. They are the behavioral contract
-for the bakeoff and should be reviewed before kickoff. A weak shared test suite
-will produce misleading implementation scores.
+The visible contract and held-out Python oracle are not smoke tests. Together
+they define and evaluate bakeoff behavior and should be reviewed before kickoff.
+A weak contract or oracle will produce misleading implementation scores.
 
 Each bakeoff test suite should include:
 
@@ -213,14 +222,15 @@ Each bakeoff test suite should include:
 - a clear split between deterministic mocked-model tests and optional live-LLM
   realism tests that do not run in default CI
 
-Before writing each shared suite, inspect relevant real-world open source test
-suites and provider examples for style and edge cases. Useful sources include
+Before writing each visible contract and held-out oracle, inspect relevant
+real-world open source test suites and provider examples for style and edge
+cases. Useful sources include
 JSON Schema test suites for structured-output behavior, webhook/retry queue
 tests for alert sinks, and cache/concurrency tests from production-grade
 libraries. Borrow test ideas and data shapes, not project-specific code, unless
 the license and attribution path are explicitly acceptable.
 
-The kickoff checklist for each shared suite:
+The kickoff checklist for each bakeoff contract and oracle:
 
 | Gate | Requirement |
 |---|---|
@@ -234,17 +244,19 @@ The kickoff checklist for each shared suite:
 ## Controls
 
 - All implementation branches start from the same `main` SHA.
-- The feature spec and shared Python tests are frozen before implementation
-  starts.
+- The visible feature contract and held-out Python oracle are frozen before
+  implementation starts.
 - Each implementation receives the same prompt, acceptance criteria, and
   validation commands.
+- Implementation worktrees expose the visible contract but not the held-out
+  Python oracle.
 - Do not cross-port code or design details until all three attempts for that
   feature are complete.
 - Dependency additions are allowed, but each addition is scored for maintenance
   and runtime cost.
 - All commits get the standard adversarial code review before publication.
-- The shared Python tests, native tests, and PR description must identify known
-  limitations explicitly.
+- The visible contract, native tests, held-out oracle result, and PR description
+  must identify known limitations explicitly.
 
 ## Metrics To Capture
 
@@ -261,7 +273,7 @@ Suggested fields:
   "base_sha": "example",
   "start_time": "2026-05-14T00:00:00Z",
   "first_native_tests_passing_time": "2026-05-14T00:00:00Z",
-  "first_shared_python_passing_time": "2026-05-14T00:00:00Z",
+  "held_out_oracle_passing_time": "2026-05-14T00:00:00Z",
   "review_ready_time": "2026-05-14T00:00:00Z",
   "input_tokens": null,
   "output_tokens": null,
@@ -278,7 +290,7 @@ Suggested fields:
   "dependencies_added": [],
   "checks": {
     "native": "pass",
-    "shared_python": "pass",
+    "held_out_python_oracle": "pass",
     "mise_check": "pass",
     "gitleaks": "pass"
   },
@@ -320,8 +332,11 @@ reports both `total_input + 5 * output` and `uncached_input + 5 * output` until
 provider-specific cached-input pricing is known.
 
 The first probe is expected to be boring: it should run a few static commands,
-produce no repository state change, and match expected action counts. If it does
-not match, fix the harness before launching real bakeoff agents.
+produce no repository state change, and match expected action counts. Real
+bakeoff runs should usually produce at least one new commit, so the harness
+tracks final `HEAD`, commits added, and diff stats from base to final in
+addition to dirty worktree status. If those expectations do not match, fix the
+harness before launching real bakeoff agents.
 
 Use `--artifact-dir` for calibration and real bakeoff runs so full command
 outputs and the exact input blob are available for later tokenization and audit.
@@ -390,7 +405,7 @@ Score each implementation out of 100 after the post-commit adversarial review.
 
 | Dimension | Points | What good looks like |
 |---|---:|---|
-| Shared correctness | 20 | Passes all shared Python scenarios and properties without backend-specific exceptions. |
+| Held-out correctness | 20 | Passes all held-out Python backend scenarios and properties without backend-specific exceptions. |
 | Native test translation | 15 | Native tests express the same behavior and can fail for real regressions. |
 | Feature completeness | 15 | Implements the full frozen spec, including edge cases and receipt fields. |
 | Code hygiene and maintainability | 15 | Clear structure, small interfaces, low special-casing, idiomatic backend style. |
@@ -414,7 +429,7 @@ After each bakeoff:
   feature winner.
 - If scores are within 5 points, treat the bakeoff as inconclusive and record
   the differentiators instead of forcing a winner.
-- If a backend fails shared Python tests or has unresolved security blockers,
+- If a backend fails the held-out Python oracle or has unresolved security blockers,
   it cannot win that bakeoff.
 
 After all three bakeoffs:
@@ -435,10 +450,10 @@ After all three bakeoffs:
 Do not launch all nine implementation jobs until the measurement process has
 proved itself on real work.
 
-1. Freeze the shared Python tests and base `main` SHA.
+1. Freeze the visible contract, held-out Python oracle, and base `main` SHA.
 2. Launch the first wave as three concurrent jobs for one bakeoff feature, one
    per backend.
-3. Review the outputs, metrics, native test translations, shared Python
+3. Review the outputs, metrics, native test translations, held-out oracle
    failures/passes, and post-commit adversarial reviews.
 4. If the data is comparable and the instructions produced useful work, launch
    the remaining six jobs.
