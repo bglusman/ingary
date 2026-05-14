@@ -1,0 +1,66 @@
+[
+  {
+    "name": "fast_success",
+    "queue_capacity": 4,
+    "on_full": "dead_letter",
+    "sink_schedule": ["success"],
+    "decisions": [
+      {"decision_id": "a1", "triggers_alert": true, "idempotency_key": "alert-a"}
+    ],
+    "expected_outcomes": ["queued"]
+  },
+  {
+    "name": "duplicate_idempotency_key_suppressed",
+    "queue_capacity": 4,
+    "on_full": "dead_letter",
+    "sink_schedule": ["success"],
+    "decisions": [
+      {"decision_id": "a1", "triggers_alert": true, "idempotency_key": "same-alert"},
+      {"decision_id": "a2", "triggers_alert": true, "idempotency_key": "same-alert"}
+    ],
+    "expected_outcomes": ["queued", "duplicate_suppressed"]
+  },
+  {
+    "name": "queue_full_dead_letters",
+    "queue_capacity": 1,
+    "on_full": "dead_letter",
+    "sink_schedule": ["timeout"],
+    "decisions": [
+      {"decision_id": "a1", "triggers_alert": true, "idempotency_key": "alert-a"},
+      {"decision_id": "a2", "triggers_alert": true, "idempotency_key": "alert-b"}
+    ],
+    "expected_outcomes": ["queued", "dead_lettered"]
+  },
+  {
+    "name": "queue_full_drops",
+    "queue_capacity": 1,
+    "on_full": "drop",
+    "sink_schedule": ["timeout"],
+    "decisions": [
+      {"decision_id": "a1", "triggers_alert": true, "idempotency_key": "alert-a"},
+      {"decision_id": "a2", "triggers_alert": true, "idempotency_key": "alert-b"}
+    ],
+    "expected_outcomes": ["queued", "dropped"]
+  },
+  {
+    "name": "queue_full_fail_closed",
+    "queue_capacity": 0,
+    "on_full": "fail_closed",
+    "sink_schedule": ["timeout"],
+    "decisions": [
+      {"decision_id": "a1", "triggers_alert": true, "idempotency_key": "alert-a"}
+    ],
+    "expected_outcomes": ["failed_closed"]
+  },
+  {
+    "name": "non_alerting_decision_does_not_enqueue",
+    "queue_capacity": 1,
+    "on_full": "dead_letter",
+    "sink_schedule": ["success"],
+    "decisions": [
+      {"decision_id": "a1", "triggers_alert": false, "idempotency_key": "alert-a"},
+      {"decision_id": "a2", "triggers_alert": true, "idempotency_key": "alert-b"}
+    ],
+    "expected_outcomes": ["not_alerting", "queued"]
+  }
+]
