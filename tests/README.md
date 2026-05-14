@@ -134,6 +134,38 @@ serially. `POST /__test/config` intentionally mutates prototype state, so
 parallel probes against the same process can invalidate each other's model
 namespace assumptions.
 
+## Bakeoff BDD And Property Tests
+
+The bakeoff suites use `uv`, `pytest`, `hypothesis`, and `jsonschema`.
+
+Pure oracle/property tests:
+
+```bash
+uv run pytest -m 'not backend and not live_llm' tests/test_bakeoff_*.py
+```
+
+Backend contract tests against a running prototype:
+
+```bash
+uv run pytest -m 'backend and not live_llm' tests/test_bakeoff_*.py \
+  --base-url http://127.0.0.1:8787
+```
+
+The first bakeoff suites cover:
+
+- structured-output governance as a non-terminal guard loop, including guard
+  count, guard type, attempt budget, eventual success, and budget exhaustion
+- recent-history governance scoped to a single session/run, including
+  out-of-scope isolation, irrelevant in-scope non-matches, deterministic
+  eviction, concurrent writes within one session, and normal request traffic
+  feeding history policies without manual cache insertion
+- async alert sink behavior, including queue capacity, idempotency, dead-letter
+  behavior, fail-closed full queues, and receipt-level delivery evidence
+
+Live-LLM realism tests should be marked `live_llm` and excluded from default CI.
+When a live run finds a useful counterexample, pin the prompt, model/config, and
+observed output as a deterministic mocked-model regression fixture.
+
 ## BDD Scenarios
 
 `bdd_scenarios.py` is ordinary behavior-driven documentation as executable
