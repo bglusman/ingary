@@ -1,0 +1,448 @@
+---
+layout: default
+title: Prototype Bakeoff Plan
+description: Experiment plan for choosing Ingary's primary backend prototype using comparable feature implementations.
+---
+
+# Prototype Bakeoff Plan
+
+Ingary currently keeps Go, Rust, and Elixir backends alive so the first durable
+implementation can be chosen from evidence instead of preference. The bakeoff
+turns that intention into a controlled experiment: three non-trivial governance
+features, implemented independently in all three prototypes, scored with a
+rubric defined before implementation begins.
+
+The goal is not to prove that one language is universally better. The goal is
+to identify which prototype gives Ingary the best combination of correctness,
+authoring semantics, runtime behavior, testability, maintenance quality, and
+delivery cost for the product we are actually building.
+
+## Experiment Matrix
+
+Each row is one bakeoff feature. Each feature is implemented once in each
+backend, for nine implementation attempts total.
+
+| Bakeoff | Go | Rust | Elixir | Primary signal |
+|---|---|---|---|---|
+| Portable structured-output governor | `bakeoff/json-go` | `bakeoff/json-rust` | `bakeoff/json-elixir` | Policy semantics, provider normalization, receipt quality |
+| Concurrent recent-history governor | `bakeoff/history-go` | `bakeoff/history-rust` | `bakeoff/history-elixir` | Correctness under load, cache contention, deterministic eviction |
+| Async alert sink with backpressure | `bakeoff/alerts-go` | `bakeoff/alerts-rust` | `bakeoff/alerts-elixir` | Supervision, latency isolation, retries, queue behavior |
+
+TTSR is not a fair first bakeoff because Rust already has a working spike and
+the starting line is not equivalent. It should remain a later stream-governance
+follow-up after the bakeoff chooses or narrows the primary implementation.
+
+## Feature Specs
+
+### 1. Portable Structured-Output Governor
+
+This is not just "validate JSON." Providers increasingly support structured
+outputs, but they expose different schema subsets, strictness levels, streaming
+constraints, refusal behavior, and cache/compile latency. Ingary's
+differentiator is provider-portable output governance.
+
+Required behavior:
+
+- configure multiple acceptable output shapes or schema versions
+- select a provider path: native strict schema when available, JSON mode plus
+  validation when available, or plain completion plus repair when necessary
+- tolerate policy-declared nullable, optional, missing, or defaultable fields
+- validate semantic business rules that provider JSON-schema modes cannot
+  guarantee
+- treat validation failure as a non-terminal guard event when policy permits
+  repair, redaction, prompt refinement, or regeneration
+- stop looping only when generation succeeds, a configured global attempt budget
+  is exhausted, or a configured per-rule failure budget is exhausted
+- record receipt events for selected schema, provider capability path,
+  validation errors, guard events, repair attempts, retry count, and final
+  status
+
+The shared tests should include valid output, syntax-invalid output,
+schema-invalid output, semantically-invalid output, schema alternative
+selection, tolerated optional/missing fields, recovery after one or more guard
+events, and exhausted-loop failure.
+
+### 2. Concurrent Recent-History Governor
+
+This extends the policy cache into a realistic runtime governor. It is designed
+to expose cache architecture, concurrency, latency, and eviction differences.
+The initial bakeoff should limit history queries to a single session/run scope.
+Cross-session history search is deferred until the product model can specify
+which caller, tenant, project, consent, and retention boundaries make such
+queries safe and useful.
+
+Required behavior:
+
+- count matching request, response, tool-call, or receipt events over a bounded
+  recent window within the current session/run scope
+- support regex/literal match conditions over recent event fields
+- trigger route switch, alert, or reminder injection when thresholds trip
+- isolate session/run scopes so events from one scope never influence decisions
+  in another scope
+- evict deterministically by timestamp and sequence under concurrent writes in
+  the same session/run scope
+- preserve request-path p95/p99 latency under concurrent cache load
+- expose receipt events explaining count, scope, threshold, action, and cache
+  working set size
+
+The shared tests should include scope isolation, regex match counts, equivalent
+events arriving concurrently within one session, deterministic eviction,
+threshold non-trigger, threshold trigger, irrelevant in-scope events that do not
+match the rule, out-of-scope events that would match but must not count, and
+latency/load probes.
+
+### 3. Async Alert Sink With Backpressure
+
+Alerting is a first-class governance action and a good way to test runtime
+supervision and failure isolation. The request path should remain bounded even
+when an alert sink is slow or failing.
+
+Required behavior:
+
+- enqueue policy alert events to a mock webhook/sink without blocking the
+  request path beyond a configured budget
+- retry failed sink deliveries with bounded attempts
+- expose queue depth, dropped/dead-lettered alerts, retry counts, and delivery
+  status in admin or receipt surfaces
+- support graceful shutdown without losing accepted in-memory alerts in tests
+- apply backpressure policy when the queue is full: drop, dead-letter, or fail
+  closed according to config
+- keep alert delivery side effects idempotent by alert id
+
+The shared tests should include fast sink, slow sink, failing-then-recovering
+sink, full queue behavior, duplicate alert idempotency, and request-latency
+budget under sink pressure.
+
+## Guard Loop Semantics
+
+TTSR-style rejection is a guard event, not necessarily a terminal outcome. A
+policy can stop current generation, preserve safe output, redact unsafe spans,
+inject validation feedback, restart from a different point, switch model or
+provider, or escalate to a terminal block. Tests should therefore avoid
+asserting only "rejected" or "accepted" when the behavior under test is a
+governed loop.
+
+For governed-loop features, the shared contract should assert:
+
+- number and type of guard events before final completion
+- whether each guard event stopped streaming, redacted output, preserved partial
+  output, refined the prompt, restarted generation, switched model, or blocked
+- final outcome: successful completion, successful completion with redactions,
+  terminal block, or exhausted attempt budget
+- global attempt count and per-rule failure count
+- deterministic behavior when multiple guards fire on the same generation step
+- receipt ordering across model output, guard trigger, repair action,
+  regeneration attempt, and final outcome
+- bounded loops: no policy can retry forever, and exhausting the budget produces
+  an explicit terminal receipt
+
+Mocked-model tests should drive canned sequences such as invalid output followed
+by valid repaired output, repeated invalid output until budget exhaustion,
+partial streaming output that is stopped mid-span, and multiple rules firing on
+one response. Live-LLM tests are useful during development for realism and input
+diversity, but they should be marked explicitly, excluded from default CI, and
+treated as exploratory unless their prompts, model, seed/config, and observed
+counterexamples are captured as regression fixtures.
+
+## Test-First Workflow
+
+Every bakeoff starts with shared tests before implementation branches are
+created. The Python tests are the contract-level source of truth.
+
+1. Write `tests/bakeoff_<feature>.py` with fixtures, BDD-style scenarios,
+   generated/property cases where useful, and a clear skip message for
+   unsupported endpoints.
+2. Add example config fixtures under `tests/fixtures/<feature>/`.
+3. Confirm the shared Python tests fail against all three backends for the
+   expected missing-feature reasons.
+4. Hold a human review gate on the shared Python tests before implementation
+   starts. The review should judge whether the scenarios, data generation,
+   edge cases, and failure messages are strong enough to guide the bakeoff.
+5. Create the three implementation branches from the same `main` commit.
+6. In each branch, translate the shared scenarios into native tests first:
+   Go `testing`, Rust unit/property tests, Elixir ExUnit/StreamData.
+7. Implement until native tests pass.
+8. Run the same Python tests against the backend as the final correctness gate.
+9. Run the normal repo checks and collect metrics.
+
+Native tests are part of the scoring. A backend should not get full credit for
+passing the Python harness if the native test translation is shallow or tests
+implementation details instead of behavior.
+
+## Shared Test Quality Bar
+
+The shared Python tests are not smoke tests. They are the behavioral contract
+for the bakeoff and should be reviewed before kickoff. A weak shared test suite
+will produce misleading implementation scores.
+
+Each bakeoff test suite should include:
+
+- hand-written BDD scenarios for the main user-visible workflows
+- generated/property cases for state spaces where example tests are too narrow
+- negative cases that prove the feature can fail for the right reason
+- malformed, partial, duplicate, out-of-order, and boundary inputs where the
+  feature accepts event streams or provider outputs
+- adversarial cases drawn from real provider behavior where possible, such as
+  refusals, truncation, markdown-wrapped JSON, schema drift, delayed sinks,
+  duplicate delivery, and concurrent event races
+- minimal counterexample output that can be pinned as a regression fixture
+- assertions on receipts and traces, not just HTTP status and final content
+- assertions on guard-loop path shape where relevant: guard count, guard type,
+  repair action, attempt budget, and eventual success or terminal stop
+- explicit checks that unsupported or unsafe configurations fail closed
+- stable seeds and optional seed override for reproduction
+- clear failure messages that identify the policy, scenario, generated input,
+  and expected invariant
+- a clear split between deterministic mocked-model tests and optional live-LLM
+  realism tests that do not run in default CI
+
+Before writing each shared suite, inspect relevant real-world open source test
+suites and provider examples for style and edge cases. Useful sources include
+JSON Schema test suites for structured-output behavior, webhook/retry queue
+tests for alert sinks, and cache/concurrency tests from production-grade
+libraries. Borrow test ideas and data shapes, not project-specific code, unless
+the license and attribution path are explicitly acceptable.
+
+The kickoff checklist for each shared suite:
+
+| Gate | Requirement |
+|---|---|
+| Scenario coverage | At least one success, one retry/recovery, one hard failure, and one configuration rejection. |
+| Generated coverage | Property/generative tests cover meaningful ranges rather than a few constants. |
+| Cross-backend neutrality | Tests assert the public contract and receipts, not backend internals. |
+| Reviewability | The user can read the fixtures and understand what behavior is being required. |
+| Failure evidence | A failing case prints enough input, receipt, and policy context to diagnose the issue. |
+| Rigor review | The suite is reviewed and accepted before any implementation branch starts. |
+
+## Controls
+
+- All implementation branches start from the same `main` SHA.
+- The feature spec and shared Python tests are frozen before implementation
+  starts.
+- Each implementation receives the same prompt, acceptance criteria, and
+  validation commands.
+- Do not cross-port code or design details until all three attempts for that
+  feature are complete.
+- Dependency additions are allowed, but each addition is scored for maintenance
+  and runtime cost.
+- All commits get the standard adversarial code review before publication.
+- The shared Python tests, native tests, and PR description must identify known
+  limitations explicitly.
+
+## Metrics To Capture
+
+Each implementation attempt writes a small result artifact:
+`docs/bakeoff-results/<feature>-<backend>.json`.
+
+Suggested fields:
+
+```json
+{
+  "feature": "portable_structured_output_governor",
+  "backend": "rust",
+  "branch": "bakeoff/json-rust",
+  "base_sha": "example",
+  "start_time": "2026-05-14T00:00:00Z",
+  "first_native_tests_passing_time": "2026-05-14T00:00:00Z",
+  "first_shared_python_passing_time": "2026-05-14T00:00:00Z",
+  "review_ready_time": "2026-05-14T00:00:00Z",
+  "input_tokens": null,
+  "output_tokens": null,
+  "cached_input_tokens": null,
+  "uncached_input_tokens": null,
+  "cache_hit_rate": null,
+  "reasoning_output_tokens": null,
+  "weighted_total_input_plus_5x_output": null,
+  "weighted_uncached_input_plus_5x_output": null,
+  "tool_calls": null,
+  "files_changed": 0,
+  "lines_added": 0,
+  "lines_deleted": 0,
+  "dependencies_added": [],
+  "checks": {
+    "native": "pass",
+    "shared_python": "pass",
+    "mise_check": "pass",
+    "gitleaks": "pass"
+  },
+  "known_limitations": []
+}
+```
+
+Token usage is useful when available. Capture total input, cached input,
+uncached input, output, and reasoning output separately. Output tokens are
+weighted more heavily than input tokens in the initial cost proxy. Cached input
+tokens should not be hidden inside total input because cache hit rate may make
+otherwise-expensive runs materially cheaper and may reward stable prompts,
+shared context, and repeated test harness setup.
+
+If exact usage is not available, use wall-clock time, tool calls, review
+iterations, dependency churn, and diff size as cost proxies.
+
+Before real bakeoff branches start, run a tiny instrumentation probe to calibrate
+what the harness can actually capture. The probe should use deterministic static
+actions with known expected counts rather than an implementation task. Its job
+is to test the measurement system itself: wall-clock timing, command counts,
+input/output token estimates, weighted token cost, git diff effects, command
+output size, and expected-versus-observed comparisons.
+
+Initial local probe:
+
+```sh
+python3 scripts/bakeoff_harness.py \
+  tests/fixtures/bakeoff_instrumentation/toy_static_actions.json \
+  --output /tmp/ingary-bakeoff-instrumentation.json \
+  --artifact-dir /tmp/ingary-bakeoff-instrumentation-artifacts
+```
+
+This harness intentionally supports approximate token counting without a
+provider. When real agent runs are used, prefer direct provider or tool usage
+metadata. If an external runner such as opencode is used, capture its session
+export or stats output alongside the harness result. The initial cost proxy
+reports both `total_input + 5 * output` and `uncached_input + 5 * output` until
+provider-specific cached-input pricing is known.
+
+The first probe is expected to be boring: it should run a few static commands,
+produce no repository state change, and match expected action counts. If it does
+not match, fix the harness before launching real bakeoff agents.
+
+Use `--artifact-dir` for calibration and real bakeoff runs so full command
+outputs and the exact input blob are available for later tokenization and audit.
+The JSON summary keeps previews and paths; the artifact directory preserves the
+raw material.
+
+Real-model Codex probe:
+
+```sh
+python3 scripts/bakeoff_harness.py \
+  tests/fixtures/bakeoff_instrumentation/codex_real_model_no_tool.json \
+  --output /tmp/ingary-codex-real-model-probe.json \
+  --artifact-dir /tmp/ingary-codex-real-model-artifacts \
+  --timeout 120
+```
+
+`codex exec --json` emits `turn.completed.usage`; the harness parses those
+events into `model_usage` and derives cached/uncached input, cache hit rate,
+output, reasoning output, and weighted token proxies. That is the preferred
+accounting path for bakeoff runs when Codex is the agent runner.
+
+A successful GPT-5.5 medium no-tool probe on 2026-05-14 captured:
+
+- `input_tokens`: 22,332
+- `cached_input_tokens`: 6,528
+- `uncached_input_tokens`: 15,804
+- `cache_hit_rate`: 29.2%
+- `output_tokens`: 35
+- `weighted_total_input_plus_5x_output`: 22,507
+- `weighted_uncached_input_plus_5x_output`: 15,979
+
+Initial calibration results:
+
+- static local probes can reliably capture wall time, command count, command
+  duration, command output size, git status before/after, untracked-file count,
+  and expected-versus-observed comparisons
+- local token counts are estimates unless the runner exposes provider usage;
+  the fallback tokenizer is acceptable for relative calibration but not billing
+  truth
+- command output can dominate the output-token proxy, so harness plans should
+  avoid noisy commands unless output volume is intentionally part of the
+  measurement
+- an isolated temp-git mutation probe verified that the harness can detect
+  repository state changes when commands actually modify tracked files
+- subagent self-reporting should be treated as supplemental evidence; prefer
+  runner-level logs, provider usage metadata, or exported sessions when
+  available
+- a toy Codex subagent could report command count and whether it edited files,
+  but could not self-report reliable wall-clock timestamps, stdout/stderr byte
+  counts, or provider cost; this makes external harness instrumentation
+  mandatory for bakeoff comparisons
+- agent bakeoff runs should preferably use the same model family as this
+  planning work, such as GPT-5.5 at medium or high reasoning effort, so runner
+  differences do not swamp backend differences
+- opencode is available locally and exposes `opencode run --format json`,
+  `opencode export`, and `opencode stats`, but an initial no-tool probe used
+  opencode's default provider path and failed with missing opencode API
+  credentials; do not treat that mode as representative
+- opencode is only interesting for bakeoff execution if it can be configured to
+  call the same GPT-5.5/OpenAI-compatible model path or an Ingary proxy that
+  itself forwards to that model while preserving per-run telemetry
+
+## Scoring Rubric
+
+Score each implementation out of 100 after the post-commit adversarial review.
+
+| Dimension | Points | What good looks like |
+|---|---:|---|
+| Shared correctness | 20 | Passes all shared Python scenarios and properties without backend-specific exceptions. |
+| Native test translation | 15 | Native tests express the same behavior and can fail for real regressions. |
+| Feature completeness | 15 | Implements the full frozen spec, including edge cases and receipt fields. |
+| Code hygiene and maintainability | 15 | Clear structure, small interfaces, low special-casing, idiomatic backend style. |
+| Runtime behavior | 10 | Good latency, bounded resource use, clean shutdown/backpressure behavior where relevant. |
+| Observability and receipts | 10 | Explains decisions, actions, retries, failures, and policy state clearly. |
+| Security and safety | 10 | No secret leakage, fail-closed where appropriate, bounded untrusted inputs. |
+| Delivery cost | 5 | Low wall-clock time, low cached-adjusted token/tool use, low dependency churn, few review fixes. |
+
+Tie-breakers:
+
+- A severe security or correctness issue caps the score at 60 until fixed.
+- Shallow tests cap the score at 75 even if the feature appears to work.
+- Hidden provider-specific behavior that breaks portability caps the score at
+  80 for portable-governance features.
+
+## Decision Gates
+
+After each bakeoff:
+
+- If one backend wins by 10 or more points and has no blockers, mark it the
+  feature winner.
+- If scores are within 5 points, treat the bakeoff as inconclusive and record
+  the differentiators instead of forcing a winner.
+- If a backend fails shared Python tests or has unresolved security blockers,
+  it cannot win that bakeoff.
+
+After all three bakeoffs:
+
+- If the same backend wins at least two bakeoffs, make it the primary prototype
+  for the next implementation phase.
+- If different backends win different bakeoffs, compare the winning categories
+  to the product roadmap. Correctness and policy-authoring semantics should
+  outrank raw throughput.
+- If Elixir wins load/backpressure but not policy semantics, consider keeping it
+  as a supervised sidecar or alert/cache runtime candidate while another
+  backend owns core policy semantics.
+- If no backend clearly wins, run one final tie-breaker: code-first Starlark AST
+  and trace visualization in the two strongest backends.
+
+## Execution Sequence
+
+Do not launch all nine implementation jobs until the measurement process has
+proved itself on real work.
+
+1. Freeze the shared Python tests and base `main` SHA.
+2. Launch the first wave as three concurrent jobs for one bakeoff feature, one
+   per backend.
+3. Review the outputs, metrics, native test translations, shared Python
+   failures/passes, and post-commit adversarial reviews.
+4. If the data is comparable and the instructions produced useful work, launch
+   the remaining six jobs.
+5. If the first wave exposes bad scoring, weak tests, unclear instructions, or
+   untrustworthy instrumentation, revise the harness and rerun a smaller wave
+   before spending the full bakeoff budget.
+
+## Baseline Parity Audit Template
+
+Before the first bakeoff, fill this table from live code:
+
+| Capability | Go | Rust | Elixir | Notes |
+|---|---|---|---|---|
+| OpenAI-compatible chat endpoint |  |  |  |  |
+| Synthetic simulate endpoint |  |  |  |  |
+| Config mutation endpoint |  |  |  |  |
+| Provider target config |  |  |  |  |
+| Env/fnox credential references |  |  |  |  |
+| Policy cache endpoints |  |  |  |  |
+| `history_threshold` request policy |  |  |  |  |
+| Stream governance/TTSR |  |  |  |  |
+| Native property tests |  |  |  |  |
+| Shared Python probes |  |  |  |  |
+| Load-test harness |  |  |  |  |

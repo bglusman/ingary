@@ -1,0 +1,18 @@
+[project]
+name = "ingary-shared-tests"
+version = "0.1.0"
+description = "Shared Python BDD and property tests for Ingary prototype bakeoffs."
+requires-python = ">=3.10"
+dependencies = [
+  "hypothesis>=6.146.0",
+  "jsonschema>=4.25.0",
+  "pytest>=8.4.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+markers = [
+  "backend: requires a running Ingary backend",
+  "live_llm: optional live model/provider realism checks, not for default CI",
+]
