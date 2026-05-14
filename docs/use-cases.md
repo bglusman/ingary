@@ -121,3 +121,14 @@ Falsifiable value:
 - safer prompt iteration
 - less duplicated prompt logic in agent code
 - easier rollback when a prompt change regresses behavior
+
+## Policy Engine Implications
+
+These examples need different data scopes. Structured output can run on the
+current attempt. Tool-loop detection needs recent events from the same run or
+session. DOS controls eventually need tenant/user-level windows. Ingary should
+therefore make policy state explicit and bounded instead of giving policy code
+arbitrary access to receipts or storage.
+
+See [Policy Engine MVP](policy-engine.html) for the proposed initial phases,
+state scopes, and action model.
