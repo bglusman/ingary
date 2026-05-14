@@ -66,9 +66,13 @@ type StructuredOutput struct {
 }
 
 type GovernanceExample struct {
-	ID     string `json:"id"`
-	Kind   string `json:"kind"`
-	Action string `json:"action"`
+	ID       string `json:"id"`
+	Kind     string `json:"kind"`
+	Action   string `json:"action"`
+	Contains string `json:"contains,omitempty"`
+	Message  string `json:"message,omitempty"`
+	Severity string `json:"severity,omitempty"`
+	Reminder string `json:"reminder,omitempty"`
 }
 
 type ChatCompletionRequest struct {
@@ -195,9 +199,10 @@ func (s *server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	caller := extractCaller(r, req.Metadata)
 	req = applyPromptTransforms(req, cfg)
+	policy := evaluateRequestPolicies(&req, cfg)
 	estimate := estimatePromptTokens(req.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
-	receipt, err := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg)
+	receipt, err := s.recordReceipt(true, model, caller, req, estimate, selected, skipped, "completed", cfg, policy)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to build receipt", "server_error", "receipt_failed")
 		return
@@ -286,9 +291,10 @@ func (s *server) handleSyntheticSimulate(w http.ResponseWriter, r *http.Request)
 
 	caller := extractCaller(r, body.Request.Metadata)
 	body.Request = applyPromptTransforms(body.Request, cfg)
+	policy := evaluateRequestPolicies(&body.Request, cfg)
 	estimate := estimatePromptTokens(body.Request.Messages)
 	selected, skipped := selectProviderModel(estimate, cfg)
-	receipt, err := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg)
+	receipt, err := s.recordReceipt(false, model, caller, body.Request, estimate, selected, skipped, "simulated", cfg, policy)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to build receipt", "server_error", "receipt_failed")
 		return
@@ -401,7 +407,7 @@ func (s *server) currentConfig() TestConfig {
 	return s.config
 }
 
-func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, skipped []map[string]any, status string, cfg TestConfig) (Receipt, error) {
+func (s *server) recordReceipt(callProvider bool, model string, caller CallerContext, req ChatCompletionRequest, estimate int, selected string, skipped []map[string]any, status string, cfg TestConfig, policy PolicyResult) (Receipt, error) {
 	receiptID := "rcpt_" + randomHex(8)
 	request := map[string]any{
 		"model":                   req.Model,
@@ -419,6 +425,7 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 		"skipped":                 skipped,
 		"rule":                    "select the smallest configured context window that fits the estimated prompt",
 		"governance":              cfg.Governance,
+		"policy_actions":          policy.Actions,
 	}
 	attempts := []map[string]any{{
 		"provider_model":  selected,
@@ -429,7 +436,11 @@ func (s *server) recordReceipt(callProvider bool, model string, caller CallerCon
 	final := map[string]any{
 		"status":              status,
 		"selected_model":      selected,
+		"alert_count":         policy.AlertCount,
 		"receipt_recorded_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if len(policy.Events) > 0 {
+		final["events"] = policy.Events
 	}
 
 	receipt := Receipt{
@@ -600,6 +611,79 @@ func applyPromptTransforms(req ChatCompletionRequest, cfg TestConfig) ChatComple
 	}
 	req.Messages = messages
 	return req
+}
+
+type PolicyResult struct {
+	Actions    []map[string]any
+	Events     []map[string]any
+	AlertCount int
+}
+
+func evaluateRequestPolicies(req *ChatCompletionRequest, cfg TestConfig) PolicyResult {
+	var result PolicyResult
+	text := strings.ToLower(requestText(req.Messages))
+	for _, rule := range cfg.Governance {
+		if rule.Kind != "request_guard" && rule.Kind != "request_transform" && rule.Kind != "receipt_annotation" {
+			continue
+		}
+		needle := strings.ToLower(strings.TrimSpace(rule.Contains))
+		if needle == "" || !strings.Contains(text, needle) {
+			continue
+		}
+		message := strings.TrimSpace(rule.Message)
+		if message == "" {
+			message = "request policy matched"
+		}
+		severity := strings.TrimSpace(rule.Severity)
+		if severity == "" {
+			severity = "info"
+		}
+		action := map[string]any{
+			"rule_id":  rule.ID,
+			"kind":     rule.Kind,
+			"action":   rule.Action,
+			"matched":  true,
+			"message":  message,
+			"severity": severity,
+		}
+		result.Actions = append(result.Actions, action)
+		switch rule.Action {
+		case "escalate":
+			result.AlertCount++
+			result.Events = append(result.Events, map[string]any{
+				"type":     "policy.alert",
+				"rule_id":  rule.ID,
+				"message":  message,
+				"severity": severity,
+			})
+		case "inject_reminder_and_retry", "transform":
+			reminder := strings.TrimSpace(rule.Reminder)
+			if reminder == "" {
+				reminder = message
+			}
+			req.Messages = append(req.Messages, ChatMessage{Role: "system", Name: "ingary_policy_reminder", Content: reminder})
+			action["reminder_injected"] = true
+		case "annotate":
+			result.Events = append(result.Events, map[string]any{
+				"type":     "policy.annotated",
+				"rule_id":  rule.ID,
+				"message":  message,
+				"severity": severity,
+			})
+		}
+	}
+	return result
+}
+
+func requestText(messages []ChatMessage) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(message.Role)
+		builder.WriteByte('\n')
+		builder.WriteString(contentString(message.Content))
+		builder.WriteByte('\n')
+	}
+	return builder.String()
 }
 
 func completeSelectedModel(selected string, req ChatCompletionRequest, cfg TestConfig) (string, string, int64, error) {

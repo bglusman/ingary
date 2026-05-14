@@ -203,7 +203,8 @@ async fn chat_completions(
             cfg.synthetic_model, SYNTHETIC_PREFIX, cfg.synthetic_model
         ))
     })?;
-    let request = apply_prompt_transforms(request, &cfg);
+    let mut request = apply_prompt_transforms(request, &cfg);
+    let policy = evaluate_request_policies(&mut request, &cfg);
     let caller = caller_from(headers.clone(), request.metadata.as_ref());
     let decision = select_route(&request, &cfg);
     let receipt = build_receipt(
@@ -213,6 +214,7 @@ async fn chat_completions(
         decision.clone(),
         "completed",
         &cfg,
+        policy,
     );
 
     state.receipt_store.insert_receipt(receipt.clone()).await;
@@ -272,6 +274,7 @@ async fn simulate(
         ))
     })?;
     request.request = apply_prompt_transforms(request.request, &cfg);
+    let policy = evaluate_request_policies(&mut request.request, &cfg);
     let caller = caller_from(headers, request.request.metadata.as_ref());
     let decision = select_route(&request.request, &cfg);
     let receipt = build_receipt(
@@ -281,6 +284,7 @@ async fn simulate(
         decision,
         "simulated",
         &cfg,
+        policy,
     );
 
     state.receipt_store.insert_receipt(receipt.clone()).await;
@@ -489,6 +493,115 @@ fn apply_prompt_transforms(
     request
 }
 
+#[derive(Debug, Clone, Default)]
+struct PolicyResult {
+    actions: Vec<Value>,
+    events: Vec<Value>,
+    alert_count: u64,
+}
+
+fn evaluate_request_policies(
+    request: &mut ChatCompletionRequest,
+    cfg: &TestConfig,
+) -> PolicyResult {
+    let mut result = PolicyResult::default();
+    let text = request_text(&request.messages).to_lowercase();
+    for rule in &cfg.governance {
+        let kind = rule.get("kind").and_then(Value::as_str).unwrap_or_default();
+        if !matches!(
+            kind,
+            "request_guard" | "request_transform" | "receipt_annotation"
+        ) {
+            continue;
+        }
+        let contains = rule
+            .get("contains")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(contains) = contains else { continue };
+        if !text.contains(&contains.to_lowercase()) {
+            continue;
+        }
+        let rule_id = rule.get("id").and_then(Value::as_str).unwrap_or("policy");
+        let action = rule
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("annotate");
+        let message = rule
+            .get("message")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("request policy matched");
+        let severity = rule
+            .get("severity")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("info");
+        let mut action_record = json!({
+            "rule_id": rule_id,
+            "kind": kind,
+            "action": action,
+            "matched": true,
+            "message": message,
+            "severity": severity
+        });
+        match action {
+            "escalate" => {
+                result.alert_count += 1;
+                result.events.push(json!({
+                    "type": "policy.alert",
+                    "rule_id": rule_id,
+                    "message": message,
+                    "severity": severity
+                }));
+            }
+            "inject_reminder_and_retry" | "transform" => {
+                let reminder = rule
+                    .get("reminder")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or(message);
+                request.messages.push(ChatMessage {
+                    role: "system".to_string(),
+                    content: Value::String(reminder.to_string()),
+                    name: Some("ingary_policy_reminder".to_string()),
+                    extra: HashMap::new(),
+                });
+                if let Value::Object(ref mut object) = action_record {
+                    object.insert("reminder_injected".to_string(), Value::Bool(true));
+                }
+            }
+            "annotate" => {
+                result.events.push(json!({
+                    "type": "policy.annotated",
+                    "rule_id": rule_id,
+                    "message": message,
+                    "severity": severity
+                }));
+            }
+            _ => {}
+        }
+        result.actions.push(action_record);
+    }
+    result
+}
+
+fn request_text(messages: &[ChatMessage]) -> String {
+    let mut text = String::new();
+    for message in messages {
+        text.push_str(&message.role);
+        text.push('\n');
+        match &message.content {
+            Value::String(value) => text.push_str(value),
+            Value::Null => {}
+            other => text.push_str(&other.to_string()),
+        }
+        text.push('\n');
+    }
+    text
+}
+
 fn nonblank(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -506,6 +619,7 @@ fn build_receipt(
     decision: RouteDecision,
     status: &str,
     cfg: &TestConfig,
+    policy: PolicyResult,
 ) -> Receipt {
     let receipt_id = format!("rcpt_{}", Uuid::new_v4());
     let run_id = caller.run_id.as_ref().map(|run_id| run_id.value.clone());
@@ -538,7 +652,8 @@ fn build_receipt(
             "skipped": decision.skipped,
             "reason": decision.reason,
             "rule": "select the smallest configured context window that fits the estimated prompt",
-            "governance": cfg.governance
+            "governance": cfg.governance,
+            "policy_actions": policy.actions
         }),
         attempts: vec![json!({
             "provider_id": decision.selected_model.split('/').next().unwrap_or("mock"),
@@ -550,7 +665,9 @@ fn build_receipt(
         final_result: json!({
             "status": status,
             "selected_model": decision.selected_model,
-            "stream_trigger_count": 0
+            "stream_trigger_count": 0,
+            "alert_count": policy.alert_count,
+            "events": policy.events
         }),
     }
 }

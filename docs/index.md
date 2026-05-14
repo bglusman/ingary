@@ -14,6 +14,7 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
   </p>
   <div class="actions">
     <a class="button" href="vision.html">Read the Vision</a>
+    <a class="button secondary" href="use-cases.html">Use Cases</a>
     <a class="button secondary" href="https://github.com/bglusman/ingary">GitHub</a>
   </div>
 </section>
