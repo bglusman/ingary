@@ -25,7 +25,7 @@ fi
 
 if echo "$staged_files" | grep -qE '^backends/go-ingary/'; then
   note "go test..."
-  (cd backends/go-ingary && go test ./...) || fail "Go checks failed"
+  (cd backends/go-ingary && go test -count=1 ./...) || fail "Go checks failed"
   ok "Go checks clean"
 fi
 

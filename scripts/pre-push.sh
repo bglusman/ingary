@@ -18,7 +18,7 @@ pass() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
 echo "── Go ───────────────────────────────────────────────"
-(cd backends/go-ingary && go test ./...) && pass "go test" || fail "go test"
+(cd backends/go-ingary && go test -count=1 ./...) && pass "go test" || fail "go test"
 
 echo "── Rust ─────────────────────────────────────────────"
 (cd backends/rust-ingary && cargo fmt --check && cargo test) && pass "rust fmt/test" || fail "rust fmt/test"

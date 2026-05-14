@@ -31,6 +31,11 @@ This is a behavioral gate, not a full OpenAPI validator. Later phases should
 add generated OpenAPI schema tests, streaming-specific tests, property tests for
 route graph invariants, and load/backpressure tests.
 
+The probe fuzzes request size and content shape, but it does not currently
+generate arbitrary OpenAPI-valid payloads, invalid request corpora, SSE stream
+framing, provider failures, or policy-cache histories. Treat it as a smoke and
+contract probe, not as coverage proof.
+
 ## Storage/Sink Contract
 
 `storage_contract.py` is the first executable fixture for
@@ -82,6 +87,37 @@ backend, generates requests around context-window thresholds, and checks
 selected targets, skipped targets, receipts, caller provenance, and latency
 against the oracle.
 
+Current generated space:
+
+- 2-6 route targets per generated synthetic model
+- random target context windows from 64 to 12,000 estimated tokens
+- threshold requests at each context boundary and one token around it
+- generated stream-rule markers for the pure buffered-horizon oracle
+- generated request-policy markers with `escalate` governance actions
+- fixed caller dimensions supplied through Ingary headers
+
+Current asserted properties:
+
+- route selection picks the smallest context window that fits the estimate
+- if no target fits, route selection falls back to the largest context window
+- skipped targets are exactly the smaller windows that could not fit
+- model IDs work in both flat and `ingary/` prefixed namespaces
+- receipts preserve selected model, skipped count, and caller provenance
+- matching request governance records a policy action, alert count, and
+  `policy.alert` event
+- pure stream-governance oracle never releases a violating marker before its
+  buffered horizon has had a chance to trigger
+
+Current gaps:
+
+- the stream-governance property is still a pure Python oracle; backend stream
+  TTSR behavior is not implemented or contract-tested yet
+- the generator is deterministic `random`, not Hypothesis/proptest with
+  shrinking
+- negative and malformed policy/config payload generation is shallow
+- HTTP assertions check skipped count, but not the full skipped-target payload
+- policy-cache/history semantics are documented, but not generated yet
+
 As storage and sink adapters come online, the same generator should also build
 sink oracles. For each generated request, tests should assert:
 
@@ -115,3 +151,22 @@ Current scenarios:
 - rejecting unknown model names
 - routing a generated test model by context window when the backend supports
   `POST /__test/config`
+- recording an asynchronous policy alert event when a request guard matches
+
+## Native Backend Tests
+
+The shared Python tests are intentionally backend-neutral. Each prototype also
+needs local tests for its own route, policy, and receipt implementation:
+
+- Go: storage behavior, model normalization, route selection, prompt
+  transforms, request-policy actions, config validation, and a minimal
+  `httptest` chat/receipt flow.
+- Rust: model normalization, route selection, prompt transforms,
+  request-policy actions, caller precedence, receipt filtering, and config
+  validation.
+- Elixir: endpoint behavior, receipt store behavior, policy alert/transform
+  receipts, receipt filters, and invalid dynamic route configs.
+
+CI should run these native tests before the Python contract probes. Go is run
+with `-count=1` so cached local output does not hide whether tests actually
+executed.
