@@ -79,6 +79,8 @@ needs unless the synthetic model asks for more.
    - Inputs: final receipt, policy actions, usage, route attempts.
    - Useful for sinks, analytics, experiments, and non-blocking alerts.
    - Should not mutate the already-returned user result.
+   - Asynchronous human/operator alerts live here unless an earlier phase
+     explicitly returned a blocking approval action.
 
 ## Time-Travel Stream Rewriting
 
@@ -382,6 +384,16 @@ Actions should be phase-limited. For example, `block_final` is legal during
 `output.finalizing`, while `reroute` is legal during `route.selecting` or after
 a failed stream/output attempt, but not after bytes have already been released
 in pass-through mode.
+
+`alert` and `require_human_approval` must not be treated as synonyms:
+
+- `alert` records an event and sends an asynchronous notification sink. It can
+  run after the result is returned and should never imply that Ingary waited for
+  a human response.
+- `require_human_approval` pauses or defers the request, persists resumable
+  state, waits for approve/edit/reject, and needs timeout and idempotency rules.
+  That action is a later feature unless we intentionally build a resumable
+  request lifecycle.
 
 ## MVP Feature Set
 

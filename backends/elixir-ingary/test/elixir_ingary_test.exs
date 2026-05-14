@@ -56,6 +56,87 @@ defmodule ElixirIngaryTest do
     assert get_in(body, ["receipt", "decision", "selected_model"]) == "managed/kimi-k2.6"
   end
 
+  test "request policy records asynchronous alert events" do
+    config = unit_policy_config()
+    assert call(:post, "/__test/config", config).status == 200
+
+    request = %{
+      request: %{
+        model: "ingary/unit-model",
+        messages: [%{role: "user", content: "Looks done; return JSON for the caller"}]
+      }
+    }
+
+    conn = call(:post, "/v1/synthetic/simulate", request)
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "final", "alert_count"]) == 1
+
+    assert [%{"type" => "policy.alert", "rule_id" => "ambiguous-success"}] =
+             get_in(body, ["receipt", "final", "events"])
+
+    assert [%{"rule_id" => "ambiguous-success", "matched" => true}] =
+             get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "request transform policy injects a named reminder into the prompt" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "json-reminder",
+          "kind" => "request_transform",
+          "action" => "inject_reminder_and_retry",
+          "contains" => "return json",
+          "reminder" => "Return only valid JSON."
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "Please return JSON."}]
+        }
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "request", "message_count"]) == 2
+
+    assert [
+             %{
+               "rule_id" => "json-reminder",
+               "matched" => true,
+               "reminder_injected" => true
+             }
+           ] = get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "test config rejects invalid route graph shapes" do
+    prefixed = unit_policy_config() |> Map.put("synthetic_model", "ingary/unit-model")
+    conn = call(:post, "/__test/config", prefixed)
+    assert conn.status == 400
+
+    assert Jason.decode!(conn.resp_body)["error"]["message"] ==
+             "synthetic_model must be unprefixed"
+
+    duplicate =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "tiny/model", "context_window" => 8},
+        %{"model" => "tiny/model", "context_window" => 16}
+      ])
+
+    conn = call(:post, "/__test/config", duplicate)
+    assert conn.status == 400
+    assert Jason.decode!(conn.resp_body)["error"]["message"] == "duplicate target tiny/model"
+  end
+
   test "receipt store exposes storage health metadata" do
     assert ElixirIngary.ReceiptStore.health() == %{
              "kind" => "memory",
@@ -168,6 +249,28 @@ defmodule ElixirIngaryTest do
       Enum.reduce(headers, conn, fn {key, value}, acc -> put_req_header(acc, key, value) end)
     end)
     |> ElixirIngary.Router.call(@opts)
+  end
+
+  defp unit_policy_config do
+    %{
+      "synthetic_model" => "unit-model",
+      "version" => "unit-version",
+      "targets" => [
+        %{"model" => "tiny/model", "context_window" => 8},
+        %{"model" => "medium/model", "context_window" => 32},
+        %{"model" => "large/model", "context_window" => 256}
+      ],
+      "governance" => [
+        %{
+          "id" => "ambiguous-success",
+          "kind" => "request_guard",
+          "action" => "escalate",
+          "contains" => "looks done",
+          "message" => "completion claim needs artifact",
+          "severity" => "warning"
+        }
+      ]
+    }
   end
 
   defp receipt_fixture(receipt_id, created_at, agent_id, opts \\ []) do

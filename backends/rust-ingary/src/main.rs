@@ -1079,3 +1079,247 @@ impl IntoResponse for ApiError {
         (self.status, body).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn chat_request(model: &str, content: &str) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: Some(model.to_string()),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: Value::String(content.to_string()),
+                name: None,
+                extra: HashMap::new(),
+            }],
+            stream: false,
+            metadata: None,
+            extra: HashMap::new(),
+        }
+    }
+
+    fn test_config() -> TestConfig {
+        TestConfig {
+            synthetic_model: "unit-model".to_string(),
+            version: "unit-version".to_string(),
+            targets: vec![
+                RouteTarget {
+                    model: "tiny/model".to_string(),
+                    context_window: 8,
+                },
+                RouteTarget {
+                    model: "medium/model".to_string(),
+                    context_window: 32,
+                },
+                RouteTarget {
+                    model: "large/model".to_string(),
+                    context_window: 256,
+                },
+            ],
+            stream_rules: Vec::new(),
+            prompt_transforms: None,
+            structured_output: None,
+            governance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn normalize_model_accepts_flat_and_ingary_prefixed_ids() {
+        let cfg = test_config();
+
+        assert_eq!(
+            normalize_model(Some("unit-model"), &cfg),
+            Some("unit-model".to_string())
+        );
+        assert_eq!(
+            normalize_model(Some("ingary/unit-model"), &cfg),
+            Some("unit-model".to_string())
+        );
+        assert_eq!(normalize_model(Some("other-model"), &cfg), None);
+    }
+
+    #[test]
+    fn select_route_uses_smallest_context_window_that_fits() {
+        let cfg = test_config();
+
+        let tiny = select_route(&chat_request("unit-model", "short"), &cfg);
+        assert_eq!(tiny.selected_model, "tiny/model");
+        assert!(tiny.skipped.is_empty());
+
+        let medium = select_route(&chat_request("unit-model", &"x".repeat(80)), &cfg);
+        assert_eq!(medium.selected_model, "medium/model");
+        assert_eq!(
+            medium.skipped[0].get("target").and_then(Value::as_str),
+            Some("tiny/model")
+        );
+
+        let fallback = select_route(&chat_request("unit-model", &"x".repeat(2000)), &cfg);
+        assert_eq!(fallback.selected_model, "large/model");
+        assert_eq!(fallback.skipped.len(), 3);
+    }
+
+    #[test]
+    fn prompt_transforms_insert_named_system_messages_without_mutating_original() {
+        let mut cfg = test_config();
+        cfg.prompt_transforms = Some(PromptTransforms {
+            preamble: Some("Use JSON.".to_string()),
+            postscript: Some("Validate before answering.".to_string()),
+        });
+        let request = chat_request("unit-model", "hello");
+
+        let transformed = apply_prompt_transforms(request.clone(), &cfg);
+
+        assert_eq!(request.messages.len(), 1);
+        assert_eq!(transformed.messages.len(), 3);
+        assert_eq!(
+            transformed.messages[0].name.as_deref(),
+            Some("ingary_preamble")
+        );
+        assert_eq!(
+            transformed.messages[2].name.as_deref(),
+            Some("ingary_postscript")
+        );
+    }
+
+    #[test]
+    fn request_policy_records_alert_and_injected_reminder_actions() {
+        let mut cfg = test_config();
+        cfg.governance = vec![
+            json!({
+                "id": "ambiguous-success",
+                "kind": "request_guard",
+                "action": "escalate",
+                "contains": "looks done",
+                "message": "completion claim needs artifact",
+                "severity": "warning"
+            }),
+            json!({
+                "id": "json-reminder",
+                "kind": "request_transform",
+                "action": "inject_reminder_and_retry",
+                "contains": "return json",
+                "reminder": "Return only valid JSON."
+            }),
+        ];
+        let mut request = chat_request("unit-model", "Looks done; return JSON for the caller");
+
+        let policy = evaluate_request_policies(&mut request, &cfg);
+
+        assert_eq!(policy.alert_count, 1);
+        assert_eq!(policy.actions.len(), 2);
+        assert_eq!(
+            policy.events[0].get("type").and_then(Value::as_str),
+            Some("policy.alert")
+        );
+        assert_eq!(
+            request
+                .messages
+                .last()
+                .and_then(|message| message.name.as_deref()),
+            Some("ingary_policy_reminder")
+        );
+    }
+
+    #[test]
+    fn caller_headers_take_precedence_over_body_metadata() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Ingary-Agent-Id",
+            HeaderValue::from_static("header-agent"),
+        );
+        let mut metadata = Map::new();
+        metadata.insert("consuming_agent_id".to_string(), json!("body-agent"));
+        metadata.insert("user_id".to_string(), json!("body-user"));
+
+        let caller = caller_from(headers, Some(&metadata));
+
+        assert_eq!(
+            caller
+                .consuming_agent_id
+                .as_ref()
+                .map(|value| value.value.as_str()),
+            Some("header-agent")
+        );
+        assert_eq!(
+            caller
+                .consuming_agent_id
+                .as_ref()
+                .map(|value| value.source.as_str()),
+            Some("header")
+        );
+        assert_eq!(
+            caller
+                .consuming_user_id
+                .as_ref()
+                .map(|value| value.value.as_str()),
+            Some("body-user")
+        );
+    }
+
+    #[test]
+    fn receipt_query_filters_by_prefixed_model_caller_and_status() {
+        let cfg = test_config();
+        let mut request = chat_request("ingary/unit-model", "hello");
+        request.metadata = Some(Map::from_iter([
+            ("consuming_agent_id".to_string(), json!("agent-a")),
+            ("session_id".to_string(), json!("session-a")),
+        ]));
+        let caller = caller_from(HeaderMap::new(), request.metadata.as_ref());
+        let decision = select_route(&request, &cfg);
+        let receipt = build_receipt(
+            caller,
+            cfg.synthetic_model.clone(),
+            Some(request),
+            decision,
+            "simulated",
+            &cfg,
+            PolicyResult::default(),
+        );
+
+        assert!(
+            ReceiptQuery {
+                model: Some("ingary/unit-model".to_string()),
+                consuming_agent_id: Some("agent-a".to_string()),
+                consuming_user_id: None,
+                session_id: Some("session-a".to_string()),
+                run_id: None,
+                status: Some("simulated".to_string()),
+                limit: None,
+            }
+            .matches(&receipt)
+        );
+        assert!(
+            !ReceiptQuery {
+                model: Some("unit-model".to_string()),
+                consuming_agent_id: Some("other-agent".to_string()),
+                consuming_user_id: None,
+                session_id: None,
+                run_id: None,
+                status: None,
+                limit: None,
+            }
+            .matches(&receipt)
+        );
+    }
+
+    #[test]
+    fn test_config_validation_rejects_bad_route_graphs() {
+        let mut cfg = test_config();
+        assert!(cfg.validate().is_ok());
+
+        cfg.synthetic_model = "ingary/unit-model".to_string();
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            "synthetic_model must be unprefixed"
+        );
+
+        let mut cfg = test_config();
+        cfg.targets.push(RouteTarget {
+            model: "tiny/model".to_string(),
+            context_window: 16,
+        });
+        assert_eq!(cfg.validate().unwrap_err(), "duplicate target tiny/model");
+    }
+}

@@ -30,6 +30,26 @@ Useful references:
 - [Amazon Bedrock: structured output](https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html)
 - [Cohere: structured outputs](https://docs.cohere.com/v2/docs/structured-outputs)
 - [Trace-driven debugging for AI agent failures](https://zylos.ai/research/2026-04-30-trace-driven-debugging-ai-agent-failures)
+- [LangGraph interrupts for human-in-the-loop approval](https://docs.langchain.com/oss/python/langgraph/human-in-the-loop)
+- [oh-my-pi Time Traveling Streamed Rules](https://github.com/can1357/oh-my-pi#-time-traveling-streamed-rules-ttsr)
+
+## Escalation Vocabulary
+
+Ingary should use two different terms:
+
+- **alert**: asynchronous notification. Ingary records a receipt event and
+  sends a sink notification, such as webhook, Slack, Telegram, email, or UI
+  inbox. The original request keeps following the configured policy action:
+  allow, retry, reroute, block, or fail. The alert does not wait for a human
+  reply.
+- **approval gate**: synchronous or resumable human review. Ingary pauses the
+  request lifecycle, persists enough state to resume, waits for an explicit
+  approve/edit/reject decision, and has timeout semantics. This is a different
+  product surface from alerting and is not part of the current mock backend.
+
+Where this document says "human escalation" for MVP examples, read it as
+**asynchronous alerting** unless the action is explicitly named
+`require_human_approval`.
 
 ## Candidate Policy Examples
 
@@ -59,7 +79,7 @@ change, often consuming budget while appearing active.
 Ingary policy:
 
 - track repeated calls, retries, or similar prompt fragments by session/run
-- inject a reminder, reroute to a more capable model, or escalate after a
+- inject a reminder, reroute to a more capable model, or alert after a
   configured threshold
 - record the threshold crossing and decision path in receipts
 
@@ -67,7 +87,7 @@ Falsifiable value:
 
 - lower runaway token/tool spend
 - fewer hung agent sessions
-- earlier human handoff
+- earlier operator visibility
 
 ### Structured Output Boundary
 
@@ -121,6 +141,22 @@ Falsifiable value:
 - safer prompt iteration
 - less duplicated prompt logic in agent code
 - easier rollback when a prompt change regresses behavior
+
+## Spike Candidates
+
+These are concrete experiments that can become examples, BDD scenarios, and
+property generators.
+
+| Direction | Value hypothesis | Data needed | First test |
+|---|---|---|---|
+| JSON/XML repair gate | Reduces downstream parser and semantic-contract failures. | Output buffer, schema/parser errors, retry count. | Generate malformed and semantically incomplete outputs; assert retry or block before release. |
+| Session tool-loop detector | Reduces repeated tool/provider calls that spend tokens without changing state. | Session-scoped tool name, args hash, result hash, status. | Generate repeated identical tool facts; assert alert/inject/reroute at threshold. |
+| TTSR deprecated-pattern guard | Saves context until a rule matters while preventing known bad output from reaching consumers. | Stream ring buffer, trigger offset, one-shot rule state. | Generate streams with trigger split across chunks; assert trigger before release. |
+| Async operator alert sink | Improves visibility without claiming synchronous human approval. | Receipt event, sink status, delivery attempt metadata. | Trip a policy; assert receipt event and sink delivery record even if sink fails. |
+| Approval gate | Enables true human review for irreversible actions, but requires persistence and timeout semantics. | Pending request state, approval token, deadline, resume decision. | Simulate approve/reject/edit with timeout and idempotent resume. |
+| Prompt experiment receipts | Makes Ingary useful as a prompt experiment boundary. | Prompt transform version, route, outcome labels, latency/cost. | Run A/B variants over fixture tasks; assert receipts can group by transform version. |
+| Cost/context budget guard | Prevents silent migration from cheap/fast routes to expensive/slow routes. | Estimated tokens, route selection, rolling run/session/tenant budget. | Generate calls near budget/context thresholds; assert route/degrade/alert decisions. |
+| Trace-to-regression loop | Turns production incidents into durable examples. | Receipt timeline, policy events, failure label, expected future behavior. | Import a labeled receipt; generate a BDD fixture that fails before the policy is added. |
 
 ## Policy Engine Implications
 

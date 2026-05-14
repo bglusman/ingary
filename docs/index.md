@@ -15,6 +15,7 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
   <div class="actions">
     <a class="button" href="vision.html">Read the Vision</a>
     <a class="button secondary" href="use-cases.html">Use Cases</a>
+    <a class="button secondary" href="feature-spikes.html">Feature Spikes</a>
     <a class="button secondary" href="https://github.com/bglusman/ingary">GitHub</a>
   </div>
 </section>
@@ -47,7 +48,7 @@ and runtime visibility for constrained agentic workflows.
   <div class="card">
     <h3>Governance</h3>
     <p>Built-in and programmable rules can transform requests, select routes,
-    validate output, retry, alert, or hand off to a human.</p>
+    validate output, retry, alert, or later require explicit human approval.</p>
   </div>
   <div class="card">
     <h3>Receipts</h3>
