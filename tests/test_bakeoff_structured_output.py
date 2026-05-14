@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import jsonschema
@@ -10,6 +11,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from bakeoff_support import chat_request, install_test_config, request_json, response_receipt
+
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "bakeoff_structured_output" / "canned_sequences.json"
 
 
 ANSWER_SCHEMA = {
@@ -143,6 +147,10 @@ invalid_then_valid_outputs = st.tuples(
 ).map(lambda pair: [pair[0], json.dumps(pair[1])])
 
 
+def load_canned_sequences() -> list[dict[str, Any]]:
+    return json.loads(FIXTURE_PATH.read_text())
+
+
 @given(valid_answer)
 @settings(max_examples=50)
 def test_structured_oracle_accepts_valid_outputs_without_guard(valid_output: dict[str, Any]) -> None:
@@ -173,6 +181,22 @@ def test_structured_oracle_exhausts_attempt_budget(outputs: list[str]) -> None:
     assert result.final_status == "exhausted_guard_budget"
     assert len(result.guard_events) == 3
     assert {event["guard_type"] for event in result.guard_events} == {"json_syntax"}
+
+
+@pytest.mark.parametrize("scenario", load_canned_sequences(), ids=lambda item: item["name"])
+def test_structured_oracle_matches_canned_regeneration_paths(scenario: dict[str, Any]) -> None:
+    expected = scenario["expected"]
+    result = structured_guard_loop_oracle(
+        scenario["outputs"],
+        max_attempts=expected["attempt_count"],
+    )
+
+    assert result.final_status == expected["final_status"], scenario["description"]
+    assert len(result.guard_events) == len(expected["guard_types"])
+    assert [event["guard_type"] for event in result.guard_events] == expected["guard_types"]
+    assert [event["rule_id"] for event in result.guard_events] == expected["guard_rule_ids"]
+    if result.final_status != "exhausted_guard_budget":
+        assert result.parsed_output is not None
 
 
 @pytest.mark.backend

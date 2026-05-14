@@ -139,9 +139,11 @@ For governed-loop features, the shared contract should assert:
 Mocked-model tests should drive canned sequences such as invalid output followed
 by valid repaired output, repeated invalid output until budget exhaustion,
 partial streaming output that is stopped mid-span, and multiple rules firing on
-one response. Live-LLM tests are useful during development for realism and input
-diversity, but they should be marked explicitly, excluded from default CI, and
-treated as exploratory unless their prompts, model, seed/config, and observed
+one response. Canned scenarios should live in reviewable JSON fixtures so policy
+authors can inspect and extend the behavior corpus without reading test code.
+Live-LLM tests are useful during development for realism and input diversity,
+but they should be marked explicitly, excluded from default CI, and treated as
+exploratory unless their prompts, model, seed/config, and observed
 counterexamples are captured as regression fixtures.
 
 ## Test-First Workflow
@@ -161,13 +163,28 @@ created. The Python tests are the contract-level source of truth.
 5. Create the three implementation branches from the same `main` commit.
 6. In each branch, translate the shared scenarios into native tests first:
    Go `testing`, Rust unit/property tests, Elixir ExUnit/StreamData.
-7. Implement until native tests pass.
+   Agents may inspect and run the shared Python tests while developing, but
+   copied-only Python coverage is not enough. The native translation is part of
+   the evaluated work product.
+7. Implement until native tests pass. Agents are encouraged to add additional
+   native tests when they observe vacuous passes, untested branches, or live
+   counterexamples.
 8. Run the same Python tests against the backend as the final correctness gate.
 9. Run the normal repo checks and collect metrics.
 
 Native tests are part of the scoring. A backend should not get full credit for
 passing the Python harness if the native test translation is shallow or tests
 implementation details instead of behavior.
+
+Agents may run optional `live_llm` tests during development when credentials or
+local models are available, including local Ollama. Live tests are discovery and
+realism tools, not CI gates. Useful live failures should be reduced into
+deterministic fixtures before the implementation is considered complete.
+
+Agents should also consider lightweight mutation testing before declaring a
+feature done: deliberately break a condition, branch, guard action, eviction
+rule, or receipt field and confirm either the native tests or shared Python
+tests fail for the intended reason.
 
 ## Shared Test Quality Bar
 

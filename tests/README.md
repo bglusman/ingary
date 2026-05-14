@@ -166,6 +166,24 @@ Live-LLM realism tests should be marked `live_llm` and excluded from default CI.
 When a live run finds a useful counterexample, pin the prompt, model/config, and
 observed output as a deterministic mocked-model regression fixture.
 
+Optional live-LLM smoke tests:
+
+```bash
+INGARY_LIVE_LLM=1 \
+INGARY_LIVE_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
+INGARY_LIVE_LLM_MODEL=<local-or-remote-model> \
+uv run pytest -m live_llm tests/test_bakeoff_live_llm_smoke.py
+```
+
+Set `INGARY_LIVE_LLM_API_KEY` when the target endpoint requires bearer auth.
+
+Bakeoff agents may run the shared Python tests during implementation, but the
+required development loop is native-first: translate the contract into the
+backend's native test framework, implement until native tests pass, then run the
+shared Python suite as an independent final oracle. Extra tests are encouraged
+when a live LLM run, mutation test, or code review exposes a vacuous pass or
+untested branch.
+
 ## BDD Scenarios
 
 `bdd_scenarios.py` is ordinary behavior-driven documentation as executable

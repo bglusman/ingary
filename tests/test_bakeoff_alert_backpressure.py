@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import pytest
@@ -9,6 +11,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from bakeoff_support import chat_request, install_test_config, request_json
+
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "bakeoff_alert_backpressure" / "canned_alert_runs.json"
 
 
 AlertOutcome = Literal[
@@ -62,6 +67,18 @@ def alert_queue_oracle(
         else:
             results.append(AlertResult(decision.decision_id, "failed_closed", decision.idempotency_key))
     return results
+
+
+def load_canned_alert_runs() -> list[dict[str, object]]:
+    return json.loads(FIXTURE_PATH.read_text())
+
+
+def alert_decision_from_fixture(item: dict[str, object]) -> AlertDecision:
+    return AlertDecision(
+        decision_id=str(item["decision_id"]),
+        triggers_alert=bool(item["triggers_alert"]),
+        idempotency_key=str(item["idempotency_key"]),
+    )
 
 
 decision_strategy = st.lists(
@@ -119,6 +136,21 @@ def test_alert_oracle_idempotency_keys_are_not_enqueued_twice(
             assert decision.idempotency_key in seen_trigger_keys
         if decision.triggers_alert:
             seen_trigger_keys.add(decision.idempotency_key)
+
+
+@pytest.mark.parametrize("scenario", load_canned_alert_runs(), ids=lambda item: str(item["name"]))
+def test_alert_oracle_matches_canned_backpressure_scenarios(scenario: dict[str, object]) -> None:
+    decisions = [
+        alert_decision_from_fixture(item)
+        for item in scenario["decisions"]  # type: ignore[index]
+    ]
+    results = alert_queue_oracle(
+        decisions,
+        capacity=int(scenario["queue_capacity"]),
+        on_full=scenario["on_full"],  # type: ignore[arg-type]
+    )
+
+    assert [result.outcome for result in results] == scenario["expected_outcomes"]
 
 
 def alert_config(

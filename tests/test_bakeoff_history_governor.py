@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -9,6 +11,9 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from bakeoff_support import chat_request, install_test_config, request_json, response_receipt
+
+
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "bakeoff_history_governor" / "canned_histories.json"
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,20 @@ class HistoryEvent:
 def retained_events(events: list[HistoryEvent], max_entries: int) -> list[HistoryEvent]:
     ordered = sorted(events, key=lambda event: (event.created_at_unix_ms, event.sequence))
     return ordered[-max_entries:] if max_entries else []
+
+
+def load_canned_histories() -> list[dict[str, Any]]:
+    return json.loads(FIXTURE_PATH.read_text())
+
+
+def history_event_from_fixture(item: dict[str, Any]) -> HistoryEvent:
+    return HistoryEvent(
+        sequence=int(item["sequence"]),
+        created_at_unix_ms=int(item["created_at_unix_ms"]),
+        session_id=str(item["session_id"]),
+        kind=str(item["kind"]),
+        key=str(item["key"]),
+    )
 
 
 def history_count(
@@ -99,6 +118,24 @@ def test_history_oracle_retention_is_timestamp_then_sequence(events: list[Histor
         assert not retained_keys.intersection(
             (event.created_at_unix_ms, event.sequence) for event in evicted
         )
+
+
+@pytest.mark.parametrize("scenario", load_canned_histories(), ids=lambda item: item["name"])
+def test_history_oracle_matches_canned_scope_and_eviction_scenarios(scenario: dict[str, Any]) -> None:
+    events = [history_event_from_fixture(item) for item in scenario["events"]]
+    retained = retained_events(events, int(scenario["max_entries"]))
+    count = history_count(
+        events,
+        max_entries=int(scenario["max_entries"]),
+        session_id=str(scenario["session_id"]),
+        kind=str(scenario["kind"]),
+        key=str(scenario["key"]),
+    )
+
+    assert count == scenario["expected_count"]
+    assert (count >= int(scenario["threshold"])) is scenario["expected_trigger"]
+    if "expected_retained_sequences" in scenario:
+        assert [event.sequence for event in retained] == scenario["expected_retained_sequences"]
 
 
 def history_config(*, max_entries: int = 8, recent_limit: int = 8, threshold: int = 2) -> dict[str, Any]:
