@@ -111,6 +111,45 @@ MVP guardrails:
 - explicit fail-open/fail-closed setting per synthetic model
 - receipt fields for `released_to_consumer`, trigger offset, action, retry count
 
+### Related Real-World Patterns
+
+The exact term "time-travel stream rewriting" does not appear to be a common
+public product category. The underlying design space is visible in existing
+guardrail systems:
+
+- OpenAI Guardrails describes the tradeoff between non-streaming output checks,
+  where guardrails finish before content is shown, and streaming output checks,
+  where unsafe content can briefly appear before a guardrail completes.
+- TrueFoundry's AI Gateway documents a streaming guardrail mode that buffers
+  the complete response, runs output mutation and validation, then streams only
+  if the response passes.
+- NVIDIA NeMo Guardrails supports streaming output rails with chunk buffering
+  and notes that `stream_first` improves time to first token but may already
+  have sent objectionable text before a rail triggers.
+- Portkey describes output guardrails with `deny` and `retry`, but the public
+  docs position them as after-response checks rather than bounded holdback
+  stream rewriting.
+- Several gateway products either disable output guardrails for streaming or
+  require `stream=false`, which is a useful negative example: operators often
+  have to choose between low latency and enforcement.
+
+Ingary should adapt the best parts of those systems while making the promise
+more explicit:
+
+- `pass_through`: lowest latency; policies observe and can alert, but cannot
+  guarantee non-release.
+- `chunk_buffered`: validate/mutate chunks before release; bounded latency and
+  partial enforcement.
+- `buffered_horizon`: maintain a rolling holdback window; content is released
+  only after it is outside the risk horizon.
+- `full_buffer`: safest; no output reaches the consumer until final validation.
+
+TTSR maps most closely to `buffered_horizon` plus actions such as
+`retry_with_reminder`, `rewrite_chunk`, `drop_chunk`, `block_final`, and
+`alert`. The receipt must say which mode was active, how many bytes/tokens were
+held back, whether violating bytes were released, and which retry or rewrite
+action fired.
+
 ## State Scopes
 
 Some policies need history, but not all history belongs in every policy call.
@@ -170,6 +209,122 @@ Policy code then sees:
 
 This keeps policy deterministic and makes cost visible. It also lets the UI
 explain why a synthetic model has higher overhead.
+
+## History Access And Metadata
+
+Policy code will sometimes need data outside the current request. Tool-loop
+detection needs recent tool attempts in the same run or session. Budget control
+may need rolling token spend for a session, agent, user, or tenant. DOS controls
+eventually need broader caller windows.
+
+There are three possible designs:
+
+1. Expose the general Ingary read API to policy code.
+2. Expose a bounded policy facts API backed by receipts, counters, and indexes.
+3. Expose an Ingary-API-shaped query facade backed only by configured policy
+   caches and ring buffers.
+
+The third approach is probably the best ergonomic compromise. Policy authors
+can use query shapes that resemble the ordinary Ingary read API, but the policy
+runtime only serves data that the synthetic model explicitly declared as part of
+its hot working set.
+
+Direct access to the full historical `GET` surface is attractive because it is
+flexible, but it creates hot-path problems:
+
+- unpredictable latency while a policy query scans history
+- nondeterminism if the same policy sees different receipt state on retry
+- difficult authorization boundaries for multi-tenant deployments
+- easy accidental cross-session or cross-user leakage
+- unbounded storage/index requirements because policies may query anything
+- harder simulation, replay, and test reproducibility
+
+Instead, model definitions should declare the facts or recent-record caches
+they need. Ingary can then decide what to track, how to index it, and how to
+expose it to the policy engine.
+
+Example:
+
+```yaml
+policy_context:
+  cache_mode: explicit
+  facts:
+    - id: session_recent_tool_calls
+      source: receipts
+      scope: session
+      select:
+        event_type: tool_call.finished
+        fields: [tool_name, args_hash, result_hash, status]
+      window:
+        max_age_seconds: 1800
+        max_items: 128
+    - id: run_retry_count
+      source: counters
+      scope: run
+      key: "retry:{synthetic_model}"
+    - id: tenant_token_budget
+      source: counters
+      scope: tenant
+      key: "tokens:{tenant_id}"
+      window:
+        max_age_seconds: 86400
+  recent_records:
+    - id: session_receipts
+      api: receipts
+      scope: session
+      max_items: 50
+      max_age_seconds: 1800
+      fields:
+        - receipt_id
+        - synthetic_model
+        - final.status
+        - decision.selected_model
+        - final.events
+```
+
+The policy input receives only the declared facts and recent-record handles:
+
+```json
+{
+  "facts": {
+    "session_recent_tool_calls": [
+      {"tool_name": "browser", "args_hash": "h1", "result_hash": "r1", "status": "ok"},
+      {"tool_name": "browser", "args_hash": "h1", "result_hash": "r1", "status": "ok"}
+    ],
+    "run_retry_count": {"value": 2},
+    "tenant_token_budget": {"used": 812340, "limit": 1000000}
+  },
+  "recent": {
+    "session_receipts": {
+      "available": 14,
+      "max_items": 50,
+      "max_age_seconds": 1800
+    }
+  }
+}
+```
+
+Advanced policy engines may get a constrained query primitive, but it should be
+served from these declared caches/ring buffers and bound by scope, result limit,
+time window, and fields. The call can look like a normal Ingary query without
+being backed by unbounded historical storage.
+
+For example:
+
+```python
+ctx.receipts.list(
+    scope = "session",
+    where = {"event_type": "tool_call.finished", "tool_name": "browser"},
+    limit = 20,
+    max_age_seconds = 1800,
+)
+```
+
+That is different from giving Starlark arbitrary access to `/v1/receipts`.
+The query is deterministic, scoped, authorized, served from a bounded cache, and
+visible in the synthetic model's overhead estimate. If a policy asks for data
+outside the configured cache, Ingary should return an explicit "not available"
+policy fact rather than silently scanning durable history.
 
 ## Action Model
 
