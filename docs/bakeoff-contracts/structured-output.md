@@ -4,6 +4,17 @@ This is the visible implementation contract for the structured-output bakeoff.
 Agents may read this document and translate it into native tests. The final
 Python backend oracle is held out and is run externally after implementation.
 
+The implementation attempt is timeboxed. Use a 30 minute default agent timeout
+for the first rerun unless the harness shows that is too short for all
+backends. The work is tiered:
+
+- Core behavior must be completed first. A backend that skips core scenarios to
+  chase advanced scenarios should score poorly even if the advanced work is
+  interesting.
+- Advanced differentiators should be attempted only after core native tests are
+  passing. They are in scope for scoring, but partial completion is acceptable
+  inside the timebox and should be reported explicitly.
+
 ## Goal
 
 Implement non-streaming structured-output governance for a synthetic model. A
@@ -24,6 +35,8 @@ The prototype test API may accept a dynamic config containing:
 - `synthetic_model`: the externally requested model alias
 - `targets`: one or more provider model targets
 - `structured_output.schemas`: named JSON schemas
+- `structured_output.schema_rule_id`: rule id recorded for JSON syntax and
+  schema validation failures; use `structured-json` for this bakeoff
 - `structured_output.semantic_rules`: semantic validators applied after schema
   validation
 - `structured_output.guard_loop.max_attempts`: total provider attempts allowed
@@ -37,9 +50,13 @@ Backends may reject unsafe or unsupported test config, but supported structured
 config must fail closed with a clear error and receipt when the model cannot
 produce valid governed output.
 
-## Required Schema
+Visible example fixtures live in
+`docs/bakeoff-contracts/fixtures/structured-output-visible.json`. They are
+translation material for native tests, not the final evaluator.
 
-Native tests should cover at least this schema:
+## Required Schemas
+
+Core native tests must cover `answer_v1`:
 
 ```json
 {
@@ -54,8 +71,27 @@ Native tests should cover at least this schema:
 }
 ```
 
-The minimum semantic rule is `confidence >= 0.7` at JSON pointer
-`/confidence`.
+Advanced native tests should cover `answer_v2` as a schema alternative after
+the core `answer_v1` path is complete:
+
+```json
+{
+  "type": "object",
+  "required": ["result", "confidence", "format_version"],
+  "properties": {
+    "result": {"type": "string", "minLength": 1},
+    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    "format_version": {"type": "string", "enum": ["v2"]},
+    "sources": {"type": "array", "items": {"type": "string"}}
+  },
+  "additionalProperties": false
+}
+```
+
+The minimum semantic rule is `confidence >= 0.7` using `json_path_number` at
+JSON pointer `/confidence`. Advanced schema-alternative tests use the same path
+because both required schema families expose a top-level numeric `confidence`
+field.
 
 ## Required Receipt Shape
 
@@ -69,6 +105,7 @@ information to reconstruct the path:
 - attempt count
 - ordered guard events
 - guard event type, attempt index, rule id, guard type, and action
+- exhausted rule id when a per-rule budget stops the loop
 
 Expected final statuses:
 
@@ -76,6 +113,10 @@ Expected final statuses:
 - `completed_after_guard`: at least one guard event occurred before success
 - `exhausted_guard_budget`: no valid output was produced before the configured
   attempt budget was exhausted
+- `exhausted_rule_budget`: advanced status for a specific rule reaching
+  `max_failures_per_rule` before the global attempt budget is exhausted. If
+  `max_failures_per_rule` is `2`, the loop stops immediately after the second
+  failure for that rule and does not consume a third provider output.
 
 Expected guard types:
 
@@ -87,10 +128,10 @@ Expected guard action:
 
 - `retry_with_validation_feedback`
 
-## Required Native Scenarios
+## Core Native Scenarios
 
-Native test suites must translate the following behavior, not merely copy names.
-They may add additional cases.
+Native test suites must translate the following behavior first, not merely copy
+names. They may add additional cases.
 
 | Scenario | Output path | Expected result |
 |---|---|---|
@@ -109,6 +150,18 @@ They may add additional cases.
 For each scenario, native tests should assert status, attempt count, guard event
 order, guard rule ids, selected schema, and whether parsed output is present.
 
+## Advanced Native Scenarios
+
+These scenarios are differentiators. They should be attempted only after all
+core native scenarios pass.
+
+| Scenario | Output path | Expected result |
+|---|---|---|
+| answer_v2 schema alternative succeeds | provider returns an object matching `answer_v2` rather than `answer_v1` | `completed`, selected schema is `answer_v2` |
+| schema alternative repair succeeds | invalid `answer_v1`-shaped output, then valid `answer_v2` output | guard event followed by `completed_after_guard`, selected schema is `answer_v2` |
+| no schema alternative matches | output shape is valid JSON but matches neither configured schema | `schema_validation` guard, then retry or fail closed |
+| per-rule budget exhausted | the same rule reaches `max_failures_per_rule` while global attempts remain | fail closed immediately with `exhausted_rule_budget` and exhausted rule id |
+
 ## Property And Fuzz Expectations
 
 Each backend should include native generated tests where practical:
@@ -123,6 +176,13 @@ Each backend should include native generated tests where practical:
   unless a later attempt repairs them
 - generated additional object fields should be rejected when
   `additionalProperties` is false
+
+Advanced generated tests, after core properties pass:
+
+- generated repeated failures of the same rule should stop at
+  `max_failures_per_rule` even when `max_attempts` is larger
+- generated valid objects for every configured schema alternative should select
+  the schema they match
 
 Generated tests should avoid implementation details. Assertions should focus on
 public responses, receipts, and guard-loop path shape.
