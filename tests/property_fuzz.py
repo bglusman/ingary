@@ -51,6 +51,7 @@ class ModelDef:
     version: str
     targets: list[Target]
     stream_rules: list[dict[str, str]]
+    governance: list[dict[str, str]]
 
 
 class FuzzFailure(AssertionError):
@@ -91,6 +92,7 @@ def generated_model(rng: random.Random, index: int) -> ModelDef:
         for i, window in enumerate(windows)
     ]
     forbidden = f"FORBIDDEN_{index}_{rng.randint(100, 999)}"
+    alert_marker = f"ALERT_{index}_{rng.randint(100, 999)}"
     return ModelDef(
         synthetic_model=f"fuzz-model-{index}",
         version=f"fuzz-{index}",
@@ -100,6 +102,16 @@ def generated_model(rng: random.Random, index: int) -> ModelDef:
                 "id": f"no-{forbidden.lower()}",
                 "pattern": forbidden,
                 "action": "block_final",
+            }
+        ],
+        governance=[
+            {
+                "id": f"alert-{alert_marker.lower()}",
+                "kind": "request_guard",
+                "action": "escalate",
+                "contains": alert_marker,
+                "severity": "warning",
+                "message": "generated request matched alert policy",
             }
         ],
     )
@@ -114,6 +126,7 @@ def model_config_payload(model: ModelDef) -> dict[str, Any]:
             for target in model.targets
         ],
         "stream_rules": model.stream_rules,
+        "governance": model.governance,
     }
 
 
@@ -273,6 +286,24 @@ def http_dynamic_properties(base_url: str, rng: random.Random, cases: int) -> tu
             caller = receipt.get("caller", {})
             expect(caller.get("consuming_agent_id", {}).get("value") == "property-agent", "caller header not retained")
             executed += 1
+        marker = model.governance[0]["contains"]
+        body = chat_body(f"ingary/{model.synthetic_model}", min(windows))
+        body["messages"].append({"role": "user", "content": f"operator should see {marker}"})
+        status, _headers, response, elapsed = request_json(
+            base_url,
+            "POST",
+            "/v1/synthetic/simulate",
+            {"request": body},
+        )
+        latencies.append(elapsed)
+        expect(status == 200, f"simulate policy failed: {status} {response}")
+        receipt = response.get("receipt", {})
+        actions = receipt.get("decision", {}).get("policy_actions", [])
+        final = receipt.get("final", {})
+        expect(any(action.get("matched") for action in actions), "matching generated policy did not record action")
+        expect(final.get("alert_count") == 1, "matching generated policy did not increment alert count")
+        expect(any(event.get("type") == "policy.alert" for event in final.get("events", [])), "matching generated policy did not emit alert event")
+        executed += 1
     return executed, latencies
 
 

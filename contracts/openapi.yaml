@@ -483,13 +483,25 @@ components:
         id: { type: string }
         kind:
           type: string
-          enum: [request_transform, route_gate, stream_guard, structured_output, receipt_annotation, custom]
+          enum: [request_guard, request_transform, route_gate, stream_guard, structured_output, receipt_annotation, custom]
         action:
           type: string
           enum: [pass, transform, validate_or_block, inject_reminder_and_retry, reroute, escalate, block_final, annotate]
         engine:
           type: string
           description: Optional implementation hint, such as builtin, starlark, dune, wasm, or sidecar. Not required for portable configs.
+        contains:
+          type: string
+          description: Built-in prototype matcher. Matches request text case-insensitively.
+        message:
+          type: string
+          description: Human-readable explanation recorded in policy actions and alert events.
+        severity:
+          type: string
+          enum: [info, warning, critical]
+        reminder:
+          type: string
+          description: Message inserted by transform/inject_reminder_and_retry actions.
     SimulationRequest:
       type: object
       required: [request]

@@ -196,12 +196,55 @@ def scenario_dynamic_definition_routes_by_context(base_url: str) -> None:
     expect(skipped and skipped[0].get("target") == "small/model", "small target skip not recorded")
 
 
+def scenario_request_policy_alerts_operator(base_url: str) -> None:
+    print("Scenario: request policy creates operator alert receipt events")
+    step("Given a synthetic model with a built-in request policy for ambiguous success")
+    config = {
+        "synthetic_model": "bdd-policy",
+        "version": "bdd-policy-1",
+        "targets": [{"model": "mock/model", "context_window": 1024}],
+        "governance": [
+            {
+                "id": "ambiguous-success",
+                "kind": "request_guard",
+                "action": "escalate",
+                "contains": "looks done but missing artifact",
+                "severity": "warning",
+                "message": "Agent appears to be claiming completion without the expected artifact.",
+            }
+        ],
+    }
+    cfg = request_json(base_url, "POST", "/__test/config", config)
+    if cfg.status == 404:
+        step("Then this backend does not support dynamic test config yet; scenario skipped")
+        return
+    expect(cfg.status == 200, f"test config failed: {cfg.status} {cfg.body}")
+
+    step("When a matching request is simulated")
+    resp = request_json(
+        base_url,
+        "POST",
+        "/v1/synthetic/simulate",
+        {"request": chat_request("ingary/bdd-policy", "Looks done but missing artifact for the customer export.")},
+    )
+    step("Then the receipt records a policy action and alert event")
+    expect(resp.status == 200, f"expected 200, got {resp.status}: {resp.body}")
+    receipt = resp.body.get("receipt", {})
+    actions = receipt.get("decision", {}).get("policy_actions", [])
+    final = receipt.get("final", {})
+    events = final.get("events", [])
+    expect(any(action.get("rule_id") == "ambiguous-success" for action in actions), "policy action missing")
+    expect(final.get("alert_count") == 1, "alert count missing")
+    expect(any(event.get("type") == "policy.alert" for event in events), "policy alert event missing")
+
+
 SCENARIOS: list[Callable[[str], None]] = [
     scenario_lists_public_synthetic_models,
     scenario_routes_chat_and_records_receipt,
     scenario_simulates_without_provider_call,
     scenario_rejects_unknown_model,
     scenario_dynamic_definition_routes_by_context,
+    scenario_request_policy_alerts_operator,
 ]
 
 

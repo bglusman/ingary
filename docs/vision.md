@@ -90,3 +90,6 @@ The first durable implementation should prioritize:
 3. policy hooks for request, route, stream, and output phases
 4. a portable policy-engine contract, with Starlark as the first advanced option
 5. a UI that exposes model definitions, live behavior, receipts, and policy outcomes
+
+See [Use Cases](use-cases.html) for the first policy examples that should drive
+tests, docs, and UI workflows.

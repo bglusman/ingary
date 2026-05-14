@@ -45,9 +45,10 @@ defmodule ElixirIngary.Router do
          {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
+      {request, policy} = apply_request_policies(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       decision = route_decision(request)
-      receipt = build_receipt("completed", model, caller, request, decision, true)
+      receipt = build_receipt("completed", model, caller, request, decision, true, policy)
       ElixirIngary.ReceiptStore.insert(receipt)
 
       conn =
@@ -72,9 +73,10 @@ defmodule ElixirIngary.Router do
          {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
+      {request, policy} = apply_request_policies(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       decision = route_decision(request)
-      receipt = build_receipt("simulated", model, caller, request, decision, false)
+      receipt = build_receipt("simulated", model, caller, request, decision, false, policy)
       ElixirIngary.ReceiptStore.insert(receipt)
       json(conn, 200, %{"receipt" => receipt})
     else
@@ -178,6 +180,114 @@ defmodule ElixirIngary.Router do
     Map.put(request, "messages", messages)
   end
 
+  defp apply_request_policies(request) do
+    text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
+
+    Enum.reduce(
+      ElixirIngary.current_config()["governance"] || [],
+      {request, empty_policy()},
+      fn rule, {request, policy} ->
+        kind = Map.get(rule, "kind", "")
+
+        if kind in ["request_guard", "request_transform", "receipt_annotation"] &&
+             policy_match?(text, Map.get(rule, "contains")) do
+          action = Map.get(rule, "action", "annotate")
+          rule_id = Map.get(rule, "id", "policy")
+
+          message =
+            rule |> Map.get("message", "request policy matched") |> blank_to_nil() ||
+              "request policy matched"
+
+          severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
+
+          action_record = %{
+            "rule_id" => rule_id,
+            "kind" => kind,
+            "action" => action,
+            "matched" => true,
+            "message" => message,
+            "severity" => severity
+          }
+
+          case action do
+            "escalate" ->
+              event = %{
+                "type" => "policy.alert",
+                "rule_id" => rule_id,
+                "message" => message,
+                "severity" => severity
+              }
+
+              {request,
+               policy
+               |> Map.update!("actions", &[action_record | &1])
+               |> Map.update!("events", &[event | &1])
+               |> Map.update!("alert_count", &(&1 + 1))}
+
+            action when action in ["inject_reminder_and_retry", "transform"] ->
+              reminder = rule |> Map.get("reminder", message) |> blank_to_nil() || message
+
+              message_record = %{
+                "role" => "system",
+                "name" => "ingary_policy_reminder",
+                "content" => reminder
+              }
+
+              request =
+                Map.update(request, "messages", [message_record], fn messages ->
+                  messages ++ [message_record]
+                end)
+
+              action_record = Map.put(action_record, "reminder_injected", true)
+              {request, Map.update!(policy, "actions", &[action_record | &1])}
+
+            "annotate" ->
+              event = %{
+                "type" => "policy.annotated",
+                "rule_id" => rule_id,
+                "message" => message,
+                "severity" => severity
+              }
+
+              {request,
+               policy
+               |> Map.update!("actions", &[action_record | &1])
+               |> Map.update!("events", &[event | &1])}
+
+            _ ->
+              {request, Map.update!(policy, "actions", &[action_record | &1])}
+          end
+        else
+          {request, policy}
+        end
+      end
+    )
+    |> then(fn {request, policy} ->
+      policy =
+        policy
+        |> Map.update!("actions", &Enum.reverse/1)
+        |> Map.update!("events", &Enum.reverse/1)
+
+      {request, policy}
+    end)
+  end
+
+  defp empty_policy, do: %{"actions" => [], "events" => [], "alert_count" => 0}
+
+  defp policy_match?(_text, value) when value in [nil, ""], do: false
+
+  defp policy_match?(text, value) do
+    String.contains?(text, value |> metadata_string() |> String.downcase())
+  end
+
+  defp request_text(messages) when is_list(messages) do
+    Enum.map_join(messages, "\n", fn message ->
+      "#{Map.get(message, "role", "")}\n#{metadata_string(Map.get(message, "content"))}"
+    end)
+  end
+
+  defp request_text(_), do: ""
+
   defp require_messages(%{"messages" => messages}) when is_list(messages) and messages != [],
     do: :ok
 
@@ -268,7 +378,7 @@ defmodule ElixirIngary.Router do
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
 
-  defp build_receipt(status, model, caller, request, decision, called_provider) do
+  defp build_receipt(status, model, caller, request, decision, called_provider, policy) do
     receipt_id = "rcpt_" <> random_hex(8)
     created_at = System.system_time(:second)
 
@@ -298,7 +408,8 @@ defmodule ElixirIngary.Router do
         "skipped" => decision.skipped,
         "reason" => decision.reason,
         "rule" => "select the smallest configured context window that fits the estimated prompt",
-        "governance" => ElixirIngary.current_config()["governance"]
+        "governance" => ElixirIngary.current_config()["governance"],
+        "policy_actions" => policy["actions"]
       },
       "attempts" => [
         %{
@@ -313,6 +424,8 @@ defmodule ElixirIngary.Router do
         "status" => status,
         "selected_model" => decision.selected_model,
         "stream_trigger_count" => 0,
+        "alert_count" => policy["alert_count"],
+        "events" => policy["events"],
         "receipt_recorded_at" =>
           DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
       },
