@@ -86,6 +86,7 @@ defmodule Wardwright.Policy.Stream do
              chunks: [],
              stream_buffer: stream_window,
              released_to_consumer: false,
+             released_bytes: 0,
              held_bytes: byte_size(stream_window),
              blocked_bytes: byte_size(stream_window)
          }}
@@ -99,6 +100,7 @@ defmodule Wardwright.Policy.Stream do
              chunks: [],
              stream_buffer: stream_window,
              released_to_consumer: false,
+             released_bytes: 0,
              held_bytes: byte_size(stream_window)
          }}
 

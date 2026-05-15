@@ -1420,11 +1420,13 @@ defmodule WardwrightTest do
     assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
     assert get_in(body, ["wardwright", "stream_policy", "generated_bytes"]) > 0
     assert get_in(body, ["wardwright", "stream_policy", "held_bytes"]) > 0
+    assert get_in(body, ["wardwright", "stream_policy", "released_bytes"]) == 0
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
     receipt = Wardwright.ReceiptStore.get(receipt_id)
 
     assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == false
+    assert get_in(receipt, ["final", "stream_policy", "released_bytes"]) == 0
 
     assert get_in(receipt, ["final", "stream_policy", "events", Access.at(0), "rule_id"]) ==
              "secret-stream"
@@ -1458,6 +1460,7 @@ defmodule WardwrightTest do
     assert get_in(body, ["wardwright", "status"]) == "stream_policy_blocked"
     assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
     assert get_in(body, ["wardwright", "stream_policy", "trigger_count"]) == 1
+    assert get_in(body, ["wardwright", "stream_policy", "released_bytes"]) == 0
 
     assert [
              %{
@@ -1467,6 +1470,47 @@ defmodule WardwrightTest do
                "match_scope" => "stream_window"
              }
            ] = get_in(body, ["wardwright", "stream_policy", "events"])
+  end
+
+  test "stream policy retry split-window matches keep pre-trigger bytes unreleased" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "split-retry-unreleased",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 0
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{"mock_stream_chunks" => ["safe prefix Old", "Client(arg)"]},
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+
+    body = Jason.decode!(conn.resp_body)
+    stream_policy = get_in(body, ["wardwright", "stream_policy"])
+
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] == 0
+    assert stream_policy["held_bytes"] > 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "released_bytes" => 0
+             }
+           ] = stream_policy["attempts"]
   end
 
   test "stream policy retry_with_reminder restarts generation before release" do
