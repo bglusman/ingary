@@ -5,6 +5,18 @@ rules may inspect during request evaluation. The BEAM implementation owns this
 hot state in ETS behind `Wardwright.PolicyCache`. It is not the durable receipt
 store and must not become an ambient log of prompts or completions.
 
+The current prototype exposes this as one logical cache API. The intended
+runtime shape is more granular:
+
+- one low-write session catalog for active session metadata and table
+  references
+- one bounded ordered ETS table per active session for session-local history
+- separate aggregate/index tables for policies that intentionally read across
+  sessions, callers, models, or tenants
+
+Policy code must request named scopes and facts through this contract rather
+than discovering ETS table names or references directly.
+
 ## Configuration
 
 Synthetic model config may include:
@@ -24,6 +36,10 @@ Synthetic model config may include:
   history.
 - Writes publish a redacted `policy_cache.event_recorded` event on the runtime
   policy PubSub topic so LiveView can monitor active history without polling.
+
+Per-session history tables may use independent caps derived from model policy
+configuration. Aggregate indexes must declare their own retention and
+consistency behavior; they must not inherit session retention implicitly.
 
 ## Event Shape
 
@@ -60,6 +76,57 @@ larger local memory horizon.
 
 `GET /v1/policy-cache/recent` supports `kind`, `key`, caller-scope query fields
 such as `session_id`, and `limit`. Results must not exceed `recent_limit`.
+
+Session-scoped queries should read the session-local table when a session is
+known. Cross-session queries should read declared aggregate/index tables, not
+fan out across all active session tables on the request path. Fanout over the
+session catalog is acceptable for debug views, simulation, migration tooling, or
+small explicitly bounded experiments, but it is not the default enforcement
+path.
+
+Policies may declare that they never read outside their own session, only read
+outside their own session, or read both. Wardwright must make that distinction
+visible in configuration, receipts, and operator UI so users can understand the
+cost, privacy boundary, and latency risk of each rule.
+
+## ETS Ownership Model
+
+The BEAM hot-path implementation should use ETS as an implementation detail
+behind supervised runtime processes:
+
+- A catalog owner process writes the active-session catalog. Readers may inspect
+  it for UI/runtime visibility.
+- Each session runtime owns its session history table and serializes writes for
+  that session only. This preserves stream order and prevents one busy session
+  from backpressuring unrelated session history writes.
+- Aggregate/index owners write derived cross-session policy facts. These owners
+  can be sharded by model, tenant, rule, or time window if telemetry shows
+  write pressure.
+- ETS table references are runtime capabilities. Dynamic per-session tables
+  should be anonymous table IDs stored in the catalog, not dynamically generated
+  named atoms.
+
+Read APIs should prefer direct ETS reads for stable, bounded facts and avoid
+synchronous GenServer calls for high-frequency reads. Writes, eviction, and
+projection updates remain owned by their responsible runtime process so ordering
+and lifecycle are explicit.
+
+## Observability Requirements
+
+The policy cache surface must expose enough status for operators and LiveView
+tools to tell which history design is active:
+
+- active session count and per-session retained event counts
+- configured session caps and aggregate/index caps
+- aggregate/index lag or stale status when projection is asynchronous
+- catalog owner, session owner, and index owner health
+- whether a rule reads current-session history, cross-session aggregates, or
+  both
+
+Receipts for history-aware decisions should identify the fact source, scope,
+window, count, and retention limit used for the decision. A rule that depends
+on unavailable or stale deterministic history must fail closed according to its
+configured enforcement policy rather than silently scanning a broader store.
 
 ## Built-In Policy Rule
 

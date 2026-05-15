@@ -222,6 +222,13 @@ MVP state should be limited to `attempt`, `run`, and `session`. Those scopes
 support loop detection, retry limits, TTSR, structured repair, and ambiguous
 success without turning Wardwright into a full observability warehouse.
 
+That limit is a starting boundary, not a claim that all valuable policy state is
+session-local. Some future rules may never need data outside the current
+session; others may be explicitly about peer sessions, caller-level abuse,
+fleet-wide model failures, or tenant budget windows. Policy definitions should
+make that scope choice explicit so the runtime can provision the right history
+surface and the UI can explain the privacy, latency, and consistency tradeoff.
+
 ## State API Shape
 
 Policies should not query arbitrary storage. They should receive named,
@@ -294,6 +301,27 @@ flexible, but it creates hot-path problems:
 Instead, model definitions should declare the facts or recent-record caches
 they need. Wardwright can then decide what to track, how to index it, and how to
 expose it to the policy engine.
+
+The preferred BEAM hot-path shape is:
+
+- a small session catalog for active session metadata and table references
+- one bounded ordered ETS table per active session for session-local facts
+- separate aggregate/index ETS tables for rules that need cross-session or
+  broader caller/model/tenant facts
+
+Policy enforcement should not normally scan every active session table through
+the catalog. That fanout is useful for operator browsing, simulation, migration
+checks, and small bounded experiments, but it makes request latency scale with
+active session count. Cross-session enforcement rules should instead consume a
+declared aggregate/index maintained when events are recorded.
+
+This also gives policy authors a clearer mental model:
+
+- current-session rules pay only the local session history cost
+- cross-session rules pay the cost of maintaining an aggregate/index
+- hybrid rules must name both inputs and receipt them separately
+
+The UI should surface these distinctions before a rule is enabled.
 
 Policies that enforce behavior need a stronger cache contract than policies
 that merely annotate receipts. Wardwright should distinguish two classes:

@@ -282,6 +282,22 @@ SQLite, and Postgres should remain behind the same contract and become primary
 candidates when they clearly improve BEAM-native durability, concurrency,
 querying, migrations, hosted operations, or external reporting.
 
+For hot policy history, the ETS provider should not be modeled as one global
+table with one write owner. The target topology is a catalog plus session-local
+tables plus declared aggregate/index tables:
+
+- session-local writes are owned by the session runtime so one busy stream does
+  not serialize unrelated session history writes
+- catalog writes are low-volume metadata changes such as session creation,
+  shutdown, cap updates, and table reference rotation
+- aggregate/index writes are the only expected cross-session hot path and can
+  be sharded independently when a specific rule, model, tenant, or time window
+  becomes write-heavy
+
+This topology keeps the storage-provider contract honest: session history,
+cross-session policy facts, durable receipts, and operator search are separate
+surfaces even when their first implementation uses ETS.
+
 The first useful storage prototype is a shared logical fixture suite that can
 run against:
 
