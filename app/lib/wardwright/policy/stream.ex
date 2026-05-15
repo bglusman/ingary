@@ -48,7 +48,7 @@ defmodule Wardwright.Policy.Stream do
       action != "pass" and
         (contains_match?(chunk, Map.get(rule, "contains") || Map.get(rule, "pattern")) or
            regex_match?(chunk, Map.get(rule, "regex")) or
-           terminal_stream_window_match?(action, stream_window, rule))
+           buffered_stream_window_match?(action, stream_window, rule))
     end)
     |> case do
       nil -> nil
@@ -68,7 +68,11 @@ defmodule Wardwright.Policy.Stream do
 
     case action do
       action when action in ["rewrite", "rewrite_chunk"] ->
-        {:cont, append_generated_chunk(result, chunk, rewrite_chunk(chunk, rule))}
+        if match_scope == "stream_window" do
+          {:cont, rewrite_stream_window(result, chunk, stream_window, rule)}
+        else
+          {:cont, append_rewritten_chunk(result, chunk, rewrite_chunk(chunk, rule))}
+        end
 
       "drop_chunk" ->
         {:cont, append_generated_chunk(result, chunk, nil)}
@@ -118,6 +122,26 @@ defmodule Wardwright.Policy.Stream do
     |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(generated_chunk, released_chunk)))
   end
 
+  defp append_rewritten_chunk(result, generated_chunk, released_chunk) do
+    result
+    |> Map.update!(:stream_buffer, &(&1 <> released_chunk))
+    |> Map.update!(:chunks, &(&1 ++ [released_chunk]))
+    |> add_generated_bytes(generated_chunk)
+    |> Map.update!(:released_bytes, &(&1 + byte_size(released_chunk)))
+    |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(generated_chunk, released_chunk)))
+  end
+
+  defp rewrite_stream_window(result, generated_chunk, stream_window, rule) do
+    released_chunk = rewrite_chunk(stream_window, rule)
+
+    result
+    |> Map.put(:stream_buffer, released_chunk)
+    |> Map.put(:chunks, [released_chunk])
+    |> add_generated_bytes(generated_chunk)
+    |> Map.put(:released_bytes, byte_size(released_chunk))
+    |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(stream_window, released_chunk)))
+  end
+
   defp add_generated_bytes(result, generated_chunk) do
     Map.update!(result, :generated_bytes, &(&1 + byte_size(generated_chunk)))
   end
@@ -163,13 +187,20 @@ defmodule Wardwright.Policy.Stream do
   defp regex_match?(_chunk, value) when value in [nil, ""], do: false
   defp regex_match?(chunk, value), do: PolicyRegex.match?(chunk, value)
 
-  defp terminal_stream_window_match?(action, stream_window, rule)
-       when action in ["block", "block_final", "retry", "retry_with_reminder"] do
+  defp buffered_stream_window_match?(action, stream_window, rule)
+       when action in [
+              "block",
+              "block_final",
+              "retry",
+              "retry_with_reminder",
+              "rewrite",
+              "rewrite_chunk"
+            ] do
     contains_match?(stream_window, Map.get(rule, "contains") || Map.get(rule, "pattern")) or
       regex_match?(stream_window, Map.get(rule, "regex"))
   end
 
-  defp terminal_stream_window_match?(_action, _stream_window, _rule), do: false
+  defp buffered_stream_window_match?(_action, _stream_window, _rule), do: false
 
   defp match_scope(chunk, stream_window, rule) do
     if contains_match?(chunk, Map.get(rule, "contains") || Map.get(rule, "pattern")) or

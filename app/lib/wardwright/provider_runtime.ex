@@ -7,6 +7,15 @@ defmodule Wardwright.ProviderRuntime do
 
   def complete(target, request, provider_fun)
       when is_map(target) and is_function(provider_fun, 0) do
+    run(target, request, provider_fun, false)
+  end
+
+  def stream(target, request, provider_fun)
+      when is_map(target) and is_function(provider_fun, 0) do
+    run(target, request, provider_fun, true)
+  end
+
+  defp run(target, request, provider_fun, stream?) do
     timeout_ms = target |> timeout_ms() |> normalize_timeout_ms()
     started = System.monotonic_time(:millisecond)
     provider_id = provider_id(target)
@@ -16,7 +25,7 @@ defmodule Wardwright.ProviderRuntime do
       "provider_id" => provider_id,
       "model" => model,
       "timeout_ms" => timeout_ms,
-      "stream" => Map.get(request, "stream", false) == true
+      "stream" => stream? or Map.get(request, "stream", false) == true
     })
 
     result =
@@ -64,6 +73,7 @@ defmodule Wardwright.ProviderRuntime do
   end
 
   defp result_status({:ok, _}), do: "completed"
+  defp result_status({:mock, _}), do: "completed"
   defp result_status({:error, _}), do: "provider_error"
   defp result_status(_), do: "provider_error"
 

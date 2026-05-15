@@ -358,10 +358,10 @@ defmodule Wardwright.Router do
       %{
         content: nil,
         status: stream_policy.status,
-        latency_ms: 0,
-        error: nil,
-        called_provider: false,
-        mock: true,
+        latency_ms: Map.get(stream_policy, :provider_latency_ms, 0),
+        error: Map.get(stream_policy, :provider_error),
+        called_provider: Map.get(stream_policy, :called_provider, false),
+        mock: Map.get(stream_policy, :mock, true),
         structured_output: nil,
         stream_chunks: stream_policy.chunks,
         stream_policy: stream_policy
@@ -738,7 +738,7 @@ defmodule Wardwright.Router do
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
 
-    chunks = chunks || stream_chunks(request, decision, 0)
+    chunks = chunks || default_stream_chunks(request, decision)
 
     conn =
       Enum.reduce(Enum.with_index(chunks), conn, fn {text, index}, acc ->
@@ -774,52 +774,64 @@ defmodule Wardwright.Router do
          events,
          attempts
        ) do
-    chunks = stream_chunks(request, decision, attempt_index)
-    policy = Wardwright.Policy.Stream.evaluate(chunks, rules, attempt_index: attempt_index)
-    attempt = stream_attempt(policy, attempt_index)
-    events = events ++ policy.events
-    attempts = attempts ++ [attempt]
+    case stream_chunks(request, decision, attempt_index) do
+      {:ok, chunks, provider} ->
+        policy = Wardwright.Policy.Stream.evaluate(chunks, rules, attempt_index: attempt_index)
+        attempt = stream_attempt(policy, attempt_index, provider)
+        events = events ++ policy.events
+        attempts = attempts ++ [attempt]
 
-    trigger_event = List.last(policy.events) || %{}
-    retry_budget = stream_retry_budget(trigger_event, active_retry_budget)
+        trigger_event = List.last(policy.events) || %{}
+        retry_budget = stream_retry_budget(trigger_event, active_retry_budget)
 
-    if policy.status == "stream_policy_retry_required" and retry_count < retry_budget do
-      retry_event = %{
-        "type" => "attempt.retry_requested",
-        "attempt_index" => attempt_index,
-        "next_attempt_index" => attempt_index + 1,
-        "retry_count" => retry_count + 1,
-        "max_retries" => retry_budget,
-        "rule_id" => Map.get(trigger_event, "rule_id"),
-        "reminder" => Map.get(trigger_event, "reminder")
-      }
+        if policy.status == "stream_policy_retry_required" and retry_count < retry_budget do
+          retry_event = %{
+            "type" => "attempt.retry_requested",
+            "attempt_index" => attempt_index,
+            "next_attempt_index" => attempt_index + 1,
+            "retry_count" => retry_count + 1,
+            "max_retries" => retry_budget,
+            "rule_id" => Map.get(trigger_event, "rule_id"),
+            "reminder" => Map.get(trigger_event, "reminder")
+          }
 
-      evaluate_stream_attempt(
-        request,
-        decision,
-        rules,
-        retry_budget,
-        attempt_index + 1,
-        retry_count + 1,
-        events ++ [reject_blank(retry_event)],
-        attempts
-      )
-    else
-      policy
-      |> Map.put(:events, events)
-      |> Map.put(:attempts, attempts)
-      |> Map.put(:retry_count, retry_count)
-      |> Map.put(:max_retries, retry_budget)
+          evaluate_stream_attempt(
+            request,
+            decision,
+            rules,
+            retry_budget,
+            attempt_index + 1,
+            retry_count + 1,
+            events ++ [reject_blank(retry_event)],
+            attempts
+          )
+        else
+          policy
+          |> Map.put(:events, events)
+          |> Map.put(:attempts, attempts)
+          |> Map.put(:retry_count, retry_count)
+          |> Map.put(:max_retries, retry_budget)
+          |> Map.put(:called_provider, Map.get(provider, :called_provider, false))
+          |> Map.put(:mock, Map.get(provider, :mock, true))
+          |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
+        end
+
+      {:error, provider} ->
+        provider_error_stream_policy(provider, retry_count, active_retry_budget, attempts)
     end
   end
 
-  defp stream_attempt(policy, attempt_index) do
+  defp stream_attempt(policy, attempt_index, provider) do
     %{
       "attempt_index" => attempt_index,
       "status" => policy.status,
       "action" => policy.action,
       "trigger_count" => policy.trigger_count,
       "released_to_consumer" => policy.released_to_consumer,
+      "called_provider" => Map.get(provider, :called_provider, false),
+      "mock" => Map.get(provider, :mock, true),
+      "provider_status" => Map.get(provider, :status),
+      "provider_latency_ms" => Map.get(provider, :latency_ms),
       "generated_bytes" => policy.generated_bytes,
       "released_bytes" => policy.released_bytes,
       "held_bytes" => policy.held_bytes,
@@ -858,19 +870,87 @@ defmodule Wardwright.Router do
 
     case mock_chunks do
       chunks when is_list(chunks) and chunks != [] ->
-        Enum.map(chunks, &metadata_string/1)
+        {:ok, Enum.map(chunks, &metadata_string/1),
+         %{called_provider: false, mock: true, status: "completed", latency_ms: 0}}
 
       _ ->
-        [
-          "Mock Wardwright stream ",
-          "routed to #{decision.selected_model} ",
-          "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
-        ]
+        stream_request = Map.put(request, "wardwright_attempt_index", attempt_index)
+        provider = Wardwright.stream_selected_model(decision.selected_model, stream_request)
+
+        if provider.status == "completed" and is_list(Map.get(provider, :stream_chunks)) do
+          {:ok, provider.stream_chunks,
+           %{
+             called_provider: provider.called_provider,
+             mock: provider.mock,
+             status: provider.status,
+             latency_ms: provider.latency_ms
+           }}
+        else
+          {:error, provider}
+        end
     end
+  end
+
+  defp provider_error_stream_policy(provider, retry_count, max_retries, attempts) do
+    attempts =
+      attempts ++
+        [
+          %{
+            "attempt_index" => length(attempts),
+            "status" => "provider_error",
+            "called_provider" => Map.get(provider, :called_provider, true),
+            "mock" => Map.get(provider, :mock, false),
+            "provider_status" => Map.get(provider, :status),
+            "provider_latency_ms" => Map.get(provider, :latency_ms),
+            "provider_error" => Map.get(provider, :error)
+          }
+          |> reject_blank()
+        ]
+
+    %{
+      status: "provider_error",
+      trigger_count: 0,
+      action: nil,
+      events: [],
+      chunks: [],
+      released_to_consumer: false,
+      retry_count: retry_count,
+      max_retries: max_retries,
+      attempts: attempts,
+      generated_bytes: sum_attempt_bytes(attempts, "generated_bytes"),
+      released_bytes: sum_attempt_bytes(attempts, "released_bytes"),
+      held_bytes: sum_attempt_bytes(attempts, "held_bytes"),
+      rewritten_bytes: sum_attempt_bytes(attempts, "rewritten_bytes"),
+      blocked_bytes: sum_attempt_bytes(attempts, "blocked_bytes"),
+      called_provider: Map.get(provider, :called_provider, true),
+      mock: Map.get(provider, :mock, false),
+      provider_latency_ms: stream_latency_ms(attempts),
+      provider_error: Map.get(provider, :error)
+    }
+  end
+
+  defp stream_latency_ms(attempts) do
+    Enum.reduce(attempts, 0, fn attempt, total ->
+      total + (integer_value(Map.get(attempt, "provider_latency_ms")) || 0)
+    end)
+  end
+
+  defp sum_attempt_bytes(attempts, key) do
+    Enum.reduce(attempts, 0, fn attempt, total ->
+      total + (integer_value(Map.get(attempt, key)) || 0)
+    end)
   end
 
   defp allow_mock_stream_chunks? do
     Application.get_env(:wardwright, :allow_mock_stream_chunks, false)
+  end
+
+  defp default_stream_chunks(request, decision) do
+    [
+      "Mock Wardwright stream ",
+      "routed to #{decision.selected_model} ",
+      "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
+    ]
   end
 
   defp integer_value(value) when is_integer(value), do: value

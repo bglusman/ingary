@@ -1541,6 +1541,229 @@ defmodule WardwrightTest do
            ] = stream_policy["events"]
   end
 
+  test "stream policy retry calls the selected provider again before releasing bytes" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            ["use Old", "Client(arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-provider-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:models))
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "completed"
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["released_to_consumer"] == true
+
+    assert [
+             %{
+               "attempt_index" => 0,
+               "status" => "stream_policy_retry_required",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed",
+               "released_to_consumer" => false
+             },
+             %{
+               "attempt_index" => 1,
+               "status" => "completed",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed",
+               "released_to_consumer" => true
+             }
+           ] = stream_policy["attempts"]
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.started",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "stream" => true
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "status" => "completed"
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.started",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "stream" => true
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "status" => "completed"
+                    }}
+  end
+
+  test "stream rewrite rules can match across provider chunk boundaries" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["call Old", "Client(arg) now"]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-provider-rewrite",
+          "contains" => "OldClient(",
+          "action" => "rewrite_chunk",
+          "replacement" => "NewClient("
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["released_to_consumer"] == true
+
+    assert [
+             %{
+               "attempt_index" => 0,
+               "status" => "completed",
+               "action" => "rewrite_chunk",
+               "trigger_count" => 1,
+               "released_to_consumer" => true,
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed",
+               "generated_bytes" => generated_bytes,
+               "released_bytes" => released_bytes,
+               "rewritten_bytes" => rewritten_bytes
+             }
+           ] = stream_policy["attempts"]
+
+    assert generated_bytes > 0
+    assert released_bytes > 0
+    assert rewritten_bytes > 0
+
+    assert [
+             %{
+               "rule_id" => "deprecated-client-provider-rewrite",
+               "action" => "rewrite_chunk",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window"
+             }
+           ] = stream_policy["events"]
+  end
+
+  test "stream provider timeouts fail closed without emitting SSE bytes" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "slow-stream/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["late stream"],
+          "canned_delay_ms" => 25,
+          "provider_timeout_ms" => 1
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 502
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+    refute conn.resp_body =~ "data:"
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "provider_error"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "provider timed out after 1ms"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["released_to_consumer"] == false
+
+    assert [
+             %{
+               "status" => "provider_error",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "provider_error",
+               "provider_error" => provider_error
+             }
+           ] = stream_policy["attempts"]
+
+    assert provider_error =~ "provider timed out after 1ms"
+  end
+
   test "stream policy retry budget exhaustion keeps violating bytes unreleased" do
     config =
       unit_policy_config()

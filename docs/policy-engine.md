@@ -193,14 +193,24 @@ TTSR maps most closely to `buffered_horizon` plus actions such as
 held back, whether violating bytes were released, and which retry or rewrite
 action fired.
 
-The current BEAM prototype implements a narrow stream-policy foothold: mock
-stream chunks can be checked against literal or regex rules before release,
-rewritten or dropped, blocked before any SSE bytes are sent, or retried with a
-reminder while preserving the failed attempt as unreleased receipt evidence.
+The current BEAM prototype implements a narrow stream-policy foothold:
+selected-target provider chunks can be checked against literal or regex rules
+before release, rewritten or dropped, blocked before any SSE bytes are sent, or
+retried with a reminder while preserving the failed attempt as unreleased
+receipt evidence. Test-only mock chunks still exist as an escape hatch, but the
+router can now call the selected provider through `Wardwright.ProviderRuntime`
+for each stream attempt and retry the provider boundary before releasing bytes.
 Receipts record the stream policy action, trigger count, trigger events, retry
-count, per-attempt outcomes, and generated/released/held/rewritten/blocked byte
-counts. Real provider stream holdback, cancellation/restart orchestration,
-latency budgets, and provider-chunk offsets are still future work.
+count, per-attempt provider status, and generated/released/held/rewritten/blocked
+byte counts.
+
+Split chunk boundaries are treated cautiously. Terminal block/retry checks and
+rewrite checks inspect the buffered stream window, so a pattern such as
+`OldClient(` is still caught if a provider emits `Old` and `Client(` in separate
+events. Non-native streaming provider fallbacks are treated as one held response
+unit rather than artificially chunked output. Native HTTP streaming,
+mid-stream cancellation/restart, latency budgets, and raw provider-event offsets
+are still future work.
 
 ## State Scopes
 

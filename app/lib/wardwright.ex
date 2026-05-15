@@ -287,6 +287,27 @@ defmodule Wardwright do
     end
   end
 
+  def stream_selected_model(selected_model, request) do
+    started = System.monotonic_time(:millisecond)
+
+    target =
+      current_config()
+      |> Map.get("targets", [])
+      |> Enum.find(fn target -> target["model"] == selected_model end)
+
+    case target do
+      nil ->
+        provider_outcome([], "completed", started, nil, false, true)
+
+      target ->
+        Wardwright.ProviderRuntime.stream(target, request, fn ->
+          stream_target(target, request)
+        end)
+        |> provider_outcome_from_result(started)
+        |> normalize_stream_outcome()
+    end
+  end
+
   defp complete_target(target, request) do
     case provider_kind(target) do
       "mock" ->
@@ -306,6 +327,30 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_target(target, request) do
+    case provider_kind(target) do
+      "mock" ->
+        {:mock,
+         [
+           "Mock Wardwright stream ",
+           "routed to #{target["model"]} ",
+           "for #{Map.get(request, "model")}."
+         ]}
+
+      "canned_sequence" ->
+        stream_with_canned_sequence(target, request)
+
+      "ollama" ->
+        complete_with_ollama(target, request) |> stream_result_from_completion()
+
+      "openai-compatible" ->
+        complete_with_openai_compatible(target, request) |> stream_result_from_completion()
+
+      kind ->
+        {:error, "unsupported provider kind #{inspect(kind)}"}
+    end
+  end
+
   defp complete_with_canned_sequence(target, request) do
     delay_ms = non_negative_integer(Map.get(target, "canned_delay_ms"), 0)
     if delay_ms > 0, do: Process.sleep(delay_ms)
@@ -317,6 +362,57 @@ defmodule Wardwright do
       output when is_binary(output) -> {:ok, output}
       _ -> {:error, "canned_sequence target has no outputs"}
     end
+  end
+
+  defp stream_with_canned_sequence(target, request) do
+    delay_ms = non_negative_integer(Map.get(target, "canned_delay_ms"), 0)
+    if delay_ms > 0, do: Process.sleep(delay_ms)
+
+    attempt_index = request |> Map.get("wardwright_attempt_index", 0) |> integer_value() || 0
+
+    chunks =
+      target
+      |> Map.get("canned_stream_attempt_chunks", [])
+      |> attempt_stream_chunks(attempt_index)
+      |> case do
+        [] -> Map.get(target, "canned_stream_chunks", [])
+        chunks -> chunks
+      end
+      |> case do
+        [] ->
+          target
+          |> Map.get("canned_outputs", [])
+          |> Enum.at(attempt_index)
+          |> case do
+            output when is_binary(output) -> chunk_text(output)
+            _ -> []
+          end
+
+        chunks ->
+          chunks
+      end
+
+    case chunks do
+      chunks when is_list(chunks) and chunks != [] -> {:ok, Enum.map(chunks, &to_string/1)}
+      _ -> {:error, "canned_sequence target has no stream chunks"}
+    end
+  end
+
+  defp attempt_stream_chunks(attempt_chunks, attempt_index)
+       when is_list(attempt_chunks) and is_integer(attempt_index) do
+    case Enum.at(attempt_chunks, attempt_index) do
+      chunks when is_list(chunks) -> chunks
+      _ -> []
+    end
+  end
+
+  defp attempt_stream_chunks(_attempt_chunks, _attempt_index), do: []
+
+  defp stream_result_from_completion({:ok, content}), do: {:ok, chunk_text(content)}
+  defp stream_result_from_completion({:error, reason}), do: {:error, reason}
+
+  defp chunk_text(text) when is_binary(text) do
+    [text]
   end
 
   defp normalize_config(config) do
@@ -349,6 +445,12 @@ defmodule Wardwright do
             "credential_fnox_key" =>
               target |> Map.get("credential_fnox_key", "") |> to_string() |> String.trim(),
             "canned_outputs" => normalize_canned_outputs(Map.get(target, "canned_outputs", [])),
+            "canned_stream_chunks" =>
+              normalize_canned_outputs(Map.get(target, "canned_stream_chunks", [])),
+            "canned_stream_attempt_chunks" =>
+              normalize_canned_stream_attempt_chunks(
+                Map.get(target, "canned_stream_attempt_chunks", [])
+              ),
             "canned_delay_ms" => non_negative_integer(Map.get(target, "canned_delay_ms"), 0),
             "provider_timeout_ms" =>
               positive_integer(Map.get(target, "provider_timeout_ms"), 180_000)
@@ -381,6 +483,12 @@ defmodule Wardwright do
     do: Enum.map(outputs, &to_string/1)
 
   defp normalize_canned_outputs(_), do: []
+
+  defp normalize_canned_stream_attempt_chunks(attempts) when is_list(attempts) do
+    Enum.map(attempts, &normalize_canned_outputs/1)
+  end
+
+  defp normalize_canned_stream_attempt_chunks(_), do: []
 
   defp normalize_selectors(selectors, model_key) when is_list(selectors) do
     Enum.map(selectors, fn selector ->
@@ -694,6 +802,14 @@ defmodule Wardwright do
       mock: mock
     }
   end
+
+  defp normalize_stream_outcome(%{content: chunks} = outcome) when is_list(chunks) do
+    outcome
+    |> Map.put(:content, Enum.join(chunks, ""))
+    |> Map.put(:stream_chunks, chunks)
+  end
+
+  defp normalize_stream_outcome(outcome), do: outcome
 
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
