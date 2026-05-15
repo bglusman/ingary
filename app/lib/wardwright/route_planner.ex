@@ -339,9 +339,11 @@ defmodule Wardwright.RoutePlanner do
 
   defp decision(selected, attrs) do
     selected_model = if selected, do: selected["model"], else: "unconfigured/no-target"
+    selected_context_window = if selected, do: selected["context_window"]
 
     attrs
     |> Map.put(:selected_model, selected_model)
+    |> Map.put(:selected_context_window, selected_context_window)
     |> Map.put(:selected_provider, selected_model |> String.split("/", parts: 2) |> List.first())
     |> Map.put_new(:fallback_used, false)
     |> Map.put(:route_blocked, selected == nil)

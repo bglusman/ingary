@@ -572,6 +572,7 @@ defmodule Wardwright.Router do
         "route_id" => decision.route_id,
         "selected_provider" => decision.selected_provider,
         "selected_model" => decision.selected_model,
+        "selected_context_window" => decision.selected_context_window,
         "selected_models" => decision.selected_models,
         "fallback_models" => decision.fallback_models,
         "fallback_used" => decision.fallback_used,
@@ -709,6 +710,7 @@ defmodule Wardwright.Router do
       "exhausted_rule_budget" -> 422
       "exhausted_guard_budget" -> 422
       "stream_policy_blocked" -> 422
+      "stream_policy_retry_context_exceeded" -> 422
       "stream_policy_retry_required" -> 409
       _ -> 200
     end
@@ -828,28 +830,59 @@ defmodule Wardwright.Router do
         retry_count < retry_budget and not stream_acc.sent? ->
         {retry_request, reminder_injected?} = stream_retry_request(request, trigger_event)
 
-        retry_event = %{
-          "type" => "attempt.retry_requested",
-          "attempt_index" => attempt_index,
-          "next_attempt_index" => attempt_index + 1,
-          "retry_count" => retry_count + 1,
-          "max_retries" => retry_budget,
-          "rule_id" => Map.get(trigger_event, "rule_id"),
-          "reminder" => Map.get(trigger_event, "reminder"),
-          "reminder_injected" => reminder_injected?
-        }
+        case stream_retry_fit_error(decision, retry_request) do
+          nil ->
+            retry_event = %{
+              "type" => "attempt.retry_requested",
+              "attempt_index" => attempt_index,
+              "next_attempt_index" => attempt_index + 1,
+              "retry_count" => retry_count + 1,
+              "max_retries" => retry_budget,
+              "rule_id" => Map.get(trigger_event, "rule_id"),
+              "reminder" => Map.get(trigger_event, "reminder"),
+              "reminder_injected" => reminder_injected?
+            }
 
-        run_stream_runtime_attempt(
-          retry_request,
-          decision,
-          rules,
-          retry_budget,
-          attempt_index + 1,
-          retry_count + 1,
-          events ++ [reject_blank(retry_event)],
-          attempts,
-          %{stream_acc | sent?: false, chunks: acc.chunks}
-        )
+            run_stream_runtime_attempt(
+              retry_request,
+              decision,
+              rules,
+              retry_budget,
+              attempt_index + 1,
+              retry_count + 1,
+              events ++ [reject_blank(retry_event)],
+              attempts,
+              %{stream_acc | sent?: false, chunks: acc.chunks}
+            )
+
+          fit_error ->
+            context_event =
+              %{
+                "type" => "attempt.retry_context_exceeded",
+                "attempt_index" => attempt_index,
+                "next_attempt_index" => attempt_index + 1,
+                "retry_count" => retry_count,
+                "max_retries" => retry_budget,
+                "rule_id" => Map.get(trigger_event, "rule_id"),
+                "reminder" => Map.get(trigger_event, "reminder"),
+                "reminder_injected" => reminder_injected?
+              }
+              |> Map.merge(fit_error)
+              |> reject_blank()
+
+            policy =
+              policy
+              |> Map.put(:status, "stream_policy_retry_context_exceeded")
+              |> Map.put(:events, events ++ [context_event])
+              |> Map.put(:attempts, attempts)
+              |> Map.put(:retry_count, retry_count)
+              |> Map.put(:max_retries, retry_budget)
+              |> Map.put(:called_provider, provider.called_provider)
+              |> Map.put(:mock, provider.mock)
+              |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
+
+            {policy, %{provider | status: policy.status, content: nil}, stream_acc}
+        end
 
       policy.status != "completed" and stream_acc.sent? ->
         stream_acc = send_stream_policy_terminal(stream_acc, policy)
@@ -884,6 +917,21 @@ defmodule Wardwright.Router do
           |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
 
         {policy, provider, stream_acc}
+    end
+  end
+
+  defp stream_retry_fit_error(decision, request) do
+    selected_model = Map.get(decision, :selected_model)
+    estimated = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
+    context_window = Map.get(decision, :selected_context_window)
+
+    if is_integer(context_window) and context_window < estimated do
+      %{
+        "selected_model" => selected_model,
+        "reason" => "context_window_too_small",
+        "context_window" => context_window,
+        "estimated_prompt_tokens" => estimated
+      }
     end
   end
 
