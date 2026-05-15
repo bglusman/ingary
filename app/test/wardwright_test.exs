@@ -197,6 +197,49 @@ defmodule WardwrightTest do
     assert Enum.map(body["data"], & &1["id"]) == ["coding-balanced", "wardwright/coding-balanced"]
   end
 
+  test "public synthetic model discovery omits policy internals" do
+    config =
+      unit_policy_config()
+      |> Map.put("prompt_transforms", %{"preamble" => "private operator prompt"})
+      |> Map.put("governance", [
+        %{"id" => "internal-policy", "kind" => "request_guard", "contains" => "secret marker"}
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn = call(:get, "/v1/synthetic/models")
+    assert conn.status == 200
+
+    [model] = Jason.decode!(conn.resp_body)["data"]
+    assert model["id"] == "unit-model"
+    assert model["active_version"] == "unit-version"
+    assert model["route_type"] == "dispatcher"
+
+    refute Map.has_key?(model, "governance")
+    refute Map.has_key?(model, "prompt_transforms")
+    refute Map.has_key?(model, "route_graph")
+    refute Map.has_key?(model, "structured_output")
+  end
+
+  test "admin synthetic model endpoint keeps full policy record behind protection" do
+    config =
+      unit_policy_config()
+      |> Map.put("prompt_transforms", %{"preamble" => "private operator prompt"})
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    rejected = call(:get, "/admin/synthetic-models", nil, [], {203, 0, 113, 10})
+    assert rejected.status == 403
+
+    local = call(:get, "/admin/synthetic-models")
+    assert local.status == 200
+
+    [model] = Jason.decode!(local.resp_body)["data"]
+    assert model["prompt_transforms"] == %{"preamble" => "private operator prompt"}
+    assert is_list(model["governance"])
+    assert is_map(model["route_graph"])
+  end
+
   test "chat completion records caller headers and selected model" do
     request = %{
       model: "wardwright/coding-balanced",

@@ -167,6 +167,20 @@ defmodule Wardwright do
     }
   end
 
+  def synthetic_model_summary do
+    config = current_config()
+
+    %{
+      "id" => config["synthetic_model"],
+      "public_model_id" => config["synthetic_model"],
+      "active_version" => config["version"],
+      "description" => "Mock coding assistant synthetic model with composable route selectors.",
+      "public_namespace" => "flat",
+      "route_type" => root_route_type(config),
+      "status" => "active"
+    }
+  end
+
   defp selector_nodes(config, default_target_ids) do
     dispatchers =
       config

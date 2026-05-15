@@ -45,7 +45,7 @@ mise exec -- mix test
 ## Implemented Surface
 
 - `GET /v1/models`
-- `GET /v1/synthetic/models`
+- `GET /v1/synthetic/models` returns public model summaries only.
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
 - `GET /v1/receipts`
@@ -63,6 +63,8 @@ simulation calls write in-memory receipts and publish runtime visibility events
 through Phoenix PubSub. Caller context is extracted from `X-Wardwright-*` and
 `X-Client-Request-Id` headers first, then from request `metadata`.
 
+Detailed synthetic-model records include route graphs, prompt transforms, and
+governance policy internals; read them through `/admin/synthetic-models`.
 Prototype-sensitive endpoints are restricted to loopback callers unless
 `WARDWRIGHT_ADMIN_TOKEN` or `config :wardwright, :admin_token` is set and the
 request provides `Authorization: Bearer <token>` or

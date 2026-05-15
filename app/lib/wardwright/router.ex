@@ -37,7 +37,7 @@ defmodule Wardwright.Router do
   end
 
   get "/v1/synthetic/models" do
-    json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
+    json(conn, 200, %{"data" => [Wardwright.synthetic_model_summary()]})
   end
 
   post "/v1/chat/completions" do
