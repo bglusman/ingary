@@ -13,8 +13,11 @@ defmodule Wardwright.Application do
     children =
       [
         Wardwright.ReceiptStore,
+        {DynamicSupervisor,
+         strategy: :one_for_one, name: Wardwright.PolicyCache.SessionSupervisor},
         Wardwright.PolicyCache,
         Wardwright.Policy.AlertDelivery,
+        {Task.Supervisor, name: Wardwright.ProviderRuntime.TaskSupervisor},
         {Phoenix.PubSub, name: Wardwright.PubSub},
         {Registry, keys: :unique, name: Wardwright.Runtime.Registry},
         {DynamicSupervisor, strategy: :one_for_one, name: Wardwright.Runtime.ModelSupervisor},

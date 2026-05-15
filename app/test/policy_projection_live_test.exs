@@ -33,15 +33,17 @@ defmodule Wardwright.PolicyProjectionLiveTest do
   end
 
   test "policy projection exposes stable review fields and confidence classes" do
+    :ok = put_route_gate_config()
     projection = Wardwright.PolicyProjection.projection("route-privacy")
 
     assert projection["projection_schema"] == "wardwright.policy_projection.v1"
-    assert projection["engine"]["language"] == "starlark"
+    assert projection["engine"]["language"] == "structured"
     assert projection["artifact"]["artifact_hash"] =~ "sha256:"
+    assert projection["compiled_plan"]["planner"] == "Wardwright.Policy.Plan"
 
     nodes = projection["phases"] |> Enum.flat_map(& &1["nodes"])
-    assert Enum.any?(nodes, &(&1["confidence"] == "opaque"))
-    assert Enum.any?(nodes, &(&1["source_span"]["file"] == "policy.star"))
+    assert Enum.any?(nodes, &(&1["id"] == "request-policy.private-route-gate"))
+    assert Enum.any?(nodes, &(&1["confidence"] == "exact"))
     assert [%{"class" => "ordered"}] = projection["conflicts"]
   end
 
@@ -57,18 +59,40 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert is_map(simulation["receipt_preview"])
   end
 
+  test "route projection simulation is derived from configured policy plan actions" do
+    :ok = put_route_gate_config()
+    [simulation] = Wardwright.PolicyProjection.simulations("route-privacy")
+
+    assert simulation["scenario_id"] == "configured-route-policy"
+    assert simulation["verdict"] == "passed"
+
+    assert [
+             %{
+               "rule_id" => "private-route-gate",
+               "action" => "restrict_routes",
+               "allowed_targets" => [local_model]
+             }
+           ] = get_in(simulation, ["receipt_preview", "decision", "policy_actions"])
+
+    assert local_model == Wardwright.local_model()
+
+    assert %{"allowed_targets" => [^local_model]} =
+             get_in(simulation, ["receipt_preview", "decision", "route_constraints"])
+  end
+
   test "LiveView projection workbench renders selected pattern and mode" do
+    :ok = put_route_gate_config()
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/trace_overlay")
 
     assert html =~ "Private context route gate"
     assert html =~ "Trace overlay"
-    assert html =~ "Starlark route gate"
+    assert html =~ "Request route plan"
 
     connected_html = render(view)
 
     assert connected_html =~ "Private context route gate"
     assert connected_html =~ "Trace overlay"
-    assert connected_html =~ "Starlark route gate"
+    assert connected_html =~ "Request route plan"
 
     assert {:error, {:redirect, %{to: "/policies/route-privacy/effect_matrix"}}} =
              view
@@ -84,10 +108,37 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert matrix_html =~ "route.allowed_targets"
   end
 
+  defp put_route_gate_config do
+    config =
+      Wardwright.default_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "private-route-gate",
+          "kind" => "route_gate",
+          "action" => "restrict_routes",
+          "contains" => "private-data-risk",
+          "message" => "private context must stay local",
+          "allowed_targets" => [Wardwright.local_model()]
+        },
+        %{
+          "id" => "fallback-route-gate",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "force-managed",
+          "message" => "operator selected managed fallback",
+          "target_model" => Wardwright.managed_model()
+        }
+      ])
+
+    assert {:ok, _config} = Wardwright.put_config(config)
+    :ok
+  end
+
   test "LiveView workbench updates from runtime PubSub visibility events" do
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/phase_map")
 
     assert html =~ "Runtime Visibility"
+    assert html =~ "History Cache"
     refute html =~ "route.selected"
 
     assert {:ok, %{"type" => "route.selected"}} =
@@ -104,5 +155,51 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert updated =~ "route.selected"
     assert updated =~ "liveview-session"
     assert updated =~ "mock/liveview"
+  end
+
+  test "LiveView workbench shows bounded policy cache writes as live history" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 4, "recent_limit" => 4})
+
+    {:ok, view, html} = live(build_conn(), "/policies/route-privacy/phase_map")
+
+    assert html =~ "History Cache"
+    assert html =~ "0/4"
+    refute html =~ "tool_call"
+
+    assert {:ok, _event} =
+             Wardwright.PolicyCache.add(%{
+               "kind" => "tool_call",
+               "key" => "shell:ls",
+               "scope" => %{"session_id" => "live-history-session"},
+               "created_at_unix_ms" => 1
+             })
+
+    updated = render(view)
+
+    assert updated =~ "1/4"
+    assert updated =~ "tool_call"
+    assert updated =~ "shell:ls"
+    assert updated =~ "live-history-session"
+  end
+
+  test "LiveView history cache does not render raw cached text by default" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 4, "recent_limit" => 4})
+
+    {:ok, view, _html} = live(build_conn(), "/policies/route-privacy/phase_map")
+
+    assert {:ok, _event} =
+             Wardwright.PolicyCache.add(%{
+               "kind" => "request_text",
+               "key" => "chat_completion",
+               "value" => %{"text" => "do not show this private prompt"},
+               "created_at_unix_ms" => 1
+             })
+
+    updated = render(view)
+
+    assert updated =~ "request_text"
+    assert updated =~ "chat_completion"
+    assert updated =~ "global scope"
+    refute updated =~ "do not show this private prompt"
   end
 end

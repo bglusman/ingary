@@ -167,6 +167,20 @@ defmodule Wardwright do
     }
   end
 
+  def synthetic_model_summary do
+    config = current_config()
+
+    %{
+      "id" => config["synthetic_model"],
+      "public_model_id" => config["synthetic_model"],
+      "active_version" => config["version"],
+      "description" => "Mock coding assistant synthetic model with composable route selectors.",
+      "public_namespace" => "flat",
+      "route_type" => root_route_type(config),
+      "status" => "active"
+    }
+  end
+
   defp selector_nodes(config, default_target_ids) do
     dispatchers =
       config
@@ -266,39 +280,81 @@ defmodule Wardwright do
         provider_outcome(nil, "completed", started, nil, false, true)
 
       target ->
-        case provider_kind(target) do
-          "mock" ->
-            provider_outcome(nil, "completed", started, nil, false, true)
+        Wardwright.ProviderRuntime.complete(target, request, fn ->
+          complete_target(target, request)
+        end)
+        |> provider_outcome_from_result(started)
+    end
+  end
 
-          "ollama" ->
-            target
-            |> complete_with_ollama(request)
-            |> provider_outcome_from_result(started)
+  def stream_selected_model(selected_model, request) do
+    started = System.monotonic_time(:millisecond)
 
-          "openai-compatible" ->
-            target
-            |> complete_with_openai_compatible(request)
-            |> provider_outcome_from_result(started)
+    target =
+      current_config()
+      |> Map.get("targets", [])
+      |> Enum.find(fn target -> target["model"] == selected_model end)
 
-          "canned_sequence" ->
-            target
-            |> complete_with_canned_sequence(request)
-            |> provider_outcome_from_result(started)
+    case target do
+      nil ->
+        provider_outcome([], "completed", started, nil, false, true)
 
-          kind ->
-            provider_outcome(
-              nil,
-              "provider_error",
-              started,
-              "unsupported provider kind #{inspect(kind)}",
-              true,
-              false
-            )
-        end
+      target ->
+        Wardwright.ProviderRuntime.stream(target, request, fn ->
+          stream_target(target, request)
+        end)
+        |> provider_outcome_from_result(started)
+        |> normalize_stream_outcome()
+    end
+  end
+
+  defp complete_target(target, request) do
+    case provider_kind(target) do
+      "mock" ->
+        {:mock, nil}
+
+      "ollama" ->
+        complete_with_ollama(target, request)
+
+      "openai-compatible" ->
+        complete_with_openai_compatible(target, request)
+
+      "canned_sequence" ->
+        complete_with_canned_sequence(target, request)
+
+      kind ->
+        {:error, "unsupported provider kind #{inspect(kind)}"}
+    end
+  end
+
+  defp stream_target(target, request) do
+    case provider_kind(target) do
+      "mock" ->
+        {:mock,
+         [
+           "Mock Wardwright stream ",
+           "routed to #{target["model"]} ",
+           "for #{Map.get(request, "model")}."
+         ]}
+
+      "canned_sequence" ->
+        stream_with_canned_sequence(target, request)
+
+      "ollama" ->
+        stream_with_ollama(target, request)
+
+      "openai-compatible" ->
+        stream_with_openai_compatible(target, request)
+
+      kind ->
+        {:error, "unsupported provider kind #{inspect(kind)}"}
     end
   end
 
   defp complete_with_canned_sequence(target, request) do
+    delay_ms = non_negative_integer(Map.get(target, "canned_delay_ms"), 0)
+    if delay_ms > 0, do: Process.sleep(delay_ms)
+
     outputs = Map.get(target, "canned_outputs", [])
     attempt_index = request |> Map.get("wardwright_attempt_index", 0) |> integer_value() || 0
 
@@ -306,6 +362,54 @@ defmodule Wardwright do
       output when is_binary(output) -> {:ok, output}
       _ -> {:error, "canned_sequence target has no outputs"}
     end
+  end
+
+  defp stream_with_canned_sequence(target, request) do
+    delay_ms = non_negative_integer(Map.get(target, "canned_delay_ms"), 0)
+    if delay_ms > 0, do: Process.sleep(delay_ms)
+
+    attempt_index = request |> Map.get("wardwright_attempt_index", 0) |> integer_value() || 0
+
+    chunks =
+      target
+      |> Map.get("canned_stream_attempt_chunks", [])
+      |> attempt_stream_chunks(attempt_index)
+      |> case do
+        [] -> Map.get(target, "canned_stream_chunks", [])
+        chunks -> chunks
+      end
+      |> case do
+        [] ->
+          target
+          |> Map.get("canned_outputs", [])
+          |> Enum.at(attempt_index)
+          |> case do
+            output when is_binary(output) -> chunk_text(output)
+            _ -> []
+          end
+
+        chunks ->
+          chunks
+      end
+
+    case chunks do
+      chunks when is_list(chunks) and chunks != [] -> {:ok, Enum.map(chunks, &to_string/1)}
+      _ -> {:error, "canned_sequence target has no stream chunks"}
+    end
+  end
+
+  defp attempt_stream_chunks(attempt_chunks, attempt_index)
+       when is_list(attempt_chunks) and is_integer(attempt_index) do
+    case Enum.at(attempt_chunks, attempt_index) do
+      chunks when is_list(chunks) -> chunks
+      _ -> []
+    end
+  end
+
+  defp attempt_stream_chunks(_attempt_chunks, _attempt_index), do: []
+
+  defp chunk_text(text) when is_binary(text) do
+    [text]
   end
 
   defp normalize_config(config) do
@@ -337,7 +441,16 @@ defmodule Wardwright do
               target |> Map.get("credential_env", "") |> to_string() |> String.trim(),
             "credential_fnox_key" =>
               target |> Map.get("credential_fnox_key", "") |> to_string() |> String.trim(),
-            "canned_outputs" => normalize_canned_outputs(Map.get(target, "canned_outputs", []))
+            "canned_outputs" => normalize_canned_outputs(Map.get(target, "canned_outputs", [])),
+            "canned_stream_chunks" =>
+              normalize_canned_outputs(Map.get(target, "canned_stream_chunks", [])),
+            "canned_stream_attempt_chunks" =>
+              normalize_canned_stream_attempt_chunks(
+                Map.get(target, "canned_stream_attempt_chunks", [])
+              ),
+            "canned_delay_ms" => non_negative_integer(Map.get(target, "canned_delay_ms"), 0),
+            "provider_timeout_ms" =>
+              positive_integer(Map.get(target, "provider_timeout_ms"), 180_000)
           }
           |> Enum.reject(fn {_key, value} -> value == "" or value == [] end)
           |> Map.new()
@@ -367,6 +480,12 @@ defmodule Wardwright do
     do: Enum.map(outputs, &to_string/1)
 
   defp normalize_canned_outputs(_), do: []
+
+  defp normalize_canned_stream_attempt_chunks(attempts) when is_list(attempts) do
+    Enum.map(attempts, &normalize_canned_outputs/1)
+  end
+
+  defp normalize_canned_stream_attempt_chunks(_), do: []
 
   defp normalize_selectors(selectors, model_key) when is_list(selectors) do
     Enum.map(selectors, fn selector ->
@@ -539,6 +658,28 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_with_ollama(target, request) do
+    model = provider_model(target)
+
+    base_url =
+      Map.get(target, "provider_base_url") ||
+        System.get_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+
+    body =
+      Jason.encode!(%{
+        model: model,
+        messages: request_messages(request),
+        stream: true
+      })
+
+    "#{String.trim_trailing(base_url, "/")}/api/chat"
+    |> http_post_stream(body, [])
+    |> case do
+      {:ok, response_body} -> {:ok, parse_ollama_stream_chunks(response_body)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp complete_with_openai_compatible(target, request) do
     with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
          {:ok, credential} <- provider_credential(target) do
@@ -566,6 +707,30 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_with_openai_compatible(target, request) do
+    with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
+         {:ok, credential} <- provider_credential(target) do
+      body =
+        Jason.encode!(%{
+          model: provider_model(target),
+          messages: request_messages(request),
+          stream: true
+        })
+
+      headers = provider_headers(target) ++ [{~c"authorization", ~c"Bearer #{credential}"}]
+
+      "#{String.trim_trailing(base_url, "/")}/chat/completions"
+      |> http_post_stream(body, headers)
+      |> case do
+        {:ok, response_body} -> {:ok, parse_openai_sse_chunks(response_body)}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      "" -> {:error, "provider_base_url is required for openai-compatible targets"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp http_post(url, body, headers) do
     request = {
       String.to_charlist(url),
@@ -584,6 +749,105 @@ defmodule Wardwright do
       {:error, reason} ->
         {:error, inspect(reason)}
     end
+  end
+
+  defp http_post_stream(url, body, headers) do
+    request = {
+      String.to_charlist(url),
+      [{~c"content-type", ~c"application/json"} | headers],
+      ~c"application/json",
+      body
+    }
+
+    case :httpc.request(
+           :post,
+           request,
+           [{:timeout, 180_000}],
+           sync: false,
+           stream: {:self, :once}
+         ) do
+      {:ok, request_id} ->
+        collect_http_stream(request_id, [], nil)
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  defp collect_http_stream(request_id, parts, handler_pid) do
+    receive do
+      {:http, {^request_id, :stream_start, _headers, pid}} ->
+        :ok = :httpc.stream_next(pid)
+        collect_http_stream(request_id, parts, pid)
+
+      {:http, {^request_id, :stream_start, _headers}} ->
+        collect_http_stream(request_id, parts, handler_pid)
+
+      {:http, {^request_id, :stream, part}} ->
+        if handler_pid, do: :ok = :httpc.stream_next(handler_pid)
+        collect_http_stream(request_id, [part | parts], handler_pid)
+
+      {:http, {^request_id, :stream_end, _headers}} ->
+        {:ok, parts |> Enum.reverse() |> IO.iodata_to_binary()}
+
+      {:http, {^request_id, {{_, status, _}, _headers, response_body}}}
+      when status in 200..299 ->
+        {:ok, response_body}
+
+      {:http, {^request_id, {{_, status, _}, _headers, _response_body}}} ->
+        {:error, "provider returned #{status}"}
+
+      {:http, {^request_id, {:error, reason}}} ->
+        {:error, inspect(reason)}
+    after
+      180_000 ->
+        :httpc.cancel_request(request_id)
+        {:error, "provider stream timed out after 180000ms"}
+    end
+  end
+
+  defp parse_ollama_stream_chunks(response_body) do
+    response_body
+    |> stream_lines()
+    |> Enum.flat_map(fn line ->
+      case Jason.decode(line) do
+        {:ok, event} -> [get_in(event, ["message", "content"]) || event["response"]]
+        {:error, _} -> []
+      end
+    end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+  end
+
+  defp parse_openai_sse_chunks(response_body) do
+    response_body
+    |> stream_lines()
+    |> Enum.flat_map(fn
+      "data: [DONE]" ->
+        []
+
+      "data: " <> data ->
+        case Jason.decode(data) do
+          {:ok, event} ->
+            [
+              get_in(event, ["choices", Access.at(0), "delta", "content"]) ||
+                get_in(event, ["choices", Access.at(0), "message", "content"])
+            ]
+
+          {:error, _} ->
+            []
+        end
+
+      _line ->
+        []
+    end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+  end
+
+  defp stream_lines(response_body) when is_binary(response_body) do
+    response_body
+    |> String.split(["\r\n", "\n"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp provider_credential(target) do
@@ -662,6 +926,10 @@ defmodule Wardwright do
     provider_outcome(content, "completed", started, nil, true, false)
   end
 
+  defp provider_outcome_from_result({:mock, content}, started) do
+    provider_outcome(content, "completed", started, nil, false, true)
+  end
+
   defp provider_outcome_from_result({:error, reason}, started) do
     provider_outcome(nil, "provider_error", started, reason, true, false)
   end
@@ -676,6 +944,14 @@ defmodule Wardwright do
       mock: mock
     }
   end
+
+  defp normalize_stream_outcome(%{content: chunks} = outcome) when is_list(chunks) do
+    outcome
+    |> Map.put(:content, Enum.join(chunks, ""))
+    |> Map.put(:stream_chunks, chunks)
+  end
+
+  defp normalize_stream_outcome(outcome), do: outcome
 
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))

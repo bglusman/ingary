@@ -1,0 +1,41 @@
+---
+layout: default
+title: Architecture Review Task Ledger
+description: Tracked follow-up tasks from the adversarial architecture review.
+---
+
+# Architecture Review Task Ledger
+
+This ledger converts the adversarial architecture review into tracked work. Keep
+it current as implementation lands; unresolved `P1` items should block any
+deployment with real provider credentials.
+
+## Active Tasks
+
+| ID | Priority | Area | Status | Task |
+|---|---:|---|---|---|
+| ARCH-001 | P1 | Security | In progress | Remove or gate prototype mutation surfaces before real credentials are configured. `POST /__test/config` is now disabled unless `:allow_test_config` or `WARDWRIGHT_ALLOW_TEST_CONFIG=1` is set. `/admin/*`, receipt reads, and policy-cache APIs now require loopback access or an admin token. Public synthetic-model discovery now returns summaries instead of route graphs, prompt transforms, or governance internals. This is a homelab/single-operator guard, not a complete product auth model. Provider API credentials should be managed separately through fnox-backed secret lookup. Remaining work is to define deployment-topology-specific caller authorization: local-only, SSO/reverse-proxy integration, API-key authorization to use specific synthetic models, or a database-backed user/permission system if the product later needs one. |
+| ARCH-002 | P1 | Route policy | Closed | Make route-policy overrides fail closed by default. Forced missing/too-small models block unless the matching route policy explicitly sets `allow_fallback: true`; when fallback is allowed, receipts preserve the failed forced override, selected fallback route, skipped targets, and `policy_route_constraints` so the operator can see that fallback was policy-authorized. |
+| ARCH-003 | P1 | Policy engines | In progress | Normalize primitive, Dune, WASM, and hybrid policy outputs into one action shape. `wardwright.policy_action.v1` and `wardwright.policy_result.v1` now carry phase, effect, source, priority, and conflict metadata; receipts include `decision.policy_conflicts` for ordered same-key conflicts. Remaining work is to extend the same contract across stream/output phases and make conflict resolution enforceable beyond request-phase declaration order. |
+| ARCH-004 | P1 | TTSR | In progress | Stream policies now evaluate selected-target provider chunks through `Wardwright.ProviderRuntime.stream/3`, restart provider attempts for `retry` and `retry_with_reminder`, preserve failed attempts as unreleased receipt evidence, and record provider call/mock status plus generated/released/held/rewritten/blocked byte accounting. Split literal/regex matches are checked against the buffered stream window, including rewrite actions across chunk boundaries. Ollama NDJSON streams and OpenAI-compatible SSE streams now pass through native HTTP streaming transport adapters before stream policy evaluation. Remaining work is mid-stream policy cancellation/abort semantics, latency budgets, and receipt offsets against raw provider events. |
+| ARCH-005 | P2 | Policy architecture | In progress | Keep moving policy evaluation out of HTTP request handling. Request governance now lives in `Wardwright.Policy.Plan`, normalized action/result contracts sit below the router, and stable pure decisions are beginning to move into Gleam wrappers; remaining work is compiled plans, phase-specific evaluators, and projection/trace emission from the same plan. |
+| ARCH-006 | P2 | State/history | In progress | Hot policy history now lives behind `Wardwright.PolicyCache` with deterministic eviction, status reporting, and LiveView/PubSub visibility for recent cache writes. The cache now uses a protected ETS session catalog plus supervised per-session owner processes with bounded ETS tables, so session-local writes no longer serialize through one global history table owner. Recent history threshold classification has a Gleam core. Remaining work is declared aggregate/index tables for cross-session facts, richer owner/index health in LiveView, durable sink persistence, replay/checkpoint strategy, and explicit behavior across restart and multi-instance deployment. |
+| ARCH-007 | P2 | Alerting | In progress | Alert enqueue/backpressure classification has a Gleam core, and the current in-memory sink now exposes queue health through `/admin/policy-alerts` plus redacted PubSub delivery events. Remaining work is turning alert delivery into a supervised sink abstraction with delivery workers, retry/dead-letter persistence, external sink adapters, and durable queue recovery. |
+| ARCH-008 | P2 | Projection UI | In progress | Stop hardcoding projection/simulation examples; generate workbench projection data from deterministic policy artifacts, compiled plans, and receipts. Route-policy projections now derive nodes/effects/conflicts and a simulation trace from configured governance rules through `Wardwright.Policy.Plan`, with a visible no-route-policy gap state when no matching rules exist. Remaining work is to make stream/output projections consume the same compiled-plan/receipt path and remove the last canned simulation previews. |
+| ARCH-009 | P2 | Provider runtime | In progress | Provider calls now run through `Wardwright.ProviderRuntime` using a supervised task boundary, per-target `provider_timeout_ms`, and runtime PubSub events for provider attempt start/finish. Slow provider calls time out and surface as `provider_error` receipts instead of hanging the request indefinitely. Streaming requests now use the same supervised provider boundary, parse native Ollama/OpenAI-compatible HTTP stream transports, and can retry selected-target stream attempts before releasing bytes. Remaining work is real mid-stream cancellation/restart, provider-specific pools, circuit breaking, richer telemetry, credential lookup isolation, and health/degraded-state reporting. |
+| ARCH-010 | P2 | Test quality | In progress | Add behavior tests for fail-closed policy semantics and make property tests exercise implementation paths, not only oracle helpers. New coverage exists for forced-route failure, hybrid propagation, test-config gating, and the Gleam-backed structured/history/alert decision cores. |
+
+## Follow-Up Review Gates
+
+- Before enabling real provider credentials: close `ARCH-001`, or explicitly
+  document that the server is localhost-only or fronted by a trusted auth/SSO
+  boundary. Do not treat provider credential storage, model-use authorization,
+  and admin/configuration access as the same security problem.
+- Before evaluating TTSR product quality: close `ARCH-004` enough to test a real
+  streamed provider path, not only mock chunks.
+- Before building a large policy UI: close enough of `ARCH-003` and `ARCH-005`
+  that the UI consumes a stable backend projection rather than engine-specific
+  implementation details.
+- Before multi-session or remote integration testing: close enough of
+  `ARCH-006` and `ARCH-007` that policy behavior does not depend on accidental
+  local process lifetime.

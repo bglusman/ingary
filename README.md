@@ -25,7 +25,8 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
-- `app` - active Elixir/Phoenix LiveView application.
+- `app` - active Elixir/Phoenix LiveView application, including Gleam policy
+  core modules under `app/src/wardwright`.
 - `docs/rfcs/wardwright-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `wardwright.org`.
 
@@ -63,7 +64,8 @@ backend is `app`.
 
 Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. It exists while the production configuration API
-is still being designed.
+is still being designed, but it is disabled by default outside tests. Enable it
+only for controlled local runs with `WARDWRIGHT_ALLOW_TEST_CONFIG=1`.
 
 Run the storage/sink reference fixture with:
 

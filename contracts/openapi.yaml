@@ -170,6 +170,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ReceiptSummary"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
   /v1/receipts/{receipt_id}:
     get:
       tags: [Receipts]
@@ -187,6 +189,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Receipt"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
         "404":
           $ref: "#/components/responses/Error"
   /admin/providers:
@@ -206,6 +210,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Provider"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
   /admin/storage:
     get:
       tags: [Admin]
@@ -217,6 +223,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StorageHealth"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
   /admin/runtime:
     get:
       tags: [Admin]
@@ -228,6 +236,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RuntimeStatus"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
   /admin/synthetic-models:
     get:
       tags: [Admin]
@@ -245,13 +255,30 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SyntheticModel"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
+  /admin/policy-alerts:
+    get:
+      tags: [Admin]
+      summary: Get policy alert delivery sink health
+      responses:
+        "200":
+          description: Policy alert delivery sink health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PolicyAlertStatus"
+        "403":
+          $ref: "#/components/responses/ProtectedEndpoint"
   /__test/config:
     post:
       tags: [Admin]
       summary: Prototype-only dynamic model definition endpoint
       description: |
         Non-production endpoint used by property/fuzz tests to install generated
-        synthetic model definitions into runnable prototypes.
+        synthetic model definitions into runnable prototypes. Disabled unless
+        the runtime explicitly enables `allow_test_config` or
+        `WARDWRIGHT_ALLOW_TEST_CONFIG=1`.
       requestBody:
         required: true
         content:
@@ -273,6 +300,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/TestRouteTarget"
+        "404":
+          description: Test config endpoint disabled
         "400":
           $ref: "#/components/responses/Error"
 components:
@@ -308,6 +337,12 @@ components:
   responses:
     Error:
       description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ProtectedEndpoint:
+      description: Protected endpoint requires localhost or admin token
       content:
         application/json:
           schema:
@@ -652,6 +687,45 @@ components:
         event_count: { type: integer }
         last_event:
           type: object
+          additionalProperties: true
+    PolicyAlertStatus:
+      type: object
+      required: [kind, capacity, on_full, queue_depth]
+      properties:
+        kind:
+          type: string
+          const: in_memory_alert_sink
+        capacity:
+          type: integer
+          minimum: 0
+        on_full:
+          type: string
+          enum: [drop, dead_letter, fail_closed]
+        queue_depth:
+          type: integer
+          minimum: 0
+        seen_count:
+          type: integer
+          minimum: 0
+        queued_count:
+          type: integer
+          minimum: 0
+        dead_letter_count:
+          type: integer
+          minimum: 0
+        dropped_count:
+          type: integer
+          minimum: 0
+        failed_closed_count:
+          type: integer
+          minimum: 0
+        duplicate_suppressed_count:
+          type: integer
+          minimum: 0
+        last_result:
+          type:
+            - object
+            - "null"
           additionalProperties: true
     ErrorResponse:
       type: object

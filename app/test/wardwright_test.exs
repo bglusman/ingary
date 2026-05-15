@@ -1,3 +1,73 @@
+defmodule WardwrightTest.StreamingProvider do
+  use Plug.Router
+
+  plug(:match)
+  plug(:dispatch)
+
+  post "/ollama/api/chat" do
+    {:ok, _body, conn} = Plug.Conn.read_body(conn)
+
+    conn =
+      conn
+      |> Plug.Conn.put_resp_content_type("application/x-ndjson")
+      |> Plug.Conn.send_chunked(200)
+
+    {:ok, conn} =
+      Plug.Conn.chunk(
+        conn,
+        Jason.encode!(%{"message" => %{"content" => "use Old"}, "done" => false}) <> "\n"
+      )
+
+    {:ok, conn} =
+      Plug.Conn.chunk(
+        conn,
+        Jason.encode!(%{"message" => %{"content" => "Client(arg) now"}, "done" => false}) <>
+          "\n"
+      )
+
+    {:ok, conn} = Plug.Conn.chunk(conn, Jason.encode!(%{"done" => true}) <> "\n")
+    conn
+  end
+
+  post "/openai/chat/completions" do
+    {:ok, _body, conn} = Plug.Conn.read_body(conn)
+
+    case Plug.Conn.get_req_header(conn, "authorization") do
+      ["Bearer test-openai-key"] ->
+        conn =
+          conn
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.send_chunked(200)
+
+        {:ok, conn} =
+          Plug.Conn.chunk(
+            conn,
+            "data: " <>
+              Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "hello "}}]}) <>
+              "\n\n"
+          )
+
+        {:ok, conn} =
+          Plug.Conn.chunk(
+            conn,
+            "data: " <>
+              Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "world"}}]}) <>
+              "\n\n"
+          )
+
+        {:ok, conn} = Plug.Conn.chunk(conn, "data: [DONE]\n\n")
+        conn
+
+      _ ->
+        Plug.Conn.send_resp(conn, 401, "missing authorization")
+    end
+  end
+
+  match _ do
+    Plug.Conn.send_resp(conn, 404, "not found")
+  end
+end
+
 defmodule WardwrightTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
@@ -77,6 +147,93 @@ defmodule WardwrightTest do
                "key" => "shell:ls",
                "scope" => %{"session_id" => "session-a"}
              })
+  end
+
+  test "policy cache is bounded ETS-backed runtime state and publishes writes" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 2, "recent_limit" => 2})
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:policies))
+
+    for index <- 1..3 do
+      assert {:ok, %{"sequence" => ^index}} =
+               Wardwright.PolicyCache.add(%{
+                 "kind" => "tool_call",
+                 "key" => "shell:#{index}",
+                 "scope" => %{"session_id" => "session-a"},
+                 "created_at_unix_ms" => index
+               })
+    end
+
+    assert_receive {:wardwright_runtime_event, "runtime:policies",
+                    %{
+                      "type" => "policy_cache.event_recorded",
+                      "sequence" => 1,
+                      "entry_count" => 1,
+                      "max_entries" => 2
+                    }}
+
+    assert %{
+             "kind" => "ets_session_catalog_bounded_history",
+             "topology" => "catalog_per_session_tables",
+             "bounded" => true,
+             "entry_count" => 2,
+             "max_entries" => 2,
+             "session_count" => 1,
+             "stores" => [
+               %{
+                 "entry_count" => 2,
+                 "scope" => %{"session_id" => "session-a"},
+                 "scope_key" => "session:session-a"
+               }
+             ]
+           } = Wardwright.PolicyCache.status()
+
+    assert [%{"sequence" => 3}, %{"sequence" => 2}] = Wardwright.PolicyCache.recent(%{}, 10)
+  end
+
+  test "policy cache isolates per-session stores while preserving scoped reads" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 2, "recent_limit" => 10})
+
+    for {session_id, count} <- [{"session-a", 3}, {"session-b", 1}] do
+      for index <- 1..count do
+        assert {:ok, _event} =
+                 Wardwright.PolicyCache.add(%{
+                   "kind" => "tool_call",
+                   "key" => "shell:ls",
+                   "scope" => %{"session_id" => session_id},
+                   "created_at_unix_ms" => index
+                 })
+      end
+    end
+
+    assert %{"entry_count" => 3, "session_count" => 2, "stores" => stores} =
+             Wardwright.PolicyCache.status()
+
+    assert Enum.sort(Enum.map(stores, & &1["entry_count"])) == [1, 2]
+    assert stores |> Enum.map(& &1["owner"]) |> Enum.uniq() |> length() == 2
+
+    assert [
+             %{"scope" => %{"session_id" => "session-a"}},
+             %{"scope" => %{"session_id" => "session-a"}}
+           ] =
+             Wardwright.PolicyCache.recent(
+               %{"kind" => "tool_call", "scope" => %{"session_id" => "session-a"}},
+               10
+             )
+
+    assert [%{"scope" => %{"session_id" => "session-b"}}] =
+             Wardwright.PolicyCache.recent(
+               %{"kind" => "tool_call", "scope" => %{"session_id" => "session-b"}},
+               10
+             )
+
+    cross_session = Wardwright.PolicyCache.recent(%{"kind" => "tool_call"}, 10)
+
+    assert cross_session ==
+             Enum.sort_by(
+               cross_session,
+               fn event -> {event["created_at_unix_ms"], event["sequence"], event["id"]} end,
+               :desc
+             )
   end
 
   test "history threshold policy reads only configured cache scope" do
@@ -195,6 +352,49 @@ defmodule WardwrightTest do
     assert conn.status == 200
     body = Jason.decode!(conn.resp_body)
     assert Enum.map(body["data"], & &1["id"]) == ["coding-balanced", "wardwright/coding-balanced"]
+  end
+
+  test "public synthetic model discovery omits policy internals" do
+    config =
+      unit_policy_config()
+      |> Map.put("prompt_transforms", %{"preamble" => "private operator prompt"})
+      |> Map.put("governance", [
+        %{"id" => "internal-policy", "kind" => "request_guard", "contains" => "secret marker"}
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn = call(:get, "/v1/synthetic/models")
+    assert conn.status == 200
+
+    [model] = Jason.decode!(conn.resp_body)["data"]
+    assert model["id"] == "unit-model"
+    assert model["active_version"] == "unit-version"
+    assert model["route_type"] == "dispatcher"
+
+    refute Map.has_key?(model, "governance")
+    refute Map.has_key?(model, "prompt_transforms")
+    refute Map.has_key?(model, "route_graph")
+    refute Map.has_key?(model, "structured_output")
+  end
+
+  test "admin synthetic model endpoint keeps full policy record behind protection" do
+    config =
+      unit_policy_config()
+      |> Map.put("prompt_transforms", %{"preamble" => "private operator prompt"})
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    rejected = call(:get, "/admin/synthetic-models", nil, [], {203, 0, 113, 10})
+    assert rejected.status == 403
+
+    local = call(:get, "/admin/synthetic-models")
+    assert local.status == 200
+
+    [model] = Jason.decode!(local.resp_body)["data"]
+    assert model["prompt_transforms"] == %{"preamble" => "private operator prompt"}
+    assert is_list(model["governance"])
+    assert is_map(model["route_graph"])
   end
 
   test "chat completion records caller headers and selected model" do
@@ -413,6 +613,127 @@ defmodule WardwrightTest do
            }
   end
 
+  test "route override fails closed when the forced model is unavailable" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "missing-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "hard proof",
+          "target_model" => "missing/model"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hard proof " <> String.duplicate("x", 60)}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "policy_failed_closed"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    assert get_in(receipt, ["decision", "route_blocked"]) == true
+    assert get_in(receipt, ["decision", "fallback_used"]) == false
+
+    assert get_in(receipt, ["decision", "reason"]) ==
+             "policy forced model was not in the allowed route set"
+  end
+
+  test "route override only falls back when explicitly allowed" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "missing-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "hard proof",
+          "target_model" => "missing/model",
+          "allow_fallback" => true
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hard proof " <> String.duplicate("x", 60)}]
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "completed"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert get_in(receipt, ["decision", "route_type"]) == "policy_override_fallback"
+    assert get_in(receipt, ["decision", "fallback_used"]) == true
+    assert get_in(receipt, ["decision", "route_blocked"]) == false
+    assert get_in(receipt, ["decision", "selected_model"]) == "medium/model"
+
+    assert get_in(receipt, ["decision", "policy_route_constraints"]) == %{
+             "forced_model" => "missing/model",
+             "allow_fallback" => true
+           }
+
+    refute Enum.any?(
+             get_in(receipt, ["decision", "skipped"]),
+             &match?(%{"target" => "medium/model", "reason" => "policy_route_gate"}, &1)
+           )
+
+    assert Enum.any?(
+             get_in(receipt, ["decision", "skipped"]),
+             &match?(%{"target" => "missing/model", "reason" => "forced_model_unavailable"}, &1)
+           )
+
+    assert Enum.any?(
+             get_in(receipt, ["decision", "skipped"]),
+             &match?(%{"target" => "tiny/model", "reason" => "context_window_too_small"}, &1)
+           )
+  end
+
+  test "route override fails closed when the forced model cannot fit the prompt" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "too-small-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "long proof",
+          "target_model" => "tiny/model"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "long proof " <> String.duplicate("x", 200)}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    assert get_in(receipt, ["decision", "route_blocked"]) == true
+
+    assert get_in(receipt, ["decision", "reason"]) ==
+             "policy forced model was too small for estimated prompt"
+
+    assert [%{"target" => "tiny/model", "reason" => "context_window_too_small"} | _] =
+             get_in(receipt, ["decision", "skipped"])
+  end
+
   test "Dune policy engine can return route constraints used by the planner" do
     config =
       unit_policy_config()
@@ -451,6 +772,144 @@ defmodule WardwrightTest do
 
     assert [%{"rule_id" => "dune-route-gate", "action" => "restrict_routes"}] =
              get_in(body, ["receipt", "decision", "policy_actions"])
+
+    assert [
+             %{
+               "action_schema" => "wardwright.policy_action.v1",
+               "phase" => "request.routing",
+               "effect_type" => "route_constraint",
+               "source" => %{"type" => "engine", "engine" => "dune", "status" => "ok"},
+               "conflict_key" => "route_constraints",
+               "conflict_policy" => "ordered"
+             }
+           ] = get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "route-affecting policy actions expose ordered conflict metadata" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "local/qwen", "context_window" => 32},
+        %{"model" => "managed/kimi", "context_window" => 256}
+      ])
+      |> Map.put("governance", [
+        %{
+          "id" => "private-local-provider",
+          "kind" => "route_gate",
+          "action" => "restrict_routes",
+          "contains" => "private",
+          "allowed_targets" => ["local"]
+        },
+        %{
+          "id" => "private-specific-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "private",
+          "target_model" => "local/qwen"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "private working notes"}]
+        }
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "decision", "policy_route_constraints"]) == %{
+             "allowed_targets" => ["local"],
+             "forced_model" => "local/qwen"
+           }
+
+    assert [
+             %{
+               "conflict_schema" => "wardwright.policy_conflict.v1",
+               "key" => "route_constraints",
+               "class" => "ordered",
+               "rule_ids" => ["private-local-provider", "private-specific-model"],
+               "required_resolution" => "preserve policy declaration order"
+             }
+           ] = get_in(body, ["receipt", "decision", "policy_conflicts"])
+  end
+
+  test "hybrid policy engine propagates nested blocking actions" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "hybrid-block",
+          "kind" => "route_gate",
+          "engine" => "hybrid",
+          "engines" => [
+            %{
+              "engine" => "primitive",
+              "rules" => [
+                %{"id" => "primitive-deny", "contains" => "deny me", "action" => "block"}
+              ]
+            }
+          ]
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "please deny me"}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert [
+             %{
+               "action_schema" => "wardwright.policy_action.v1",
+               "rule_id" => "primitive-deny",
+               "kind" => "route_gate",
+               "action" => "block",
+               "effect_type" => "terminal",
+               "conflict_key" => "terminal_decision"
+             }
+           ] = get_in(receipt, ["decision", "policy_actions"])
+  end
+
+  test "hybrid policy reports policy blocks separately from engine failures" do
+    assert %{
+             "engine" => "hybrid",
+             "result_schema" => "wardwright.policy_result.v1",
+             "status" => "ok",
+             "action" => "block",
+             "actions" => [
+               %{
+                 "action_schema" => "wardwright.policy_action.v1",
+                 "rule_id" => "primitive-deny",
+                 "action" => "block",
+                 "effect_type" => "terminal"
+               }
+             ]
+           } =
+             Wardwright.Policy.Engine.evaluate(
+               %{
+                 "engine" => "hybrid",
+                 "engines" => [
+                   %{
+                     "engine" => "primitive",
+                     "rules" => [
+                       %{"id" => "primitive-deny", "contains" => "deny me", "action" => "block"}
+                     ]
+                   }
+                 ]
+               },
+               %{"request_text" => "please deny me"}
+             )
   end
 
   test "policy engine errors fail closed before provider invocation" do
@@ -485,6 +944,56 @@ defmodule WardwrightTest do
                "action" => "block"
              }
            ] = get_in(receipt, ["decision", "policy_actions"])
+  end
+
+  test "provider runtime enforces target timeouts and publishes attempt visibility" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "slow/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_outputs" => ["late answer"],
+          "canned_delay_ms" => 25,
+          "provider_timeout_ms" => 1
+        }
+      ])
+      |> Map.put("governance", [])
+
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:models))
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hello"}]
+      })
+
+    assert conn.status == 502
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "provider_error"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "provider timed out after 1ms"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == true
+    assert get_in(receipt, ["attempts", Access.at(0), "mock"]) == false
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.started",
+                      "provider_id" => "slow",
+                      "model" => "slow/model",
+                      "timeout_ms" => 1
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "provider_id" => "slow",
+                      "model" => "slow/model",
+                      "status" => "provider_error"
+                    }}
   end
 
   test "structured output guard retries canned provider outputs and records guard receipts" do
@@ -806,6 +1315,65 @@ defmodule WardwrightTest do
            ] = get_in(receipt, ["final", "events"])
   end
 
+  test "alert delivery exposes queue health and publishes delivery events" do
+    Wardwright.Policy.AlertDelivery.configure(%{"capacity" => 1, "on_full" => "dead_letter"})
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:policies))
+
+    results =
+      Wardwright.Policy.AlertDelivery.deliver([
+        %{
+          "type" => "policy.alert",
+          "rule_id" => "first-alert",
+          "message" => "first",
+          "severity" => "warning"
+        },
+        %{
+          "type" => "policy.alert",
+          "rule_id" => "second-alert",
+          "message" => "second",
+          "severity" => "warning"
+        }
+      ])
+
+    assert [%{"outcome" => "queued"}, %{"outcome" => "dead_lettered"}] = results
+
+    assert %{
+             "kind" => "in_memory_alert_sink",
+             "capacity" => 1,
+             "on_full" => "dead_letter",
+             "queue_depth" => 1,
+             "queued_count" => 1,
+             "dead_letter_count" => 1,
+             "last_result" => %{"rule_id" => "second-alert", "outcome" => "dead_lettered"}
+           } = Wardwright.Policy.AlertDelivery.status()
+
+    assert_receive {:wardwright_runtime_event, "runtime:policies",
+                    %{
+                      "type" => "policy_alert.delivery",
+                      "rule_id" => "first-alert",
+                      "outcome" => "queued",
+                      "queue_depth" => 1,
+                      "capacity" => 1
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:policies",
+                    %{
+                      "type" => "policy_alert.delivery",
+                      "rule_id" => "second-alert",
+                      "outcome" => "dead_lettered",
+                      "queue_depth" => 1,
+                      "capacity" => 1
+                    }}
+  end
+
+  test "admin policy alert status is protected and exposes sink health" do
+    assert call(:get, "/admin/policy-alerts", nil, [], {203, 0, 113, 10}).status == 403
+
+    conn = call(:get, "/admin/policy-alerts")
+    assert conn.status == 200
+    assert %{"kind" => "in_memory_alert_sink", "queue_depth" => 0} = Jason.decode!(conn.resp_body)
+  end
+
   test "alert fail-closed blocks streaming and simulation paths consistently" do
     config =
       unit_policy_config()
@@ -920,11 +1488,15 @@ defmodule WardwrightTest do
     assert get_in(body, ["wardwright", "status"]) == "stream_policy_blocked"
     assert get_in(body, ["wardwright", "selected_model"]) == "tiny/model"
     assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+    assert get_in(body, ["wardwright", "stream_policy", "generated_bytes"]) > 0
+    assert get_in(body, ["wardwright", "stream_policy", "held_bytes"]) > 0
+    assert get_in(body, ["wardwright", "stream_policy", "released_bytes"]) == 0
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
     receipt = Wardwright.ReceiptStore.get(receipt_id)
 
     assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == false
+    assert get_in(receipt, ["final", "stream_policy", "released_bytes"]) == 0
 
     assert get_in(receipt, ["final", "stream_policy", "events", Access.at(0), "rule_id"]) ==
              "secret-stream"
@@ -958,6 +1530,7 @@ defmodule WardwrightTest do
     assert get_in(body, ["wardwright", "status"]) == "stream_policy_blocked"
     assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
     assert get_in(body, ["wardwright", "stream_policy", "trigger_count"]) == 1
+    assert get_in(body, ["wardwright", "stream_policy", "released_bytes"]) == 0
 
     assert [
              %{
@@ -967,6 +1540,564 @@ defmodule WardwrightTest do
                "match_scope" => "stream_window"
              }
            ] = get_in(body, ["wardwright", "stream_policy", "events"])
+  end
+
+  test "stream policy retry split-window matches keep pre-trigger bytes unreleased" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "split-retry-unreleased",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 0
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{"mock_stream_chunks" => ["safe prefix Old", "Client(arg)"]},
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+
+    body = Jason.decode!(conn.resp_body)
+    stream_policy = get_in(body, ["wardwright", "stream_policy"])
+
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] == 0
+    assert stream_policy["held_bytes"] > 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "released_bytes" => 0
+             }
+           ] = stream_policy["attempts"]
+  end
+
+  test "stream policy retry_with_reminder restarts generation before release" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{
+          "mock_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        },
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["status"] == "completed"
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["max_retries"] == 1
+    assert stream_policy["released_to_consumer"] == true
+    assert stream_policy["released_bytes"] > 0
+    assert stream_policy["held_bytes"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "generated_bytes" => generated_bytes,
+               "held_bytes" => held_bytes
+             },
+             %{"status" => "completed", "released_to_consumer" => true}
+           ] = stream_policy["attempts"]
+
+    assert held_bytes > 0
+    assert generated_bytes > 0
+
+    assert [
+             %{
+               "type" => "stream_policy.triggered",
+               "rule_id" => "deprecated-client-retry",
+               "action" => "retry_with_reminder"
+             },
+             %{
+               "type" => "attempt.retry_requested",
+               "rule_id" => "deprecated-client-retry",
+               "retry_count" => 1,
+               "reminder" => "Use NewClient instead."
+             }
+           ] = stream_policy["events"]
+  end
+
+  test "stream policy retry calls the selected provider again before releasing bytes" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            ["use Old", "Client(arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-provider-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:models))
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "completed"
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["released_to_consumer"] == true
+
+    assert [
+             %{
+               "attempt_index" => 0,
+               "status" => "stream_policy_retry_required",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed",
+               "released_to_consumer" => false
+             },
+             %{
+               "attempt_index" => 1,
+               "status" => "completed",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed",
+               "released_to_consumer" => true
+             }
+           ] = stream_policy["attempts"]
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.started",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "stream" => true
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "status" => "completed"
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.started",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "stream" => true
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "provider_id" => "canned",
+                      "model" => "canned/model",
+                      "status" => "completed"
+                    }}
+  end
+
+  test "stream rewrite rules can match across provider chunk boundaries" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["call Old", "Client(arg) now"]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-provider-rewrite",
+          "contains" => "OldClient(",
+          "action" => "rewrite_chunk",
+          "replacement" => "NewClient("
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["released_to_consumer"] == true
+
+    assert [
+             %{
+               "attempt_index" => 0,
+               "status" => "completed",
+               "action" => "rewrite_chunk",
+               "trigger_count" => 1,
+               "released_to_consumer" => true,
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed",
+               "generated_bytes" => generated_bytes,
+               "released_bytes" => released_bytes,
+               "rewritten_bytes" => rewritten_bytes
+             }
+           ] = stream_policy["attempts"]
+
+    assert generated_bytes > 0
+    assert released_bytes > 0
+    assert rewritten_bytes > 0
+
+    assert [
+             %{
+               "rule_id" => "deprecated-client-provider-rewrite",
+               "action" => "rewrite_chunk",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window"
+             }
+           ] = stream_policy["events"]
+  end
+
+  test "stream provider timeouts fail closed without emitting SSE bytes" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "slow-stream/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["late stream"],
+          "canned_delay_ms" => 25,
+          "provider_timeout_ms" => 1
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 502
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+    refute conn.resp_body =~ "data:"
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "provider_error"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "provider timed out after 1ms"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["released_to_consumer"] == false
+
+    assert [
+             %{
+               "status" => "provider_error",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "provider_error",
+               "provider_error" => provider_error
+             }
+           ] = stream_policy["attempts"]
+
+    assert provider_error =~ "provider timed out after 1ms"
+  end
+
+  test "ollama stream targets use provider HTTP chunks for stream policy decisions" do
+    base_url = streaming_provider_base_url("/ollama")
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "ollama/live-test",
+          "context_window" => 256,
+          "provider_base_url" => base_url
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "ollama-stream-split-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 0
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+
+    body = Jason.decode!(conn.resp_body)
+    stream_policy = get_in(body, ["wardwright", "stream_policy"])
+
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_retry_required"
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed"
+             }
+           ] = stream_policy["attempts"]
+
+    assert [
+             %{
+               "rule_id" => "ollama-stream-split-retry",
+               "match_scope" => "stream_window"
+             }
+           ] = stream_policy["events"]
+  end
+
+  test "openai-compatible stream targets parse SSE deltas from provider HTTP chunks" do
+    base_url = streaming_provider_base_url("/openai")
+    System.put_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS", "1")
+    System.put_env("WARDWRIGHT_TEST_OPENAI_KEY", "test-openai-key")
+
+    on_exit(fn ->
+      System.delete_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS")
+      System.delete_env("WARDWRIGHT_TEST_OPENAI_KEY")
+    end)
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "openai-compatible/live-test",
+          "context_window" => 256,
+          "provider_kind" => "openai-compatible",
+          "provider_base_url" => base_url,
+          "credential_env" => "WARDWRIGHT_TEST_OPENAI_KEY"
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "hello "
+    assert conn.resp_body =~ "world"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == true
+    assert get_in(receipt, ["attempts", Access.at(0), "mock"]) == false
+    assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == true
+  end
+
+  test "stream policy retry budget exhaustion keeps violating bytes unreleased" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-budget",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{
+          "mock_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["still OldClient(", "arg) now"]
+          ]
+        },
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_retry_required"
+    assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+    refute conn.resp_body =~ "data:"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["max_retries"] == 1
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["held_bytes"] > 0
+    assert stream_policy["generated_bytes"] > 0
+    assert stream_policy["released_bytes"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "generated_bytes" => first_attempt_bytes
+             },
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "generated_bytes" => second_attempt_bytes
+             }
+           ] = stream_policy["attempts"]
+
+    assert first_attempt_bytes > 0
+    assert second_attempt_bytes > 0
+  end
+
+  test "stream policy retry budgets are scoped to the triggered rule" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-no-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 0
+        },
+        %{
+          "id" => "unrelated-generous-retry",
+          "contains" => "OtherClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use ThirdClient instead.",
+          "max_retries" => 3
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{
+          "mock_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        },
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["wardwright", "stream_policy", "max_retries"]) == 0
+    assert get_in(body, ["wardwright", "stream_policy", "retry_count"]) == 0
+    assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "action" => "retry_with_reminder",
+               "released_to_consumer" => false
+             }
+           ] = get_in(receipt, ["final", "stream_policy", "attempts"])
   end
 
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
@@ -1031,6 +2162,16 @@ defmodule WardwrightTest do
 
     assert Jason.decode!(conn.resp_body)["error"]["message"] ==
              "alloy bad-alloy target tiny/model weight must be positive"
+  end
+
+  test "test config endpoint is disabled unless explicitly allowed" do
+    previous = Application.get_env(:wardwright, :allow_test_config, false)
+    Application.put_env(:wardwright, :allow_test_config, false)
+    on_exit(fn -> Application.put_env(:wardwright, :allow_test_config, previous) end)
+
+    conn = call(:post, "/__test/config", unit_policy_config())
+    assert conn.status == 404
+    assert Jason.decode!(conn.resp_body)["error"]["code"] == "not_found"
   end
 
   test "dispatcher selects the smallest fitting model and preserves larger fallbacks" do
@@ -1219,6 +2360,46 @@ defmodule WardwrightTest do
     assert body["write_health"] == "ok"
   end
 
+  test "protected prototype endpoints reject non-local callers without an admin token" do
+    remote_ip = {203, 0, 113, 10}
+
+    for {method, path, body} <- [
+          {:get, "/admin/storage", nil},
+          {:get, "/v1/receipts", nil},
+          {:post, "/v1/policy-cache/events", %{"kind" => "request_text"}}
+        ] do
+      conn = call(method, path, body, [], remote_ip)
+      assert conn.status == 403
+      assert %{"error" => %{"code" => "protected_endpoint"}} = Jason.decode!(conn.resp_body)
+    end
+  end
+
+  test "protected prototype endpoints accept configured admin bearer token" do
+    previous = Application.get_env(:wardwright, :admin_token)
+    Application.put_env(:wardwright, :admin_token, "local-review-token")
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:wardwright, :admin_token, previous),
+        else: Application.delete_env(:wardwright, :admin_token)
+    end)
+
+    rejected = call(:get, "/admin/storage", nil, [], {203, 0, 113, 10})
+    assert rejected.status == 403
+
+    conn =
+      call(
+        :get,
+        "/admin/storage",
+        nil,
+        [{"authorization", "Bearer local-review-token"}],
+        {203, 0, 113, 10}
+      )
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body)["kind"] == "memory"
+  end
+
   test "receipt list is deterministic and returns storage summaries" do
     older = receipt_fixture("rcpt_b", 1_800_000_000, "agent-b")
     newer_low_id = receipt_fixture("rcpt_a", 1_800_000_001, "agent-a")
@@ -1290,16 +2471,25 @@ defmodule WardwrightTest do
            ]
   end
 
-  defp call(method, path, body \\ nil, headers \\ []) do
+  defp call(method, path, body \\ nil, headers \\ [], remote_ip \\ {127, 0, 0, 1}) do
     encoded = if is_nil(body), do: nil, else: Jason.encode!(body)
 
     method
     |> conn(path, encoded)
+    |> Map.put(:remote_ip, remote_ip)
     |> put_req_header("content-type", "application/json")
     |> then(fn conn ->
       Enum.reduce(headers, conn, fn {key, value}, acc -> put_req_header(acc, key, value) end)
     end)
     |> Wardwright.Router.call(@opts)
+  end
+
+  defp streaming_provider_base_url(prefix) do
+    ref = :"wardwright_streaming_provider_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = Plug.Cowboy.http(WardwrightTest.StreamingProvider, [], ref: ref, port: 0)
+    port = :ranch.get_port(ref)
+    on_exit(fn -> Plug.Cowboy.shutdown(ref) end)
+    "http://127.0.0.1:#{port}#{prefix}"
   end
 
   defp unit_policy_config do

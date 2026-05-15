@@ -17,6 +17,7 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
     <a class="button secondary" href="synthetic-models.html">Synthetic Models</a>
     <a class="button secondary" href="use-cases.html">Use Cases</a>
     <a class="button secondary" href="feature-spikes.html">Feature Spikes</a>
+    <a class="button secondary" href="architecture-review-tasks.html">Architecture Tasks</a>
     <a class="button secondary" href="https://github.com/bglusman/wardwright">GitHub</a>
   </div>
 </section>
@@ -94,5 +95,5 @@ Near-term work:
 
 Wardwright is the tentative product name. The old working name, Ingary, was easy
 to confuse and hard to remember. Code identifiers, protocol examples, and the
-repository name now use `wardwright`; `docs/CNAME` intentionally remains on
-`ingary.org` until the domain migration is ready.
+repository name now use `wardwright`; public project pages now use
+`wardwright.dev`.

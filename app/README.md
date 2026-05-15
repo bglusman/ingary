@@ -4,18 +4,24 @@ Elixir/LiveView implementation of the Wardwright synthetic model platform contra
 It currently serves mock model responses and local policy evaluation surfaces;
 real provider credentials and outbound model calls are not wired here yet.
 
+Gleam is compiled inside the same Mix project for small, correctness-heavy
+policy decisions. Elixir keeps ownership of HTTP, Phoenix, processes, PubSub,
+and mutable state; Gleam modules under `src/wardwright` own pure structured
+output, history-threshold, and alert-queue classifications behind Elixir wrapper
+modules in `lib/wardwright/policy`.
+
 ## Run
 
 ```bash
 cd app
-mix deps.get
-mix run --no-halt
+mise exec -- mix deps.get
+mise exec -- mix run --no-halt
 ```
 
 The server binds to `127.0.0.1:8787` by default. Override with:
 
 ```bash
-WARDWRIGHT_BIND=127.0.0.1:8788 mix run --no-halt
+WARDWRIGHT_BIND=127.0.0.1:8788 mise exec -- mix run --no-halt
 ```
 
 Smoke check:
@@ -32,13 +38,14 @@ curl -s http://127.0.0.1:8787/v1/chat/completions \
 Run tests:
 
 ```bash
-mix test
+mise exec -- gleam format --check src
+mise exec -- mix test
 ```
 
 ## Implemented Surface
 
 - `GET /v1/models`
-- `GET /v1/synthetic/models`
+- `GET /v1/synthetic/models` returns public model summaries only.
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
 - `GET /v1/receipts`
@@ -55,6 +62,18 @@ estimate: prompts at or below 32,768 estimated tokens select
 simulation calls write in-memory receipts and publish runtime visibility events
 through Phoenix PubSub. Caller context is extracted from `X-Wardwright-*` and
 `X-Client-Request-Id` headers first, then from request `metadata`.
+
+Detailed synthetic-model records include route graphs, prompt transforms, and
+governance policy internals; read them through `/admin/synthetic-models`.
+Prototype-sensitive endpoints are restricted to loopback callers unless
+`WARDWRIGHT_ADMIN_TOKEN` or `config :wardwright, :admin_token` is set and the
+request provides `Authorization: Bearer <token>` or
+`X-Wardwright-Admin-Token`. This currently covers `/admin/*`, receipt reads,
+and policy-cache read/write APIs. This is intended for a homelab or
+single-operator deployment shape. It is not a full multi-user auth system:
+provider API keys should stay behind fnox-backed secret lookup, while decisions
+about who may use a synthetic model, configure a provider, or enter through SSO
+depend on the eventual deployment topology.
 
 ## BEAM Direction
 
@@ -78,6 +97,14 @@ Policy execution is split by trust tier. Local/operator-authored policy can use
 structured primitives and Dune-backed BEAM snippets with timeout, reduction, and
 memory caps. Externally shared or untrusted policy should target a stronger
 portable boundary such as WASM, a sidecar, or a hosted policy service.
+
+Current pure policy decisions use Gleam where the boundary is stable enough:
+structured-output guard-loop status, recent-history threshold classification,
+and alert enqueue/backpressure classification. Keep process ownership and
+side-effecting delivery in Elixir unless a later spike proves a better split.
+Set `WARDWRIGHT_POLICY_CORE=elixir`, `gleam`, or `compare` to select the runtime
+decision implementation; `compare` executes both implementations and raises on
+semantic drift.
 
 The old Go and Rust backend prototypes remain in git history as bakeoff
 evidence, but they are no longer part of the live tree.

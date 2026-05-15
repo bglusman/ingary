@@ -37,7 +37,7 @@ defmodule Wardwright.Router do
   end
 
   get "/v1/synthetic/models" do
-    json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
+    json(conn, 200, %{"data" => [Wardwright.synthetic_model_summary()]})
   end
 
   post "/v1/chat/completions" do
@@ -134,89 +134,141 @@ defmodule Wardwright.Router do
   end
 
   get "/v1/receipts" do
-    filters =
-      conn.query_params
-      |> Map.take([
-        "model",
-        "consuming_agent_id",
-        "consuming_user_id",
-        "session_id",
-        "run_id",
-        "status",
-        "tenant_id",
-        "application_id",
-        "synthetic_model",
-        "synthetic_version",
-        "selected_provider",
-        "selected_model",
-        "simulation",
-        "stream_policy_action",
-        "created_at_min",
-        "created_at_max"
-      ])
-      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
-      |> Map.new()
+    with :ok <- require_protected_access(conn) do
+      filters =
+        conn.query_params
+        |> Map.take([
+          "model",
+          "consuming_agent_id",
+          "consuming_user_id",
+          "session_id",
+          "run_id",
+          "status",
+          "tenant_id",
+          "application_id",
+          "synthetic_model",
+          "synthetic_version",
+          "selected_provider",
+          "selected_model",
+          "simulation",
+          "stream_policy_action",
+          "created_at_min",
+          "created_at_max"
+        ])
+        |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+        |> Map.new()
 
-    limit = parse_limit(Map.get(conn.query_params, "limit"))
-    receipts = Wardwright.ReceiptStore.list(filters, limit)
-    json(conn, 200, %{"data" => receipts})
+      limit = parse_limit(Map.get(conn.query_params, "limit"))
+      receipts = Wardwright.ReceiptStore.list(filters, limit)
+      json(conn, 200, %{"data" => receipts})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/v1/receipts/:receipt_id" do
-    case Wardwright.ReceiptStore.get(receipt_id) do
-      nil -> error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
-      receipt -> json(conn, 200, receipt)
+    with :ok <- require_protected_access(conn) do
+      case Wardwright.ReceiptStore.get(receipt_id) do
+        nil -> error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
+        receipt -> json(conn, 200, receipt)
+      end
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
     end
   end
 
   get "/admin/storage" do
-    json(conn, 200, Wardwright.ReceiptStore.health())
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Wardwright.ReceiptStore.health())
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/admin/runtime" do
-    json(conn, 200, Wardwright.Runtime.status())
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Wardwright.Runtime.status())
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
+  end
+
+  get "/admin/policy-alerts" do
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Wardwright.Policy.AlertDelivery.status())
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   post "/v1/policy-cache/events" do
-    with {:ok, event} <- Wardwright.PolicyCache.add(conn.body_params) do
+    with :ok <- require_protected_access(conn),
+         {:ok, event} <- Wardwright.PolicyCache.add(conn.body_params) do
       json(conn, 201, %{"event" => event})
     else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
       {:error, message} ->
         error(conn, 400, message, "invalid_request", "invalid_policy_cache_event")
     end
   end
 
   get "/v1/policy-cache/recent" do
-    filter = %{
-      "kind" => blank_to_nil(Map.get(conn.query_params, "kind")),
-      "key" => blank_to_nil(Map.get(conn.query_params, "key")),
-      "scope" => cache_scope_from_query(conn.query_params)
-    }
+    with :ok <- require_protected_access(conn) do
+      filter = %{
+        "kind" => blank_to_nil(Map.get(conn.query_params, "kind")),
+        "key" => blank_to_nil(Map.get(conn.query_params, "key")),
+        "scope" => cache_scope_from_query(conn.query_params)
+      }
 
-    limit = parse_limit(Map.get(conn.query_params, "limit"))
-    json(conn, 200, %{"data" => Wardwright.PolicyCache.recent(filter, limit)})
+      limit = parse_limit(Map.get(conn.query_params, "limit"))
+      json(conn, 200, %{"data" => Wardwright.PolicyCache.recent(filter, limit)})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/admin/providers" do
-    json(conn, 200, %{"data" => Wardwright.providers()})
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, %{"data" => Wardwright.providers()})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/admin/synthetic-models" do
-    json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   post "/__test/config" do
-    with {:ok, config} <- require_json_object(conn.body_params),
-         {:ok, config} <- Wardwright.put_config(config) do
-      Wardwright.ReceiptStore.clear()
+    if test_config_allowed?() do
+      with {:ok, config} <- require_json_object(conn.body_params),
+           {:ok, config} <- Wardwright.put_config(config) do
+        Wardwright.ReceiptStore.clear()
 
-      json(conn, 200, %{
-        "status" => "ok",
-        "synthetic_model" => config["synthetic_model"],
-        "targets" => config["targets"]
-      })
+        json(conn, 200, %{
+          "status" => "ok",
+          "synthetic_model" => config["synthetic_model"],
+          "targets" => config["targets"]
+        })
+      else
+        {:error, message} -> error(conn, 400, message, "invalid_request", "invalid_test_config")
+      end
     else
-      {:error, message} -> error(conn, 400, message, "invalid_request", "invalid_test_config")
+      error(conn, 404, "not found", "not_found", "not_found")
     end
   end
 
@@ -257,411 +309,8 @@ defmodule Wardwright.Router do
     Map.put(request, "messages", messages)
   end
 
-  defp apply_request_policies(request, caller) do
-    text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
-
-    Enum.reduce(
-      Wardwright.current_config()["governance"] || [],
-      {request, empty_policy()},
-      fn rule, {request, policy} ->
-        kind = Map.get(rule, "kind", "")
-
-        cond do
-          Map.has_key?(rule, "engine") ->
-            apply_engine_governance_rule(rule, caller, request, policy)
-
-          kind == "history_threshold" ->
-            apply_history_threshold_rule(rule, caller, request, policy)
-
-          kind == "history_regex_threshold" ->
-            apply_history_regex_threshold_rule(rule, caller, request, policy)
-
-          kind in ["request_guard", "request_transform", "receipt_annotation", "route_gate"] &&
-              policy_rule_matches?(text, rule) ->
-            action = Map.get(rule, "action", "annotate")
-            rule_id = Map.get(rule, "id", "policy")
-
-            message =
-              rule |> Map.get("message", "request policy matched") |> blank_to_nil() ||
-                "request policy matched"
-
-            severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
-
-            action_record =
-              %{
-                "rule_id" => rule_id,
-                "kind" => kind,
-                "action" => action,
-                "matched" => true,
-                "message" => message,
-                "severity" => severity
-              }
-              |> put_route_action_fields(rule)
-
-            case action do
-              action when action in ["escalate", "alert_async"] ->
-                event = %{
-                  "type" => "policy.alert",
-                  "rule_id" => rule_id,
-                  "message" => message,
-                  "severity" => severity,
-                  "idempotency_key" => Map.get(rule, "idempotency_key")
-                }
-
-                {request,
-                 policy
-                 |> Map.update!("actions", &[action_record | &1])
-                 |> Map.update!("events", &[event | &1])
-                 |> Map.update!("alert_count", &(&1 + 1))}
-
-              action when action in ["inject_reminder_and_retry", "transform"] ->
-                reminder = rule |> Map.get("reminder", message) |> blank_to_nil() || message
-
-                message_record = %{
-                  "role" => "system",
-                  "name" => "wardwright_policy_reminder",
-                  "content" => reminder
-                }
-
-                request =
-                  Map.update(request, "messages", [message_record], fn messages ->
-                    messages ++ [message_record]
-                  end)
-
-                action_record = Map.put(action_record, "reminder_injected", true)
-                {request, Map.update!(policy, "actions", &[action_record | &1])}
-
-              "annotate" ->
-                event = %{
-                  "type" => "policy.annotated",
-                  "rule_id" => rule_id,
-                  "message" => message,
-                  "severity" => severity
-                }
-
-                {request,
-                 policy
-                 |> Map.update!("actions", &[action_record | &1])
-                 |> Map.update!("events", &[event | &1])}
-
-              action when action in ["restrict_routes", "switch_model", "reroute"] ->
-                apply_route_action(request, policy, action_record)
-
-              "block" ->
-                apply_block_action(request, policy, action_record)
-
-              _ ->
-                {request, Map.update!(policy, "actions", &[action_record | &1])}
-            end
-
-          true ->
-            {request, policy}
-        end
-      end
-    )
-    |> then(fn {request, policy} ->
-      policy =
-        policy
-        |> Map.update!("actions", &Enum.reverse/1)
-        |> Map.update!("events", &Enum.reverse/1)
-
-      {request, policy}
-    end)
-  end
-
-  defp empty_policy,
-    do: %{
-      "actions" => [],
-      "events" => [],
-      "alert_count" => 0,
-      "route_constraints" => %{},
-      "blocked" => false
-    }
-
-  defp apply_engine_governance_rule(rule, caller, request, policy) do
-    context = %{
-      "request_text" => request |> Map.get("messages", []) |> request_text(),
-      "request" => request,
-      "caller" => caller,
-      "estimated_prompt_tokens" =>
-        Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
-    }
-
-    result = Wardwright.Policy.Engine.evaluate(rule, context)
-
-    action_records =
-      result
-      |> engine_actions(rule)
-      |> Enum.map(&put_route_action_fields/1)
-
-    Enum.reduce(action_records, {request, policy}, fn action_record, {request, policy} ->
-      case action_record["action"] do
-        action when action in ["restrict_routes", "switch_model", "reroute"] ->
-          apply_route_action(request, policy, action_record)
-
-        "block" ->
-          apply_block_action(request, policy, action_record)
-
-        _ ->
-          {request, Map.update!(policy, "actions", &[action_record | &1])}
-      end
-    end)
-  end
-
-  defp engine_actions(%{"actions" => actions}, rule) when is_list(actions) do
-    Enum.map(actions, &engine_action_record(&1, rule))
-  end
-
-  defp engine_actions(%{"action" => action} = result, rule) when is_binary(action) do
-    [engine_action_record(result, rule)]
-  end
-
-  defp engine_actions(_result, _rule), do: []
-
-  defp engine_action_record(action, rule) when is_map(action) do
-    value = Map.get(action, "value", %{})
-    value = if is_map(value), do: value, else: %{}
-
-    %{
-      "rule_id" => Map.get(action, "rule_id", Map.get(rule, "id", "policy-engine")),
-      "kind" => Map.get(rule, "kind", "policy_engine"),
-      "action" => Map.get(action, "action", "annotate"),
-      "matched" => Map.get(action, "matched", true),
-      "message" =>
-        Map.get(
-          action,
-          "message",
-          Map.get(action, "reason", Map.get(value, "reason", "policy engine matched"))
-        ),
-      "severity" => Map.get(action, "severity", "info"),
-      "allowed_targets" => Map.get(action, "allowed_targets", Map.get(value, "allowed_targets")),
-      "target_model" =>
-        Map.get(
-          action,
-          "target_model",
-          Map.get(action, "model", Map.get(value, "target_model", Map.get(value, "model")))
-        )
-    }
-    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
-    |> Map.new()
-  end
-
-  defp engine_action_record(_action, rule) do
-    %{
-      "rule_id" => Map.get(rule, "id", "policy-engine"),
-      "kind" => Map.get(rule, "kind", "policy_engine"),
-      "action" => "annotate",
-      "matched" => true,
-      "message" => "policy engine returned a non-map action",
-      "severity" => "warning"
-    }
-  end
-
-  defp apply_route_action(request, policy, action_record) do
-    route_constraints =
-      policy
-      |> Map.get("route_constraints", %{})
-      |> merge_route_constraints(action_record)
-
-    policy =
-      policy
-      |> Map.put("route_constraints", route_constraints)
-      |> Map.update!("actions", &[action_record | &1])
-
-    {request, policy}
-  end
-
-  defp merge_route_constraints(route_constraints, %{"action" => "restrict_routes"} = action) do
-    allowed_targets = normalize_string_list(Map.get(action, "allowed_targets"))
-
-    if allowed_targets == [] do
-      route_constraints
-    else
-      Map.update(route_constraints, "allowed_targets", allowed_targets, fn existing ->
-        existing
-        |> normalize_string_list()
-        |> Enum.filter(&(&1 in allowed_targets))
-      end)
-    end
-  end
-
-  defp merge_route_constraints(route_constraints, %{"action" => action} = record)
-       when action in ["switch_model", "reroute"] do
-    target_model = record |> Map.get("target_model", Map.get(record, "model")) |> blank_to_nil()
-
-    if target_model do
-      Map.put(route_constraints, "forced_model", target_model)
-    else
-      route_constraints
-    end
-  end
-
-  defp merge_route_constraints(route_constraints, _action), do: route_constraints
-
-  defp apply_block_action(request, policy, action_record) do
-    policy =
-      policy
-      |> Map.put("blocked", true)
-      |> Map.update!("actions", &[action_record | &1])
-
-    {request, policy}
-  end
-
-  defp put_route_action_fields(action_record, rule) do
-    action_record
-    |> maybe_put_string_list("allowed_targets", Map.get(rule, "allowed_targets"))
-    |> maybe_put_string("target_model", Map.get(rule, "target_model", Map.get(rule, "model")))
-  end
-
-  defp put_route_action_fields(action_record),
-    do: put_route_action_fields(action_record, action_record)
-
-  defp maybe_put_string_list(map, key, value) do
-    value = normalize_string_list(value)
-    if value == [], do: map, else: Map.put(map, key, value)
-  end
-
-  defp maybe_put_string(map, key, value) do
-    case blank_to_nil(value) do
-      nil -> map
-      value -> Map.put(map, key, value)
-    end
-  end
-
-  defp normalize_string_list(values) when is_list(values) do
-    values
-    |> Enum.map(&to_string/1)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-  end
-
-  defp normalize_string_list(_values), do: []
-
-  defp apply_history_threshold_rule(rule, caller, request, policy) do
-    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
-
-    filter = %{
-      "kind" => blank_to_nil(Map.get(rule, "cache_kind")),
-      "key" => blank_to_nil(Map.get(rule, "cache_key")),
-      "scope" => cache_scope_from_caller(caller, Map.get(rule, "cache_scope", ""))
-    }
-
-    count = Wardwright.PolicyCache.count(filter)
-
-    if count < threshold do
-      {request, policy}
-    else
-      action = Map.get(rule, "action", "annotate")
-      rule_id = Map.get(rule, "id", "policy")
-
-      message =
-        rule |> Map.get("message", "policy cache threshold matched") |> blank_to_nil() ||
-          "policy cache threshold matched"
-
-      severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
-
-      action_record = %{
-        "rule_id" => rule_id,
-        "kind" => "history_threshold",
-        "action" => action,
-        "matched" => true,
-        "message" => message,
-        "severity" => severity,
-        "cache_kind" => Map.get(rule, "cache_kind", ""),
-        "cache_key" => Map.get(rule, "cache_key", ""),
-        "cache_scope" => Map.get(rule, "cache_scope", ""),
-        "history_count" => count,
-        "threshold" => threshold
-      }
-
-      policy = Map.update!(policy, "actions", &[action_record | &1])
-
-      if action in ["escalate", "alert_async"] do
-        event = %{
-          "type" => "policy.alert",
-          "rule_id" => rule_id,
-          "message" => message,
-          "severity" => severity,
-          "history_count" => count,
-          "threshold" => threshold,
-          "idempotency_key" => Map.get(rule, "idempotency_key")
-        }
-
-        {request,
-         policy
-         |> Map.update!("events", &[event | &1])
-         |> Map.update!("alert_count", &(&1 + 1))}
-      else
-        {request, policy}
-      end
-    end
-  end
-
-  defp apply_history_regex_threshold_rule(rule, caller, request, policy) do
-    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
-
-    filter = %{
-      "kind" => blank_to_nil(Map.get(rule, "cache_kind")),
-      "key" => blank_to_nil(Map.get(rule, "cache_key")),
-      "scope" => cache_scope_from_caller(caller, Map.get(rule, "cache_scope", ""))
-    }
-
-    count =
-      filter
-      |> Wardwright.Policy.History.regex_count(
-        Map.get(rule, "pattern", ""),
-        Map.get(rule, "limit")
-      )
-
-    if count < threshold do
-      {request, policy}
-    else
-      action = Map.get(rule, "action", "annotate")
-      rule_id = Map.get(rule, "id", "policy")
-
-      message =
-        rule |> Map.get("message", "history regex threshold matched") |> blank_to_nil() ||
-          "history regex threshold matched"
-
-      severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
-
-      action_record = %{
-        "rule_id" => rule_id,
-        "kind" => "history_regex_threshold",
-        "action" => action,
-        "matched" => true,
-        "message" => message,
-        "severity" => severity,
-        "cache_kind" => Map.get(rule, "cache_kind", ""),
-        "cache_key" => Map.get(rule, "cache_key", ""),
-        "cache_scope" => Map.get(rule, "cache_scope", ""),
-        "pattern" => Map.get(rule, "pattern", ""),
-        "history_count" => count,
-        "threshold" => threshold
-      }
-
-      policy = Map.update!(policy, "actions", &[action_record | &1])
-
-      if action in ["escalate", "alert_async"] do
-        event = %{
-          "type" => "policy.alert",
-          "rule_id" => rule_id,
-          "message" => message,
-          "severity" => severity,
-          "history_count" => count,
-          "threshold" => threshold,
-          "idempotency_key" => Map.get(rule, "idempotency_key")
-        }
-
-        {request,
-         policy
-         |> Map.update!("events", &[event | &1])
-         |> Map.update!("alert_count", &(&1 + 1))}
-      else
-        {request, policy}
-      end
-    end
-  end
+  defp apply_request_policies(request, caller),
+    do: Wardwright.Policy.Plan.evaluate_request(request, caller)
 
   defp deliver_policy_alerts(%{"events" => events} = policy) do
     alert_delivery = Wardwright.Policy.AlertDelivery.deliver(events)
@@ -704,18 +353,15 @@ defmodule Wardwright.Router do
 
   defp provider_outcome(request, decision, false) when is_map(request) do
     if Map.get(request, "stream") == true do
-      stream_policy =
-        request
-        |> stream_chunks(decision)
-        |> Wardwright.Policy.Stream.evaluate(Wardwright.current_config()["stream_rules"] || [])
+      stream_policy = evaluate_stream_policy(request, decision)
 
       %{
         content: nil,
         status: stream_policy.status,
-        latency_ms: 0,
-        error: nil,
-        called_provider: false,
-        mock: true,
+        latency_ms: Map.get(stream_policy, :provider_latency_ms, 0),
+        error: Map.get(stream_policy, :provider_error),
+        called_provider: Map.get(stream_policy, :called_provider, false),
+        mock: Map.get(stream_policy, :mock, true),
         structured_output: nil,
         stream_chunks: stream_policy.chunks,
         stream_policy: stream_policy
@@ -732,30 +378,70 @@ defmodule Wardwright.Router do
     end
   end
 
-  defp policy_match?(_text, value) when value in [nil, ""], do: false
-
-  defp policy_match?(text, value) do
-    String.contains?(text, value |> metadata_string() |> String.downcase())
-  end
-
-  defp policy_rule_matches?(text, %{"regex" => regex}) when is_binary(regex) and regex != "" do
-    Wardwright.Policy.Regex.match?(text, regex)
-  end
-
-  defp policy_rule_matches?(text, rule), do: policy_match?(text, Map.get(rule, "contains"))
-
-  defp request_text(messages) when is_list(messages) do
-    Enum.map_join(messages, "\n", fn message ->
-      "#{Map.get(message, "role", "")}\n#{metadata_string(Map.get(message, "content"))}"
-    end)
-  end
-
-  defp request_text(_), do: ""
-
   defp require_messages(%{"messages" => messages}) when is_list(messages) and messages != [],
     do: :ok
 
   defp require_messages(_), do: {:error, "messages must not be empty"}
+
+  defp require_protected_access(conn) do
+    cond do
+      local_request?(conn) ->
+        :ok
+
+      admin_token_valid?(conn) ->
+        :ok
+
+      Application.get_env(:wardwright, :allow_prototype_access, false) ->
+        :ok
+
+      true ->
+        {:error, :protected, "protected endpoint requires localhost or admin token"}
+    end
+  end
+
+  defp local_request?(%{remote_ip: {127, 0, 0, 1}}), do: true
+  defp local_request?(%{remote_ip: {0, 0, 0, 0, 0, 0, 0, 1}}), do: true
+  defp local_request?(_conn), do: false
+
+  defp admin_token_valid?(conn) do
+    case {admin_token(), request_admin_token(conn)} do
+      {token, request_token} when is_binary(token) and is_binary(request_token) ->
+        Plug.Crypto.secure_compare(token, request_token)
+
+      {_token, _request_token} ->
+        false
+    end
+  rescue
+    _error -> false
+  end
+
+  defp admin_token do
+    (Application.get_env(:wardwright, :admin_token) || System.get_env("WARDWRIGHT_ADMIN_TOKEN"))
+    |> metadata_string()
+    |> blank_to_nil()
+  end
+
+  defp request_admin_token(conn) do
+    conn
+    |> get_req_header("authorization")
+    |> List.first()
+    |> bearer_token()
+    |> case do
+      nil ->
+        conn
+        |> get_req_header("x-wardwright-admin-token")
+        |> List.first()
+        |> metadata_string()
+        |> blank_to_nil()
+
+      token ->
+        token
+    end
+  end
+
+  defp bearer_token("Bearer " <> token), do: blank_to_nil(token)
+  defp bearer_token("bearer " <> token), do: blank_to_nil(token)
+  defp bearer_token(_value), do: nil
 
   defp route_decision(request, policy) do
     estimate = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
@@ -876,29 +562,6 @@ defmodule Wardwright.Router do
     end)
   end
 
-  defp cache_scope_from_caller(_caller, scope_name) when scope_name in [nil, ""], do: %{}
-
-  defp cache_scope_from_caller(caller, scope_name) do
-    scope_name = metadata_string(scope_name)
-
-    case get_in(caller, [scope_name, "value"]) do
-      nil -> %{}
-      "" -> %{}
-      value -> %{scope_name => value}
-    end
-  end
-
-  defp integer_value(value) when is_integer(value), do: value
-
-  defp integer_value(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {integer, ""} -> integer
-      _ -> nil
-    end
-  end
-
-  defp integer_value(_), do: nil
-
   defp build_receipt(status, model, caller, request, decision, called_provider, policy) do
     receipt_id = "rcpt_" <> random_hex(8)
     created_at = System.system_time(:second)
@@ -937,7 +600,8 @@ defmodule Wardwright.Router do
         "reason" => decision.reason,
         "rule" => decision.rule,
         "governance" => Wardwright.current_config()["governance"],
-        "policy_actions" => policy["actions"]
+        "policy_actions" => policy["actions"],
+        "policy_conflicts" => policy["conflicts"]
       },
       "attempts" => [
         %{
@@ -1000,7 +664,15 @@ defmodule Wardwright.Router do
       "trigger_count" => stream_policy.trigger_count,
       "action" => stream_policy.action,
       "events" => stream_policy.events,
-      "released_to_consumer" => stream_policy.released_to_consumer
+      "released_to_consumer" => stream_policy.released_to_consumer,
+      "retry_count" => Map.get(stream_policy, :retry_count, 0),
+      "max_retries" => Map.get(stream_policy, :max_retries, 0),
+      "attempts" => Map.get(stream_policy, :attempts, []),
+      "generated_bytes" => Map.get(stream_policy, :generated_bytes, 0),
+      "released_bytes" => Map.get(stream_policy, :released_bytes, 0),
+      "held_bytes" => Map.get(stream_policy, :held_bytes, 0),
+      "rewritten_bytes" => Map.get(stream_policy, :rewritten_bytes, 0),
+      "blocked_bytes" => Map.get(stream_policy, :blocked_bytes, 0)
     }
   end
 
@@ -1038,6 +710,7 @@ defmodule Wardwright.Router do
         "receipt_id" => receipt["receipt_id"],
         "selected_model" => decision.selected_model,
         "status" => get_in(receipt, ["final", "status"]),
+        "provider_error" => get_in(receipt, ["final", "provider_error"]),
         "structured_output" => get_in(receipt, ["final", "structured_output"]),
         "stream_policy" => get_in(receipt, ["final", "stream_policy"]),
         "alert_delivery" => get_in(receipt, ["final", "alert_delivery"])
@@ -1065,7 +738,7 @@ defmodule Wardwright.Router do
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
 
-    chunks = chunks || stream_chunks(request, decision)
+    chunks = chunks || default_stream_chunks(request, decision)
 
     conn =
       Enum.reduce(Enum.with_index(chunks), conn, fn {text, index}, acc ->
@@ -1085,25 +758,221 @@ defmodule Wardwright.Router do
     conn
   end
 
-  defp stream_chunks(request, decision) do
+  defp evaluate_stream_policy(request, decision) do
+    rules = Wardwright.current_config()["stream_rules"] || []
+
+    evaluate_stream_attempt(request, decision, rules, 0, 0, 0, [], [])
+  end
+
+  defp evaluate_stream_attempt(
+         request,
+         decision,
+         rules,
+         active_retry_budget,
+         attempt_index,
+         retry_count,
+         events,
+         attempts
+       ) do
+    case stream_chunks(request, decision, attempt_index) do
+      {:ok, chunks, provider} ->
+        policy = Wardwright.Policy.Stream.evaluate(chunks, rules, attempt_index: attempt_index)
+        attempt = stream_attempt(policy, attempt_index, provider)
+        events = events ++ policy.events
+        attempts = attempts ++ [attempt]
+
+        trigger_event = List.last(policy.events) || %{}
+        retry_budget = stream_retry_budget(trigger_event, active_retry_budget)
+
+        if policy.status == "stream_policy_retry_required" and retry_count < retry_budget do
+          retry_event = %{
+            "type" => "attempt.retry_requested",
+            "attempt_index" => attempt_index,
+            "next_attempt_index" => attempt_index + 1,
+            "retry_count" => retry_count + 1,
+            "max_retries" => retry_budget,
+            "rule_id" => Map.get(trigger_event, "rule_id"),
+            "reminder" => Map.get(trigger_event, "reminder")
+          }
+
+          evaluate_stream_attempt(
+            request,
+            decision,
+            rules,
+            retry_budget,
+            attempt_index + 1,
+            retry_count + 1,
+            events ++ [reject_blank(retry_event)],
+            attempts
+          )
+        else
+          policy
+          |> Map.put(:events, events)
+          |> Map.put(:attempts, attempts)
+          |> Map.put(:retry_count, retry_count)
+          |> Map.put(:max_retries, retry_budget)
+          |> Map.put(:called_provider, Map.get(provider, :called_provider, false))
+          |> Map.put(:mock, Map.get(provider, :mock, true))
+          |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
+        end
+
+      {:error, provider} ->
+        provider_error_stream_policy(provider, retry_count, active_retry_budget, attempts)
+    end
+  end
+
+  defp stream_attempt(policy, attempt_index, provider) do
+    %{
+      "attempt_index" => attempt_index,
+      "status" => policy.status,
+      "action" => policy.action,
+      "trigger_count" => policy.trigger_count,
+      "released_to_consumer" => policy.released_to_consumer,
+      "called_provider" => Map.get(provider, :called_provider, false),
+      "mock" => Map.get(provider, :mock, true),
+      "provider_status" => Map.get(provider, :status),
+      "provider_latency_ms" => Map.get(provider, :latency_ms),
+      "generated_bytes" => policy.generated_bytes,
+      "released_bytes" => policy.released_bytes,
+      "held_bytes" => policy.held_bytes,
+      "rewritten_bytes" => policy.rewritten_bytes,
+      "blocked_bytes" => policy.blocked_bytes
+    }
+    |> reject_blank()
+  end
+
+  defp stream_retry_budget(%{"action" => action} = trigger_event, _active_retry_budget)
+       when action in ["retry", "retry_with_reminder"] do
+    trigger_event
+    |> Map.get("max_retries", 1)
+    |> integer_value()
+    |> max(0)
+  end
+
+  defp stream_retry_budget(_trigger_event, active_retry_budget), do: active_retry_budget
+
+  defp stream_chunks(request, decision, attempt_index) do
     mock_chunks =
-      if allow_mock_stream_chunks?(), do: get_in(request, ["metadata", "mock_stream_chunks"])
+      if allow_mock_stream_chunks?() do
+        attempt_chunks = get_in(request, ["metadata", "mock_stream_attempt_chunks"])
+
+        cond do
+          is_list(attempt_chunks) and is_list(Enum.at(attempt_chunks, attempt_index)) ->
+            Enum.at(attempt_chunks, attempt_index)
+
+          attempt_index == 0 ->
+            get_in(request, ["metadata", "mock_stream_chunks"])
+
+          true ->
+            nil
+        end
+      end
 
     case mock_chunks do
       chunks when is_list(chunks) and chunks != [] ->
-        Enum.map(chunks, &metadata_string/1)
+        {:ok, Enum.map(chunks, &metadata_string/1),
+         %{called_provider: false, mock: true, status: "completed", latency_ms: 0}}
 
       _ ->
-        [
-          "Mock Wardwright stream ",
-          "routed to #{decision.selected_model} ",
-          "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
-        ]
+        stream_request = Map.put(request, "wardwright_attempt_index", attempt_index)
+        provider = Wardwright.stream_selected_model(decision.selected_model, stream_request)
+
+        if provider.status == "completed" and is_list(Map.get(provider, :stream_chunks)) do
+          {:ok, provider.stream_chunks,
+           %{
+             called_provider: provider.called_provider,
+             mock: provider.mock,
+             status: provider.status,
+             latency_ms: provider.latency_ms
+           }}
+        else
+          {:error, provider}
+        end
     end
+  end
+
+  defp provider_error_stream_policy(provider, retry_count, max_retries, attempts) do
+    attempts =
+      attempts ++
+        [
+          %{
+            "attempt_index" => length(attempts),
+            "status" => "provider_error",
+            "called_provider" => Map.get(provider, :called_provider, true),
+            "mock" => Map.get(provider, :mock, false),
+            "provider_status" => Map.get(provider, :status),
+            "provider_latency_ms" => Map.get(provider, :latency_ms),
+            "provider_error" => Map.get(provider, :error)
+          }
+          |> reject_blank()
+        ]
+
+    %{
+      status: "provider_error",
+      trigger_count: 0,
+      action: nil,
+      events: [],
+      chunks: [],
+      released_to_consumer: false,
+      retry_count: retry_count,
+      max_retries: max_retries,
+      attempts: attempts,
+      generated_bytes: sum_attempt_bytes(attempts, "generated_bytes"),
+      released_bytes: sum_attempt_bytes(attempts, "released_bytes"),
+      held_bytes: sum_attempt_bytes(attempts, "held_bytes"),
+      rewritten_bytes: sum_attempt_bytes(attempts, "rewritten_bytes"),
+      blocked_bytes: sum_attempt_bytes(attempts, "blocked_bytes"),
+      called_provider: Map.get(provider, :called_provider, true),
+      mock: Map.get(provider, :mock, false),
+      provider_latency_ms: stream_latency_ms(attempts),
+      provider_error: Map.get(provider, :error)
+    }
+  end
+
+  defp stream_latency_ms(attempts) do
+    Enum.reduce(attempts, 0, fn attempt, total ->
+      total + (integer_value(Map.get(attempt, "provider_latency_ms")) || 0)
+    end)
+  end
+
+  defp sum_attempt_bytes(attempts, key) do
+    Enum.reduce(attempts, 0, fn attempt, total ->
+      total + (integer_value(Map.get(attempt, key)) || 0)
+    end)
   end
 
   defp allow_mock_stream_chunks? do
     Application.get_env(:wardwright, :allow_mock_stream_chunks, false)
+  end
+
+  defp default_stream_chunks(request, decision) do
+    [
+      "Mock Wardwright stream ",
+      "routed to #{decision.selected_model} ",
+      "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
+    ]
+  end
+
+  defp integer_value(value) when is_integer(value), do: value
+
+  defp integer_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _ -> nil
+    end
+  end
+
+  defp integer_value(_value), do: nil
+
+  defp reject_blank(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+    |> Map.new()
+  end
+
+  defp test_config_allowed? do
+    Application.get_env(:wardwright, :allow_test_config, false) or
+      System.get_env("WARDWRIGHT_ALLOW_TEST_CONFIG") == "1"
   end
 
   defp json(conn, status, payload) do

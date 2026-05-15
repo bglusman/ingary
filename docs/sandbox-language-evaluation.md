@@ -100,7 +100,8 @@ as a sidecar, WASM runtime, microVM, or hosted policy service.
 
 The BEAM prototype now has a common policy namespace for three execution paths:
 
-- primitive rules in the router and `Wardwright.Policy.Engine`
+- primitive request governance in `Wardwright.Policy.Plan` and reusable
+  primitive engine rules in `Wardwright.Policy.Engine`
 - Dune snippets through `Wardwright.PolicySandbox.Dune`
 - WASM through `Wardwright.PolicySandbox.Wasm`
 

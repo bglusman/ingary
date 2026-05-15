@@ -17,6 +17,13 @@ is to define the durable execution model that can support request, route,
 stream, output, and history-aware policies without adding unbounded overhead to
 every synthetic model call.
 
+The live BEAM implementation now has a first policy-plan boundary:
+`Wardwright.Policy.Plan` evaluates request-phase governance rules and emits a
+transformed request plus policy actions, route constraints, alerts, and block
+state. This is still interpreted from the runtime config, not a fully compiled
+artifact, but it deliberately moves policy semantics out of the HTTP router so
+compiled plans, traces, and projections can share one execution contract.
+
 ## Design Bias
 
 Start with declarative and built-in policies for common cases. Add Starlark as
@@ -31,6 +38,31 @@ Policy language is less important than the policy ABI:
 - what bounded state it can read/write
 - what actions it can return
 - how receipts explain the decision
+
+## Action Contract
+
+Request-phase policy engines now normalize returned actions through
+`Wardwright.Policy.Action` before the router, receipts, or UI see them. The
+current contract is `wardwright.policy_action.v1`; engine-level results use
+`wardwright.policy_result.v1`.
+
+Every normalized action includes:
+
+- `rule_id`, `kind`, `action`, and `matched`
+- `phase`, such as `request.routing`, `request.rewrite`, `request.alert`,
+  `request.history`, or `request.terminal`
+- `effect_type`, such as `route_constraint`, `request_transform`, `alert`,
+  `annotation`, or `terminal`
+- `source`, distinguishing primitive policy actions from Dune, WASM, hybrid,
+  or other engine-produced actions
+- `priority`, `conflict_key`, and `conflict_policy` when the action can affect
+  ordering-sensitive behavior
+
+Receipts expose `decision.policy_actions` in that shape and summarize detected
+same-key ordered conflicts in `decision.policy_conflicts`. This is intentionally
+not a UI-specific format; it is the backend projection surface that the
+workbench, simulation traces, and future AI-assisted authoring flow should
+consume. Route constraints are still applied in policy declaration order.
 
 The user experience should be visual, conversational, and simulation-first. The
 deterministic policy artifact is the storage and review format, not the primary
@@ -161,12 +193,24 @@ TTSR maps most closely to `buffered_horizon` plus actions such as
 held back, whether violating bytes were released, and which retry or rewrite
 action fired.
 
-The current BEAM prototype implements the first narrow stream-policy foothold:
-mock stream chunks can be checked against literal or regex rules before release,
-rewritten or dropped, or blocked before any SSE bytes are sent. Receipts record
-the stream policy action, trigger count, trigger events, and whether content was
-released to the consumer. Full retry orchestration, real provider stream
-holdback, and chunk-boundary spanning are still future work.
+The current BEAM prototype implements a narrow stream-policy foothold:
+selected-target provider chunks can be checked against literal or regex rules
+before release, rewritten or dropped, blocked before any SSE bytes are sent, or
+retried with a reminder while preserving the failed attempt as unreleased
+receipt evidence. Test-only mock chunks still exist as an escape hatch, but the
+router can now call the selected provider through `Wardwright.ProviderRuntime`
+for each stream attempt and retry the provider boundary before releasing bytes.
+Ollama NDJSON streams and OpenAI-compatible SSE streams are parsed from native
+HTTP streaming transport messages before policy evaluation. Receipts record the
+stream policy action, trigger count, trigger events, retry count, per-attempt
+provider status, and generated/released/held/rewritten/blocked byte counts.
+
+Split chunk boundaries are treated cautiously. Terminal block/retry checks and
+rewrite checks inspect the buffered stream window, so a pattern such as
+`OldClient(` is still caught if a provider emits `Old` and `Client(` in separate
+events. Non-native streaming provider fallbacks are treated as one held response
+unit rather than artificially chunked output. Mid-stream policy cancellation,
+latency budgets, and raw provider-event offsets are still future work.
 
 ## State Scopes
 
@@ -187,6 +231,13 @@ unnecessary tracking.
 MVP state should be limited to `attempt`, `run`, and `session`. Those scopes
 support loop detection, retry limits, TTSR, structured repair, and ambiguous
 success without turning Wardwright into a full observability warehouse.
+
+That limit is a starting boundary, not a claim that all valuable policy state is
+session-local. Some future rules may never need data outside the current
+session; others may be explicitly about peer sessions, caller-level abuse,
+fleet-wide model failures, or tenant budget windows. Policy definitions should
+make that scope choice explicit so the runtime can provision the right history
+surface and the UI can explain the privacy, latency, and consistency tradeoff.
 
 ## State API Shape
 
@@ -260,6 +311,27 @@ flexible, but it creates hot-path problems:
 Instead, model definitions should declare the facts or recent-record caches
 they need. Wardwright can then decide what to track, how to index it, and how to
 expose it to the policy engine.
+
+The preferred BEAM hot-path shape is:
+
+- a small session catalog for active session metadata and table references
+- one bounded ordered ETS table per active session for session-local facts
+- separate aggregate/index ETS tables for rules that need cross-session or
+  broader caller/model/tenant facts
+
+Policy enforcement should not normally scan every active session table through
+the catalog. That fanout is useful for operator browsing, simulation, migration
+checks, and small bounded experiments, but it makes request latency scale with
+active session count. Cross-session enforcement rules should instead consume a
+declared aggregate/index maintained when events are recorded.
+
+This also gives policy authors a clearer mental model:
+
+- current-session rules pay only the local session history cost
+- cross-session rules pay the cost of maintaining an aggregate/index
+- hybrid rules must name both inputs and receipt them separately
+
+The UI should surface these distinctions before a rule is enabled.
 
 Policies that enforce behavior need a stronger cache contract than policies
 that merely annotate receipts. Wardwright should distinguish two classes:
