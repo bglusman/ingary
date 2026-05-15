@@ -20,12 +20,16 @@ defmodule Wardwright.Policy.Engine do
     results = Enum.map(engines, &evaluate(&1, context))
 
     blocking =
-      Enum.find(results, &(Map.get(&1, "action") == "block" or Map.get(&1, "status") == "error"))
+      Enum.find(results, fn result ->
+        Map.get(result, "action") == "block" or Map.get(result, "status") == "error" or
+          Enum.any?(result_actions(result), &(Map.get(&1, "action") == "block"))
+      end)
 
     %{
       "engine" => "hybrid",
       "status" => if(blocking, do: "error", else: "ok"),
       "action" => if(blocking, do: "block", else: "allow"),
+      "actions" => Enum.flat_map(results, &result_actions/1),
       "results" => results
     }
   end
@@ -54,6 +58,26 @@ defmodule Wardwright.Policy.Engine do
       }
     end
   end
+
+  defp result_actions(%{"actions" => actions}) when is_list(actions), do: actions
+
+  defp result_actions(%{"action" => "allow"}), do: []
+
+  defp result_actions(%{"action" => action} = result) when is_binary(action) do
+    [
+      %{
+        "rule_id" => Map.get(result, "rule_id"),
+        "action" => action,
+        "matched" => true,
+        "message" =>
+          Map.get(result, "reason", Map.get(result, "message", "policy engine matched"))
+      }
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Map.new()
+    ]
+  end
+
+  defp result_actions(_result), do: []
 
   defp normalize_dune_result(%{"status" => "ok", "value" => value} = result) when is_map(value) do
     result

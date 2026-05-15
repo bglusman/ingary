@@ -413,6 +413,73 @@ defmodule WardwrightTest do
            }
   end
 
+  test "route override fails closed when the forced model is unavailable" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "missing-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "hard proof",
+          "target_model" => "missing/model"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hard proof"}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "policy_failed_closed"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    assert get_in(receipt, ["decision", "route_blocked"]) == true
+    assert get_in(receipt, ["decision", "fallback_used"]) == false
+
+    assert get_in(receipt, ["decision", "reason"]) ==
+             "policy forced model was not in the allowed route set"
+  end
+
+  test "route override fails closed when the forced model cannot fit the prompt" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "too-small-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "long proof",
+          "target_model" => "tiny/model"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "long proof " <> String.duplicate("x", 200)}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    assert get_in(receipt, ["decision", "route_blocked"]) == true
+
+    assert get_in(receipt, ["decision", "reason"]) ==
+             "policy forced model was too small for estimated prompt"
+
+    assert [%{"target" => "tiny/model", "reason" => "context_window_too_small"} | _] =
+             get_in(receipt, ["decision", "skipped"])
+  end
+
   test "Dune policy engine can return route constraints used by the planner" do
     config =
       unit_policy_config()
@@ -451,6 +518,46 @@ defmodule WardwrightTest do
 
     assert [%{"rule_id" => "dune-route-gate", "action" => "restrict_routes"}] =
              get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "hybrid policy engine propagates nested blocking actions" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "hybrid-block",
+          "kind" => "route_gate",
+          "engine" => "hybrid",
+          "engines" => [
+            %{
+              "engine" => "primitive",
+              "rules" => [
+                %{"id" => "primitive-deny", "contains" => "deny me", "action" => "block"}
+              ]
+            }
+          ]
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "please deny me"}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert [
+             %{
+               "rule_id" => "primitive-deny",
+               "kind" => "route_gate",
+               "action" => "block"
+             }
+           ] = get_in(receipt, ["decision", "policy_actions"])
   end
 
   test "policy engine errors fail closed before provider invocation" do
@@ -1031,6 +1138,16 @@ defmodule WardwrightTest do
 
     assert Jason.decode!(conn.resp_body)["error"]["message"] ==
              "alloy bad-alloy target tiny/model weight must be positive"
+  end
+
+  test "test config endpoint is disabled unless explicitly allowed" do
+    previous = Application.get_env(:wardwright, :allow_test_config, false)
+    Application.put_env(:wardwright, :allow_test_config, false)
+    on_exit(fn -> Application.put_env(:wardwright, :allow_test_config, previous) end)
+
+    conn = call(:post, "/__test/config", unit_policy_config())
+    assert conn.status == 404
+    assert Jason.decode!(conn.resp_body)["error"]["code"] == "not_found"
   end
 
   test "dispatcher selects the smallest fitting model and preserves larger fallbacks" do

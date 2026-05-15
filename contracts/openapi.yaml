@@ -251,7 +251,9 @@ paths:
       summary: Prototype-only dynamic model definition endpoint
       description: |
         Non-production endpoint used by property/fuzz tests to install generated
-        synthetic model definitions into runnable prototypes.
+        synthetic model definitions into runnable prototypes. Disabled unless
+        the runtime explicitly enables `allow_test_config` or
+        `WARDWRIGHT_ALLOW_TEST_CONFIG=1`.
       requestBody:
         required: true
         content:
@@ -273,6 +275,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/TestRouteTarget"
+        "404":
+          description: Test config endpoint disabled
         "400":
           $ref: "#/components/responses/Error"
 components:

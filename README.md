@@ -63,7 +63,8 @@ backend is `app`.
 
 Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. It exists while the production configuration API
-is still being designed.
+is still being designed, but it is disabled by default outside tests. Enable it
+only for controlled local runs with `WARDWRIGHT_ALLOW_TEST_CONFIG=1`.
 
 Run the storage/sink reference fixture with:
 

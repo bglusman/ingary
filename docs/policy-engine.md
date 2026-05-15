@@ -17,6 +17,13 @@ is to define the durable execution model that can support request, route,
 stream, output, and history-aware policies without adding unbounded overhead to
 every synthetic model call.
 
+The live BEAM implementation now has a first policy-plan boundary:
+`Wardwright.Policy.Plan` evaluates request-phase governance rules and emits a
+transformed request plus policy actions, route constraints, alerts, and block
+state. This is still interpreted from the runtime config, not a fully compiled
+artifact, but it deliberately moves policy semantics out of the HTTP router so
+compiled plans, traces, and projections can share one execution contract.
+
 ## Design Bias
 
 Start with declarative and built-in policies for common cases. Add Starlark as

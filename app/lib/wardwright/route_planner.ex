@@ -105,26 +105,20 @@ defmodule Wardwright.RoutePlanner do
   end
 
   defp select_forced_model(model, targets, estimated) do
-    selected = Map.get(targets, model)
+    forced = Map.get(targets, model)
     skipped = targets |> Map.delete(model) |> Map.values() |> Enum.map(&policy_skip/1)
 
-    selected =
+    {selected, skipped, reason} =
       cond do
-        selected == nil -> largest_known_model(targets)
-        selected["context_window"] < estimated -> largest_known_model(targets)
-        true -> selected
-      end
+        forced == nil ->
+          {nil, skipped, "policy forced model was not in the allowed route set"}
 
-    reason =
-      cond do
-        Map.has_key?(targets, model) and selected["model"] == model ->
-          "policy forced selected model"
-
-        Map.has_key?(targets, model) ->
-          "policy forced model was too small for estimated prompt"
+        forced["context_window"] < estimated ->
+          {nil, [context_skip(forced, estimated) | skipped],
+           "policy forced model was too small for estimated prompt"}
 
         true ->
-          "policy forced model was not in the allowed route set"
+          {forced, skipped, "policy forced selected model"}
       end
 
     selected_models = selected_models(selected, if(selected, do: [selected], else: []))
@@ -136,7 +130,7 @@ defmodule Wardwright.RoutePlanner do
       selected_models: selected_models,
       fallback_models: [],
       skipped: skipped,
-      fallback_used: selected == nil or selected["model"] != model,
+      fallback_used: false,
       reason: reason,
       rule: "apply policy route override before provider selection"
     })
