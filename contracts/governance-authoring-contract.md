@@ -30,6 +30,13 @@ Artifacts must be:
 - explicit about phases, matchers, actions, scopes, and effect sets
 - compilable into a runtime plan with no hidden AI calls
 
+Artifacts may include structured state-machine definitions. A state machine is
+still policy data: states, events, guards, transitions, effects, retry budgets,
+terminal outcomes, and trace labels. Runtime implementations may interpret that
+data directly, compile pure transition logic, or host it in a BEAM state-machine
+process, but the artifact must remain inspectable and simulatable without raw
+runtime callback code.
+
 ## Assistant Boundaries
 
 The assistant may:
@@ -79,6 +86,17 @@ Conflict classes:
 - `ambiguous`: user confirmation is needed.
 - `conflicting`: activation is rejected until the artifact changes.
 
+State-machine artifacts must also declare:
+
+- scope: `attempt`, `run`, `session`, or a later explicit broader scope
+- initial state
+- terminal states
+- events that can trigger each transition
+- guard inputs and declared reads
+- actions and declared writes emitted by each transition
+- retry, loop, or timeout budgets for any non-terminal cycle
+- trace labels suitable for receipts and UI simulations
+
 ## Simulation Requirements
 
 The simulator must explain behavior through examples, not only pass/fail
@@ -103,3 +121,4 @@ Simulation output should include:
 - whether violating bytes reached the consumer
 - receipt event preview
 - minimal counterexample when a property fails
+- visited state-machine path when a policy uses a state-machine artifact

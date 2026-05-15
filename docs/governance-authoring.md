@@ -43,12 +43,21 @@ The UI should show policy as a phase graph:
 - request rules
 - route rules
 - stream detectors and arbiters
+- state-machine phases, states, transitions, and terminal outcomes
 - output/finalization rules
 - receipt and alert side effects
 
 Rules should be labeled as `parallel-safe`, `ordered`, `ambiguous`, or
 `conflicting`. Users should not need to infer whether two rules can run
 together from raw YAML.
+
+State-machine authoring should be a structured builder, not a raw process-code
+editor. Users should be able to define named states, triggering events, guard
+conditions, transition actions, retry budgets, and terminal outcomes. The UI can
+then highlight unreachable states, missing terminal paths, conflicting actions,
+and loops without explicit bounds. Advanced users may review the deterministic
+artifact directly, but the visual graph and simulator should remain the normal
+authoring surface.
 
 ## Simulation Model
 
@@ -59,3 +68,8 @@ the consumer.
 
 Generated counterexamples should be pinnable as regression fixtures, so the UI
 becomes a bridge from intent to durable tests.
+
+For state machines, simulation should show the visited path through states and
+transitions, the event that caused each transition, the guards that passed or
+failed, emitted normalized actions, retry counts, terminal state, and the receipt
+events that would explain the run.
