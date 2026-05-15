@@ -1,0 +1,142 @@
+{
+  "schema": "wardwright.bakeoff.visible_structured_output.v1",
+  "schemas": {
+    "answer_v1": {
+      "type": "object",
+      "required": ["answer", "confidence"],
+      "properties": {
+        "answer": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "citations": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "answer_v2": {
+      "type": "object",
+      "required": ["result", "confidence", "format_version"],
+      "properties": {
+        "result": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "format_version": {"type": "string", "enum": ["v2"]},
+        "sources": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "semantic_rules": [
+    {
+      "id": "minimum-confidence",
+      "kind": "json_path_number",
+      "path": "/confidence",
+      "gte": 0.7
+    },
+    {
+      "id": "answer-not-draft",
+      "kind": "json_path_string_not_contains",
+      "path": "/answer",
+      "pattern": "draft"
+    },
+    {
+      "id": "answer-not-unsafe",
+      "kind": "json_path_string_not_contains",
+      "path": "/answer",
+      "pattern": "unsafe"
+    },
+    {
+      "id": "answer-not-debug",
+      "kind": "json_path_string_not_contains",
+      "path": "/answer",
+      "pattern": "debug"
+    }
+  ],
+  "guard_loop": {
+    "max_attempts": 4,
+    "max_failures_per_rule": 2,
+    "on_violation": "retry_with_validation_feedback",
+    "on_exhausted": "block"
+  },
+  "scenarios": [
+    {
+      "name": "valid_v1_first_output",
+      "tier": "core",
+      "description": "The first provider response matches answer_v1 and semantic rules.",
+      "outputs": ["{\"answer\":\"Use the current API.\",\"confidence\":0.93}"],
+      "expected": {
+        "final_status": "completed",
+        "selected_schema": "answer_v1",
+        "guard_types": [],
+        "guard_rule_ids": [],
+        "attempt_count": 1
+      }
+    },
+    {
+      "name": "syntax_schema_semantic_then_v1_success",
+      "tier": "core",
+      "description": "Failure type changes on each retry before answer_v1 succeeds.",
+      "outputs": [
+        "{not json",
+        "{\"answer\":\"missing confidence\"}",
+        "{\"answer\":\"valid shape but unsure\",\"confidence\":0.4}",
+        "{\"answer\":\"valid and confident\",\"confidence\":0.91}"
+      ],
+      "expected": {
+        "final_status": "completed_after_guard",
+        "selected_schema": "answer_v1",
+        "guard_types": ["json_syntax", "schema_validation", "semantic_validation"],
+        "guard_rule_ids": ["structured-json", "structured-json", "minimum-confidence"],
+        "attempt_count": 4
+      }
+    },
+    {
+      "name": "v2_schema_selected_after_v1_shape_fails",
+      "tier": "advanced",
+      "description": "Provider returns answer_v2 shape after an invalid answer_v1-shaped response.",
+      "outputs": [
+        "{\"answer\":\"too uncertain\",\"confidence\":0.32}",
+        "{\"result\":\"Use schema v2.\",\"confidence\":0.89,\"format_version\":\"v2\",\"sources\":[\"visible-fixture\"]}"
+      ],
+      "expected": {
+        "final_status": "completed_after_guard",
+        "selected_schema": "answer_v2",
+        "guard_types": ["semantic_validation"],
+        "guard_rule_ids": ["minimum-confidence"],
+        "attempt_count": 2
+      }
+    },
+    {
+      "name": "per_rule_budget_exhausted_before_global_budget",
+      "tier": "advanced",
+      "description": "The same semantic rule fails too many times while global attempts remain.",
+      "outputs": [
+        "{\"answer\":\"too uncertain one\",\"confidence\":0.1}",
+        "{\"answer\":\"too uncertain two\",\"confidence\":0.2}",
+        "{\"answer\":\"too uncertain three\",\"confidence\":0.3}",
+        "{\"answer\":\"would have succeeded too late\",\"confidence\":0.95}"
+      ],
+      "expected": {
+        "final_status": "exhausted_rule_budget",
+        "exhausted_rule_id": "minimum-confidence",
+        "guard_types": ["semantic_validation", "semantic_validation"],
+        "guard_rule_ids": ["minimum-confidence", "minimum-confidence"],
+        "attempt_count": 2
+      }
+    },
+    {
+      "name": "global_budget_exhausted_mixed_failures",
+      "tier": "core",
+      "description": "Different semantic rules consume the global attempt budget without any one rule reaching its per-rule budget.",
+      "outputs": [
+        "{\"answer\":\"draft response\",\"confidence\":0.91}",
+        "{\"answer\":\"unsafe response\",\"confidence\":0.91}",
+        "{\"answer\":\"debug response\",\"confidence\":0.91}",
+        "{\"answer\":\"still too uncertain\",\"confidence\":0.2}"
+      ],
+      "expected": {
+        "final_status": "exhausted_guard_budget",
+        "guard_types": ["semantic_validation", "semantic_validation", "semantic_validation", "semantic_validation"],
+        "guard_rule_ids": ["answer-not-draft", "answer-not-unsafe", "answer-not-debug", "minimum-confidence"],
+        "attempt_count": 4
+      }
+    }
+  ]
+}

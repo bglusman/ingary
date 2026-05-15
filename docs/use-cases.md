@@ -1,12 +1,12 @@
 ---
 layout: default
-title: Ingary Use Cases
-description: Candidate Ingary policy examples grounded in agentic workflow failure modes.
+title: Wardwright Use Cases
+description: Candidate Wardwright policy examples grounded in agentic workflow failure modes.
 ---
 
 # Use Cases
 
-These examples are working hypotheses for Ingary's first policy library and
+These examples are working hypotheses for Wardwright's first policy library and
 test suite. They are intentionally focused on constrained agentic workflows
 where the operator knows what failure looks like.
 
@@ -35,14 +35,14 @@ Useful references:
 
 ## Escalation Vocabulary
 
-Ingary should use two different terms:
+Wardwright should use two different terms:
 
-- **alert**: asynchronous notification. Ingary records a receipt event and
+- **alert**: asynchronous notification. Wardwright records a receipt event and
   sends a sink notification, such as webhook, Slack, Telegram, email, or UI
   inbox. The original request keeps following the configured policy action:
   allow, retry, reroute, block, or fail. The alert does not wait for a human
   reply.
-- **approval gate**: synchronous or resumable human review. Ingary pauses the
+- **approval gate**: synchronous or resumable human review. Wardwright pauses the
   request lifecycle, persists enough state to resume, waits for an explicit
   approve/edit/reject decision, and has timeout semantics. This is a different
   product surface from alerting and is not part of the current mock backend.
@@ -58,7 +58,7 @@ Where this document says "human escalation" for MVP examples, read it as
 An agent says the job is done, but the expected artifact, ticket update,
 database record, or customer-visible output is missing.
 
-Ingary policy:
+Wardwright policy:
 
 - match request or model output for completion language
 - check for required artifact metadata or structured output fields
@@ -76,7 +76,7 @@ Falsifiable value:
 The agent repeats the same tool or provider request without meaningful state
 change, often consuming budget while appearing active.
 
-Ingary policy:
+Wardwright policy:
 
 - track repeated calls, retries, or similar prompt fragments by session/run
 - inject a reminder, reroute to a more capable model, or alert after a
@@ -94,7 +94,7 @@ Falsifiable value:
 Downstream systems expect JSON, XML, or another machine-readable contract, but
 the model returns malformed or semantically incomplete output.
 
-Ingary policy:
+Wardwright policy:
 
 - require a structured-output mode for the synthetic model
 - validate before the consumer sees the output
@@ -112,7 +112,7 @@ Falsifiable value:
 A workflow gradually grows context until smaller models fail, latency increases,
 or expensive fallbacks become the default.
 
-Ingary policy:
+Wardwright policy:
 
 - route by estimated prompt tokens and configured context windows
 - alert when the route crosses a cost or latency threshold
@@ -129,7 +129,7 @@ Falsifiable value:
 Operators want to test prompt preambles, postscripts, or model variants without
 turning every agent integration into a bespoke experiment.
 
-Ingary policy:
+Wardwright policy:
 
 - version prompt transforms with the synthetic model
 - apply transforms consistently across clients
@@ -154,7 +154,7 @@ property generators.
 | TTSR deprecated-pattern guard | Saves context until a rule matters while preventing known bad output from reaching consumers. | Stream ring buffer, trigger offset, one-shot rule state. | Generate streams with trigger split across chunks; assert trigger before release. |
 | Async operator alert sink | Improves visibility without claiming synchronous human approval. | Receipt event, sink status, delivery attempt metadata. | Trip a policy; assert receipt event and sink delivery record even if sink fails. |
 | Approval gate | Enables true human review for irreversible actions, but requires persistence and timeout semantics. | Pending request state, approval token, deadline, resume decision. | Simulate approve/reject/edit with timeout and idempotent resume. |
-| Prompt experiment receipts | Makes Ingary useful as a prompt experiment boundary. | Prompt transform version, route, outcome labels, latency/cost. | Run A/B variants over fixture tasks; assert receipts can group by transform version. |
+| Prompt experiment receipts | Makes Wardwright useful as a prompt experiment boundary. | Prompt transform version, route, outcome labels, latency/cost. | Run A/B variants over fixture tasks; assert receipts can group by transform version. |
 | Cost/context budget guard | Prevents silent migration from cheap/fast routes to expensive/slow routes. | Estimated tokens, route selection, rolling run/session/tenant budget. | Generate calls near budget/context thresholds; assert route/degrade/alert decisions. |
 | Trace-to-regression loop | Turns production incidents into durable examples. | Receipt timeline, policy events, failure label, expected future behavior. | Import a labeled receipt; generate a BDD fixture that fails before the policy is added. |
 
@@ -162,7 +162,7 @@ property generators.
 
 These examples need different data scopes. Structured output can run on the
 current attempt. Tool-loop detection needs recent events from the same run or
-session. DOS controls eventually need tenant/user-level windows. Ingary should
+session. DOS controls eventually need tenant/user-level windows. Wardwright should
 therefore make policy state explicit and bounded instead of giving policy code
 arbitrary access to receipts or storage.
 

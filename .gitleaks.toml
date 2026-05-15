@@ -1,6 +1,6 @@
 # .gitleaks.toml — Public generic secret + infrastructure-disclosure scanner.
 
-title = "ingary secret + infra-leak rules"
+title = "wardwright secret + infra-leak rules"
 
 [extend]
 useDefault = true

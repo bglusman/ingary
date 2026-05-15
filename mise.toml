@@ -1,76 +1,32 @@
 [tools]
-rust = "1.95.0"
-go = "1.26.3"
 erlang = "28.5"
 elixir = "1.19.5-otp-28"
 
-[tasks."check:go"]
-description = "Run Go backend tests"
-run = "cd backends/go-ingary && go test ./..."
-
-[tasks."check:rust"]
-description = "Run Rust formatting and tests"
-run = "cd backends/rust-ingary && cargo fmt --check && cargo test"
-
-[tasks."check:elixir"]
-description = "Run Elixir formatting and tests"
-run = "cd backends/elixir-ingary && mix format --check-formatted && mix test"
-
-[tasks."check:frontend"]
-description = "Install frontend dependencies and build"
-run = "cd frontend/web && npm ci && npm run build"
+[tasks."check:app"]
+description = "Run app formatting and tests"
+run = "cd app && mix format --check-formatted && mix test"
 
 [tasks."check:contracts"]
 description = "Run shared Python contract/storage checks that do not need live servers"
-run = "uv run python -m py_compile tests/*.py && uv run python tests/storage_contract.py --store all --cases 50 && uv run pytest -m 'not backend and not live_llm' tests/test_bakeoff_*.py"
-
-[tasks."bakeoff:test:pure"]
-description = "Run shared bakeoff BDD/property tests that do not need live backends"
-run = "uv run pytest -m 'not backend and not live_llm' tests/test_bakeoff_*.py"
-
-[tasks."bakeoff:test:backend"]
-description = "Run shared bakeoff BDD/property tests against a live backend"
-run = "uv run pytest -m 'backend and not live_llm' tests/test_bakeoff_*.py"
+run = "uv run python -m py_compile tests/*.py && uv run python tests/storage_contract.py --store all --cases 50"
 
 [tasks.check]
 description = "Run all baseline checks"
-depends = ["check:go", "check:rust", "check:elixir", "check:frontend", "check:contracts"]
+depends = ["check:app", "check:contracts"]
 
-[tasks."run:go"]
-description = "Run Go backend on 127.0.0.1:8787"
-env = { INGARY_ALLOW_TEST_CREDENTIALS = "1" }
-run = "cd backends/go-ingary && go run ."
+[tasks."mutation:app"]
+description = "Run a bounded Muex mutation sample for the Wardwright app"
+run = "cd app && MIX_ENV=test mix muex --max-mutations 30 --fail-at 0"
 
-[tasks."run:rust"]
-description = "Run Rust backend on 127.0.0.1:8797"
-env = { INGARY_BIND = "127.0.0.1:8797", INGARY_ALLOW_TEST_CREDENTIALS = "1" }
-run = "cd backends/rust-ingary && cargo run"
+[tasks."run:app"]
+description = "Run app on 127.0.0.1:8791"
+env = { WARDWRIGHT_BIND = "127.0.0.1:8791", WARDWRIGHT_ALLOW_TEST_CREDENTIALS = "1" }
+run = "cd app && mix run --no-halt"
 
-[tasks."run:elixir"]
-description = "Run Elixir backend on 127.0.0.1:8791"
-env = { INGARY_BIND = "127.0.0.1:8791", INGARY_ALLOW_TEST_CREDENTIALS = "1" }
-run = "cd backends/elixir-ingary && mix run --no-halt"
-
-[tasks."probe:go"]
-description = "Probe the Go backend contract"
-run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8787 --fuzz-runs 10"
-
-[tasks."probe:rust"]
-description = "Probe the Rust backend contract"
-run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8797 --fuzz-runs 10"
-
-[tasks."probe:elixir"]
-description = "Probe the Elixir backend contract"
+[tasks."probe:app"]
+description = "Probe the app contract"
 run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-runs 10"
 
-[tasks."config:go:local"]
-description = "Load ignored local provider targets into the Go backend"
-run = "curl -fsS -X POST http://127.0.0.1:8787/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
-
-[tasks."config:rust:local"]
-description = "Load ignored local provider targets into the Rust backend"
-run = "curl -fsS -X POST http://127.0.0.1:8797/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
-
-[tasks."config:elixir:local"]
-description = "Load ignored local provider targets into the Elixir backend"
-run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
+[tasks."config:app:local"]
+description = "Load ignored local provider targets into the app"
+run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.wardwright.local/provider-targets.json"

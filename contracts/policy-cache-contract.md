@@ -71,6 +71,6 @@ The initial cache-reading governance rule is:
 }
 ```
 
-During request policy evaluation, Ingary counts matching cache events in the
+During request policy evaluation, Wardwright counts matching cache events in the
 configured caller scope. `escalate` records a `policy.alert` receipt event and
 includes `history_count` and `threshold` in `policy_actions`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generated model/governance property tests for Ingary prototypes.
+"""Generated model/governance property tests for Wardwright prototypes.
 
 The harness has two layers:
 
@@ -42,12 +42,12 @@ from ttsr_simulator import (
 
 HEADERS = {
     "Content-Type": "application/json",
-    "X-Ingary-Tenant-Id": "property-tenant",
-    "X-Ingary-Application-Id": "property-fuzzer",
-    "X-Ingary-Agent-Id": "property-agent",
-    "X-Ingary-User-Id": "property-user",
-    "X-Ingary-Session-Id": "property-session",
-    "X-Ingary-Run-Id": "property-run",
+    "X-Wardwright-Tenant-Id": "property-tenant",
+    "X-Wardwright-Application-Id": "property-fuzzer",
+    "X-Wardwright-Agent-Id": "property-agent",
+    "X-Wardwright-User-Id": "property-user",
+    "X-Wardwright-Session-Id": "property-session",
+    "X-Wardwright-Run-Id": "property-run",
 }
 
 
@@ -403,15 +403,15 @@ def http_dynamic_properties(base_url: str, rng: random.Random, cases: int) -> tu
             max(windows) + rng.randint(1, 10),
         ]
         for estimate in estimates:
-            body = chat_body(rng.choice([model.synthetic_model, f"ingary/{model.synthetic_model}"]), estimate)
+            body = chat_body(rng.choice([model.synthetic_model, f"wardwright/{model.synthetic_model}"]), estimate)
             actual_estimate = estimate_like_prototypes(body)
             expected, expected_skipped = oracle_select(model, actual_estimate)
             status, headers, response, elapsed = request_json(base_url, "POST", "/v1/chat/completions", body)
             latencies.append(elapsed)
             expect(status == 200, f"chat failed: {status} {response}")
-            receipt_id = headers.get("x-ingary-receipt-id")
+            receipt_id = headers.get("x-wardwright-receipt-id")
             expect(bool(receipt_id), "missing receipt header")
-            expect(headers.get("x-ingary-selected-model") == expected, "selected-model header mismatched oracle")
+            expect(headers.get("x-wardwright-selected-model") == expected, "selected-model header mismatched oracle")
             status, _headers, receipt, _elapsed = request_json(base_url, "GET", f"/v1/receipts/{receipt_id}")
             expect(status == 200, f"receipt lookup failed: {status} {receipt}")
             expect(receipt_selected(receipt) == expected, "receipt selected model mismatched oracle")
@@ -421,7 +421,7 @@ def http_dynamic_properties(base_url: str, rng: random.Random, cases: int) -> tu
             expect(caller.get("consuming_agent_id", {}).get("value") == "property-agent", "caller header not retained")
             executed += 1
         marker = model.governance[0]["contains"]
-        body = chat_body(f"ingary/{model.synthetic_model}", min(windows))
+        body = chat_body(f"wardwright/{model.synthetic_model}", min(windows))
         body["messages"].append({"role": "user", "content": f"operator should see {marker}"})
         status, _headers, response, elapsed = request_json(
             base_url,

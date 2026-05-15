@@ -1,6 +1,6 @@
 # Governance Authoring Contract
 
-Ingary governance should be authored through a visual and AI-assisted workflow,
+Wardwright governance should be authored through a visual and AI-assisted workflow,
 then stored as deterministic policy artifacts. The assistant helps draft and
 review policy, but compiled artifacts and simulator results define runtime
 behavior.

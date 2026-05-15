@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full local pre-push checks for Ingary.
+# Full local pre-push checks for Wardwright.
 
 set -euo pipefail
 
@@ -17,17 +17,8 @@ done
 pass() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
-echo "── Go ───────────────────────────────────────────────"
-(cd backends/go-ingary && go test -count=1 ./...) && pass "go test" || fail "go test"
-
-echo "── Rust ─────────────────────────────────────────────"
-(cd backends/rust-ingary && cargo fmt --check && cargo test) && pass "rust fmt/test" || fail "rust fmt/test"
-
-echo "── Elixir ───────────────────────────────────────────"
-(cd backends/elixir-ingary && mix format --check-formatted && mix test) && pass "elixir format/test" || fail "elixir format/test"
-
-echo "── Frontend ─────────────────────────────────────────"
-(cd frontend/web && npm run build) && pass "frontend build" || fail "frontend build"
+echo "── App ──────────────────────────────────────────────"
+(cd app && mise exec -- mix format --check-formatted && mise exec -- mix test) && pass "app format/test" || fail "app format/test"
 
 echo "── Python contracts ─────────────────────────────────"
 python3 -m py_compile tests/*.py && pass "python compile" || fail "python compile"

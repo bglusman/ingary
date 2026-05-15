@@ -58,6 +58,26 @@ def run_git(args: list[str], cwd: Path) -> str:
     return completed.stdout.strip()
 
 
+def parse_numstat(numstat: str) -> dict[str, int]:
+    files_changed = 0
+    lines_added = 0
+    lines_deleted = 0
+    for line in numstat.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        files_changed += 1
+        if parts[0].isdigit():
+            lines_added += int(parts[0])
+        if parts[1].isdigit():
+            lines_deleted += int(parts[1])
+    return {
+        "files_changed": files_changed,
+        "lines_added": lines_added,
+        "lines_deleted": lines_deleted,
+    }
+
+
 def extract_jsonl_usage(text: str) -> dict[str, int] | None:
     totals: dict[str, int] = {}
     found = False
@@ -96,30 +116,57 @@ def derive_model_usage(usage: dict[str, int]) -> dict[str, float | int]:
 
 def git_snapshot(cwd: Path) -> dict[str, Any]:
     status = run_git(["status", "--short"], cwd)
+    head = run_git(["rev-parse", "HEAD"], cwd)
+    branch = run_git(["branch", "--show-current"], cwd)
     shortstat = run_git(["diff", "--shortstat", "HEAD"], cwd)
     numstat = run_git(["diff", "--numstat", "HEAD"], cwd)
+    stats = parse_numstat(numstat)
     status_lines = status.splitlines()
-    files_changed = 0
-    lines_added = 0
-    lines_deleted = 0
-    for line in numstat.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        files_changed += 1
-        if parts[0].isdigit():
-            lines_added += int(parts[0])
-        if parts[1].isdigit():
-            lines_deleted += int(parts[1])
     return {
+        "head": head,
+        "branch": branch,
         "status": status_lines,
         "status_count": len(status_lines),
         "modified_count": sum(1 for line in status_lines if line.startswith(" M") or line.startswith("M ")),
         "untracked_count": sum(1 for line in status_lines if line.startswith("??")),
         "shortstat": shortstat,
-        "files_changed": files_changed,
-        "lines_added": lines_added,
-        "lines_deleted": lines_deleted,
+        **stats,
+    }
+
+
+def git_commit_delta(cwd: Path, before: str, after: str) -> dict[str, Any]:
+    if not before or not after:
+        return {
+            "head_changed": False,
+            "commits_added": 0,
+            "shortstat": "",
+            "files_changed": 0,
+            "lines_added": 0,
+            "lines_deleted": 0,
+            "commits": [],
+        }
+    if before == after:
+        return {
+            "head_changed": False,
+            "commits_added": 0,
+            "shortstat": "",
+            "files_changed": 0,
+            "lines_added": 0,
+            "lines_deleted": 0,
+            "commits": [],
+        }
+    numstat = run_git(["diff", "--numstat", before, after], cwd)
+    commits_added_raw = run_git(["rev-list", "--count", f"{before}..{after}"], cwd)
+    try:
+        commits_added = int(commits_added_raw)
+    except ValueError:
+        commits_added = 0
+    return {
+        "head_changed": True,
+        "commits_added": commits_added,
+        "shortstat": run_git(["diff", "--shortstat", before, after], cwd),
+        **parse_numstat(numstat),
+        "commits": run_git(["log", "--oneline", "--no-decorate", f"{before}..{after}"], cwd).splitlines(),
     }
 
 
@@ -275,6 +322,7 @@ def main() -> int:
     write_artifact(args.artifact_dir, "input_blob.json", input_blob)
     action_results = [run_action(action, cwd, args.timeout, args.artifact_dir) for action in actions]
     git_after = git_snapshot(cwd)
+    git_delta = git_commit_delta(cwd, str(git_before.get("head", "")), str(git_after.get("head", "")))
     elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
 
     command_count = sum(1 for result in action_results if result.get("kind") == "command")
@@ -300,10 +348,13 @@ def main() -> int:
         "git_files_changed_before": git_before["files_changed"],
         "git_files_changed_after": git_after["files_changed"],
         "git_status_changed": git_before["status"] != git_after["status"],
+        "git_head_changed": git_delta["head_changed"],
+        "git_commits_added": git_delta["commits_added"],
+        "git_files_changed_in_commits": git_delta["files_changed"],
         "git_untracked_after": git_after["untracked_count"],
     }
     result = {
-        "schema": "ingary.bakeoff_harness.v0",
+        "schema": "wardwright.bakeoff_harness.v0",
         "run_id": plan.get("run_id"),
         "feature": plan.get("feature"),
         "backend": plan.get("backend"),
@@ -324,6 +375,7 @@ def main() -> int:
         "stderr_bytes": stderr_bytes,
         "git_before": git_before,
         "git_after": git_after,
+        "git_delta": git_delta,
         "actions": action_results,
         "expected_comparisons": compare_expected(plan.get("expected", {}), observed),
     }

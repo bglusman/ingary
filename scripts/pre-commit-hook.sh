@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mechanical pre-commit gate for Ingary.
+# Mechanical pre-commit gate for Wardwright.
 
 set -euo pipefail
 
@@ -17,28 +17,10 @@ ok() { echo -e "${GREEN}✓${NC} $*"; }
 
 staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
 
-if echo "$staged_files" | grep -qE '^backends/rust-ingary/|Cargo\.(toml|lock)$'; then
-  note "rust fmt/test..."
-  (cd backends/rust-ingary && cargo fmt --check && cargo test) || fail "Rust checks failed"
-  ok "Rust checks clean"
-fi
-
-if echo "$staged_files" | grep -qE '^backends/go-ingary/'; then
-  note "go test..."
-  (cd backends/go-ingary && go test -count=1 ./...) || fail "Go checks failed"
-  ok "Go checks clean"
-fi
-
-if echo "$staged_files" | grep -qE '^backends/elixir-ingary/'; then
-  note "elixir format/test..."
-  (cd backends/elixir-ingary && mix format --check-formatted && mix test) || fail "Elixir checks failed"
-  ok "Elixir checks clean"
-fi
-
-if echo "$staged_files" | grep -qE '^frontend/web/'; then
-  note "frontend build..."
-  (cd frontend/web && npm run build) || fail "Frontend build failed"
-  ok "Frontend build clean"
+if echo "$staged_files" | grep -qE '^app/'; then
+  note "app format/test..."
+  (cd app && mise exec -- mix format --check-formatted && mise exec -- mix test) || fail "App checks failed"
+  ok "App checks clean"
 fi
 
 if echo "$staged_files" | grep -qE '^tests/|^contracts/'; then

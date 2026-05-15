@@ -1,0 +1,59 @@
+{
+  "schema": "wardwright.bakeoff.visible_starlark_policy.v1",
+  "input": {
+    "request": {
+      "model": "wardwright/coding-balanced",
+      "estimated_tokens": 1200,
+      "metadata": {"tenant": "example", "session": "s1"}
+    },
+    "history": [
+      {"kind": "request", "text": "hello", "session": "s1"},
+      {"kind": "response", "text": "shell rm -rf example", "session": "s1"}
+    ],
+    "structured_output": {
+      "final_status": "completed_after_guard",
+      "guard_events": [
+        {"rule_id": "structured-json", "guard_type": "json_syntax"}
+      ]
+    }
+  },
+  "policies": [
+    {
+      "name": "allow_default",
+      "source": "def evaluate(ctx):\n    return {\"action\": \"allow\", \"reason\": \"ok\"}\n",
+      "expected": {"action": "allow"}
+    },
+    {
+      "name": "block_history_literal",
+      "source": "def evaluate(ctx):\n    count = 0\n    for event in ctx[\"history\"]:\n        if event.get(\"session\") == ctx[\"request\"][\"metadata\"][\"session\"] and \"rm -rf\" in event.get(\"text\", \"\"):\n            count += 1\n    if count >= 1:\n        return {\"action\": \"block\", \"reason\": \"dangerous history\"}\n    return {\"action\": \"allow\", \"reason\": \"no match\"}\n",
+      "expected": {"action": "block"}
+    },
+    {
+      "name": "retry_on_json_guard",
+      "source": "def evaluate(ctx):\n    for event in ctx[\"structured_output\"].get(\"guard_events\", []):\n        if event.get(\"guard_type\") == \"json_syntax\":\n            return {\"action\": \"retry\", \"reason\": \"repair structured json\"}\n    return {\"action\": \"allow\", \"reason\": \"no guard\"}\n",
+      "expected": {"action": "retry"}
+    },
+    {
+      "name": "switch_large_context",
+      "source": "def evaluate(ctx):\n    if ctx[\"request\"][\"estimated_tokens\"] > 1000:\n        return {\"action\": \"switch_model\", \"model\": \"wardwright/large-context\", \"reason\": \"large prompt\"}\n    return {\"action\": \"allow\", \"reason\": \"small prompt\"}\n",
+      "expected": {"action": "switch_model", "model": "wardwright/large-context"}
+    }
+  ],
+  "negative_policies": [
+    {
+      "name": "raises_error",
+      "source": "def evaluate(ctx):\n    fail(\"boom\")\n",
+      "expected": {"action": "block"}
+    },
+    {
+      "name": "runaway_loop",
+      "source": "def evaluate(ctx):\n    while True:\n        pass\n",
+      "expected": {"action": "block"}
+    },
+    {
+      "name": "forbidden_import",
+      "source": "load(\"@stdlib//os.star\", \"os\")\ndef evaluate(ctx):\n    return {\"action\": \"allow\"}\n",
+      "expected": {"action": "block"}
+    }
+  ]
+}
