@@ -1627,6 +1627,115 @@ defmodule WardwrightTest do
            ] = result.events
   end
 
+  test "stream policy trigger events include literal match offsets across split chunks" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["abc Old", "Client("],
+        [
+          %{
+            "id" => "offset-split-literal",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+
+    assert [
+             %{
+               "type" => "stream_policy.triggered",
+               "rule_id" => "offset-split-literal",
+               "action" => "block",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window",
+               "match_kind" => "literal",
+               "chunk_start_byte" => 7,
+               "chunk_end_byte" => 14,
+               "stream_window_start_byte" => 0,
+               "stream_window_end_byte" => 14,
+               "match_start_byte" => 4,
+               "match_end_byte" => 14
+             }
+           ] = result.events
+  end
+
+  test "stream policy trigger events include regex match offsets across split chunks" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["abc Old", "Client("],
+        [
+          %{
+            "id" => "offset-split-regex",
+            "regex" => "OldClient\\(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+
+    assert [
+             %{
+               "type" => "stream_policy.triggered",
+               "rule_id" => "offset-split-regex",
+               "action" => "block",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window",
+               "match_kind" => "regex",
+               "chunk_start_byte" => 7,
+               "chunk_end_byte" => 14,
+               "stream_window_start_byte" => 0,
+               "stream_window_end_byte" => 14,
+               "match_start_byte" => 4,
+               "match_end_byte" => 14
+             }
+           ] = result.events
+  end
+
+  test "stream policy offsets stay coherent after earlier rewrites change byte length" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["ABC", "TAIL"],
+        [
+          %{
+            "id" => "length-changing-rewrite",
+            "contains" => "ABC",
+            "action" => "rewrite_chunk",
+            "replacement" => "LONGER-REPLACEMENT"
+          },
+          %{
+            "id" => "post-rewrite-window",
+            "contains" => "REPLACEMENTTAIL",
+            "action" => "block"
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+
+    assert [
+             %{
+               "rule_id" => "length-changing-rewrite",
+               "match_scope" => "chunk",
+               "match_start_byte" => 0,
+               "match_end_byte" => 3
+             },
+             %{
+               "rule_id" => "post-rewrite-window",
+               "match_scope" => "stream_window",
+               "chunk_start_byte" => 18,
+               "chunk_end_byte" => 22,
+               "stream_window_start_byte" => 0,
+               "stream_window_end_byte" => 22,
+               "match_start_byte" => 7,
+               "match_end_byte" => 22
+             }
+           ] = result.events
+  end
+
   test "stream policy bounded horizon releases remaining held bytes on completion" do
     result =
       Wardwright.Policy.Stream.evaluate(

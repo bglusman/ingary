@@ -232,6 +232,14 @@ the held suffix. This gives the router a deterministic policy boundary for a
 runtime implementation that sends SSE while continuing to enforce the holdback
 window.
 
+Stream-policy trigger events include byte-offset evidence over the normalized
+policy stream and current policy window: the triggering chunk range, policy
+window range, matched span, match kind, and whether the match happened inside
+the current chunk or across the buffered window. These offsets are receipt
+evidence for policy decisions, not raw HTTP transport frame positions; after a
+rewrite, later offsets are measured against the rewritten policy stream that
+subsequent rules actually evaluated.
+
 The HTTP route now uses that boundary for live streaming. Provider transports
 emit normalized chunks into the router as they arrive. Bounded-horizon policies
 can release safe prefixes, keep the recent match window held, and cancel the
@@ -240,9 +248,9 @@ the client receives a terminal Wardwright SSE event and the receipt records the
 policy status. If no bytes have been sent, Wardwright can still fail closed with
 JSON.
 
-Remaining stream-runtime work includes richer raw provider-event offsets in
-receipts, provider-specific pools, and a clearer operator-facing model for
-retries after any bytes have reached the client.
+Remaining stream-runtime work includes raw provider-event/frame offsets when
+transport-level evidence matters, provider-specific pools, and a clearer
+operator-facing model for retries after any bytes have reached the client.
 
 ## State Scopes
 
