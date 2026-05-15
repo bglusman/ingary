@@ -742,6 +742,12 @@ Initial policy engine direction:
   Starlark and the built-in declarative engine.
 - `external`: bring-your-own policy engine over a local API/sidecar contract for
   operators who need a different language or isolation model.
+- `gleam_core`: typed BEAM business logic behind Elixir operational boundaries.
+  Gleam is not primarily a sandbox language; it is a candidate for making policy
+  contracts, route decisions, cache facts, guard-loop results, and receipt
+  classifications harder to express incorrectly. Elixir should still own HTTP,
+  supervision, runtime registries, dynamic model/session processes, and
+  integration glue unless a spike proves Gleam can simplify those surfaces too.
 
 Dune is a plausible Elixir candidate for local/operator-authored policy because
 it supports allowlisted modules/functions, isolated process execution,
@@ -764,6 +770,20 @@ required:
 - XML well-formedness validation
 - protobuf-JSON shape validation
 - bounded repair/retry with receipt annotations
+
+For the Elixir/Gleam path, runtime fault isolation should be a first-class
+architecture primitive rather than an implementation detail. Synthetic models
+should be represented by dynamically supervised model runtimes, and active
+caller/session/run state should live under dynamically supervised session
+runtimes below the owning model. A failure in one session's cache, stream
+window, retry loop, Starlark sidecar, or Rustler dirty NIF evaluation should be
+observable in receipts and should not crash unrelated sessions or other model
+runtimes. Dirty NIFs should be treated as scheduler-isolation tools, while
+sidecars/process boundaries remain the stronger killability and hard fault
+containment option. Sidecars are not free: each sidecar boundary should be
+evaluated for queueing, cold-start latency, restart storms, protocol failures,
+pool sizing, and whether saturation in one model/session failure domain can
+apply backpressure to unrelated runtimes.
 
 ### Policy Demonstration Hypotheses
 

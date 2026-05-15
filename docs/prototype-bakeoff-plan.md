@@ -6,10 +6,11 @@ description: Experiment plan for choosing Ingary's primary backend prototype usi
 
 # Prototype Bakeoff Plan
 
-Ingary currently keeps Go, Rust, and Elixir backends alive so the first durable
-implementation can be chosen from evidence instead of preference. The bakeoff
+Ingary currently keeps Go, Rust, Elixir, and a proposed Gleam-on-BEAM variant
+alive so the first durable implementation can be chosen from evidence instead of
+preference. The bakeoff
 turns that intention into a controlled experiment: three non-trivial governance
-features, implemented independently in all three prototypes, scored with a
+features, implemented independently in each prototype, scored with a
 rubric defined before implementation begins.
 
 The goal is not to prove that one language is universally better. The goal is
@@ -19,14 +20,37 @@ delivery cost for the product we are actually building.
 
 ## Experiment Matrix
 
-Each row is one bakeoff feature. Each feature is implemented once in each
-backend, for nine implementation attempts total.
+Each row is one bakeoff feature. The original matrix used Go, Rust, and Elixir
+for nine implementation attempts total. Add Gleam as a fourth evaluated variant
+for all three bakeoffs before selecting a primary prototype.
 
-| Bakeoff | Go | Rust | Elixir | Primary signal |
-|---|---|---|---|---|
-| Portable structured-output governor | `bakeoff/json-go` | `bakeoff/json-rust` | `bakeoff/json-elixir` | Policy semantics, provider normalization, receipt quality |
-| Concurrent recent-history governor | `bakeoff/history-go` | `bakeoff/history-rust` | `bakeoff/history-elixir` | Correctness under load, cache contention, deterministic eviction |
-| Async alert sink with backpressure | `bakeoff/alerts-go` | `bakeoff/alerts-rust` | `bakeoff/alerts-elixir` | Supervision, latency isolation, retries, queue behavior |
+The Gleam variant should be evaluated as **Elixir runtime shell plus Gleam typed
+business-logic core**, not as a replacement for Elixir's HTTP/application
+boundary. Elixir remains responsible for application supervision, dynamic
+process registries, provider/model/session lifecycle, and integration with
+existing Plug/Cowboy surfaces. Gleam owns policy/config data types, pure
+decision functions, validation, routing math, cache/event classification, and
+other logic where static exhaustiveness and type safety should reduce policy
+bugs.
+
+| Bakeoff | Go | Rust | Elixir | Gleam-on-BEAM | Primary signal |
+|---|---|---|---|---|---|
+| Portable structured-output governor | `bakeoff/json-go` | `bakeoff/json-rust` | `bakeoff/json-elixir` | `bakeoff/json-gleam` | Policy semantics, provider normalization, receipt quality |
+| Concurrent recent-history governor | `bakeoff/history-go` | `bakeoff/history-rust` | `bakeoff/history-elixir` | `bakeoff/history-gleam` | Correctness under load, cache contention, deterministic eviction |
+| Async alert sink with backpressure | `bakeoff/alerts-go` | `bakeoff/alerts-rust` | `bakeoff/alerts-elixir` | `bakeoff/alerts-gleam` | Supervision, latency isolation, retries, queue behavior |
+
+Gleam may score poorly in areas where ecosystem libraries are immature or where
+Elixir has better operational ergonomics. That does not make the spike a
+failure. The evaluation should separately score:
+
+- whether typed business logic made invalid policy/config states harder to
+  represent
+- how much FFI/interop glue was required at the Elixir boundary
+- whether tests became clearer or more robust because of typed ADTs
+- whether compile-time friction slowed delivery more than it improved
+  correctness
+- whether dynamic BEAM supervision remains clear when the core logic moves to
+  Gleam modules
 
 TTSR is not a fair first bakeoff because Rust already has a working spike and
 the starting line is not equivalent. It should remain a later stream-governance
@@ -436,6 +460,9 @@ After all three bakeoffs:
 
 - If the same backend wins at least two bakeoffs, make it the primary prototype
   for the next implementation phase.
+- If Gleam materially improves correctness or policy semantics while Elixir
+  remains strongest operationally, prefer a hybrid Elixir/Gleam architecture
+  over treating them as mutually exclusive prototypes.
 - If different backends win different bakeoffs, compare the winning categories
   to the product roadmap. Correctness and policy-authoring semantics should
   outrank raw throughput.
@@ -451,12 +478,12 @@ Do not launch all nine implementation jobs until the measurement process has
 proved itself on real work.
 
 1. Freeze the visible contract, held-out Python oracle, and base `main` SHA.
-2. Launch the first wave as three concurrent jobs for one bakeoff feature, one
-   per backend.
+2. Launch the first wave as four concurrent jobs for one bakeoff feature, one
+   per backend/variant.
 3. Review the outputs, metrics, native test translations, held-out oracle
    failures/passes, and post-commit adversarial reviews.
 4. If the data is comparable and the instructions produced useful work, launch
-   the remaining six jobs.
+   the remaining jobs.
 5. If the first wave exposes bad scoring, weak tests, unclear instructions, or
    untrustworthy instrumentation, revise the harness and rerun a smaller wave
    before spending the full bakeoff budget.
@@ -465,16 +492,52 @@ proved itself on real work.
 
 Before the first bakeoff, fill this table from live code:
 
-| Capability | Go | Rust | Elixir | Notes |
-|---|---|---|---|---|
-| OpenAI-compatible chat endpoint |  |  |  |  |
-| Synthetic simulate endpoint |  |  |  |  |
-| Config mutation endpoint |  |  |  |  |
-| Provider target config |  |  |  |  |
-| Env/fnox credential references |  |  |  |  |
-| Policy cache endpoints |  |  |  |  |
-| `history_threshold` request policy |  |  |  |  |
-| Stream governance/TTSR |  |  |  |  |
-| Native property tests |  |  |  |  |
-| Shared Python probes |  |  |  |  |
-| Load-test harness |  |  |  |  |
+| Capability | Go | Rust | Elixir | Gleam-on-BEAM | Notes |
+|---|---|---|---|---|---|
+| OpenAI-compatible chat endpoint |  |  |  |  |  |
+| Synthetic simulate endpoint |  |  |  |  |  |
+| Config mutation endpoint |  |  |  |  |  |
+| Provider target config |  |  |  |  |  |
+| Env/fnox credential references |  |  |  |  |  |
+| Policy cache endpoints |  |  |  |  |  |
+| `history_threshold` request policy |  |  |  |  |  |
+| Stream governance/TTSR |  |  |  |  |  |
+| Native property tests |  |  |  |  |  |
+| Shared Python probes |  |  |  |  |  |
+| Load-test harness |  |  |  |  |  |
+
+## BEAM Runtime Isolation Requirement
+
+The Elixir and Gleam-on-BEAM variants should explicitly model Ingary runtime
+isolation. The target process hierarchy is:
+
+- application supervisor
+- dynamic supervisor and registry for synthetic model runtimes
+- one model runtime process or subtree per synthetic model/version
+- dynamic supervisor and registry under each model runtime for active sessions
+- one session process or subtree per caller/session/run
+- provider/NIF/sidecar workers linked under the narrowest runtime that owns
+  their failure domain
+
+Required isolation behavior:
+
+- a session crash terminates or restarts only that session subtree
+- a model runtime crash terminates or restarts only that model subtree and its
+  sessions
+- one session's cache, retry loop, stream window, or Starlark/NIF failure cannot
+  corrupt or crash other sessions
+- Starlark through Rustler must use dirty schedulers for scheduler isolation,
+  and the bakeoff should explicitly compare that with a killable sidecar/process
+  boundary for hard timeout/fault containment. If a dirty NIF wedges, evaluation
+  should show what is and is not contained by the model or session subtree.
+- Sidecars must also be evaluated as possible backpressure and failure points:
+  single-worker serialization, queue growth, protocol failures, restart storms,
+  cold-start/build latency, per-model/session pooling strategy, and whether a
+  saturated or crashing sidecar for one runtime can slow or fail other runtimes.
+- receipts must identify model id/version, session id, policy version, retry
+  attempt, and failure domain so postmortems can prove isolation worked
+
+The bakeoff score should reward implementations that test this with observable
+behavior: deliberately crash a session worker, timeout a policy/NIF/sidecar call,
+and confirm another session under the same model plus another model runtime
+continues to answer.
