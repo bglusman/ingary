@@ -11,9 +11,13 @@ run = "cd app && mix clean && gleam format --check src && mix format --check-for
 description = "Check docs site links and front matter"
 run = "ruby scripts/check-docs-site.rb"
 
+[tasks."check:maps"]
+description = "Ensure string-keyed Elixir map access does not grow in core modules"
+run = "ruby scripts/check-elixir-map-boundaries.rb"
+
 [tasks.check]
 description = "Run all baseline checks"
-depends = ["check:app", "check:docs"]
+depends = ["check:app", "check:docs", "check:maps"]
 
 [tasks."mutation:app"]
 description = "Run a bounded Muex mutation sample for the Wardwright app"
