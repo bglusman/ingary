@@ -5,7 +5,7 @@ gleam = "1.16.0"
 
 [tasks."check:app"]
 description = "Run app formatting and tests"
-run = "cd app && gleam format --check src && mix format --check-formatted && mix test && WARDWRIGHT_POLICY_CORE=compare mix test --trace test/gleam_policy_core_test.exs"
+run = "cd app && mix clean && gleam format --check src && mix format --check-formatted && mix test && WARDWRIGHT_POLICY_CORE=compare mix test --trace test/gleam_policy_core_test.exs"
 
 [tasks."check:docs"]
 description = "Check docs site links and front matter"
@@ -17,16 +17,17 @@ depends = ["check:app", "check:docs"]
 
 [tasks."mutation:app"]
 description = "Run a bounded Muex mutation sample for the Wardwright app"
-run = "cd app && MIX_ENV=test mix muex --max-mutations 30 --fail-at 0"
+run = "cd app && MIX_ENV=test mix muex --max-mutations 30 --fail-at 0 && mix clean"
 
 [tasks."mutation:policy"]
 description = "Run focused Muex checks for policy-critical Wardwright modules; do not run concurrently with mix test"
 run = [
-  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/structured_output.ex' --test-paths 'test/wardwright_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
-  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/stream.ex' --test-paths 'test/wardwright_test.exs' --fail-at 100",
-  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy_cache.ex' --test-paths 'test/wardwright_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
-  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/route_planner.ex' --test-paths 'test/wardwright_test.exs' --fail-at 100",
-  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/router.ex' --test-paths 'test/wardwright_test.exs,test/runtime_visibility_test.exs' --max-mutations 40 --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/structured_output.ex' --test-paths 'test/structured_output_policy_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/stream.ex' --test-paths 'test/stream_policy_window_test.exs,test/stream_policy_horizon_test.exs,test/stream_retry_policy_test.exs,test/stream_runtime_guard_test.exs,test/stream_provider_transport_test.exs,test/stream_retry_budget_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy_cache.ex' --test-paths 'test/policy_cache_test.exs,test/history_policy_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/route_planner.ex' --test-paths 'test/route_planner_test.exs,test/route_policy_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/router.ex' --test-paths 'test/request_policy_test.exs,test/route_policy_test.exs,test/hybrid_policy_engine_test.exs,test/structured_output_policy_test.exs,test/history_policy_test.exs,test/alert_delivery_policy_test.exs,test/stream_policy_window_test.exs,test/stream_policy_horizon_test.exs,test/stream_retry_policy_test.exs,test/stream_runtime_guard_test.exs,test/stream_provider_transport_test.exs,test/stream_retry_budget_test.exs,test/public_api_test.exs,test/storage_and_admin_test.exs,test/runtime_visibility_test.exs' --max-mutations 40 --fail-at 100",
+  "cd app && mix clean",
 ]
 
 [tasks."run:app"]

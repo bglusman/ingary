@@ -53,6 +53,9 @@ In short:
 
 ## Product Contract Rules
 
+- Read `docs/architecture-ratchets.md` and `docs/testing-ratchets.md` before
+  large feature work. They capture the anti-god-object, ownership, typed-data,
+  concurrency, and behavior-test rules this repo expects agents to preserve.
 - Keep the OpenAI-compatible serving surface stable unless the contract changes
   intentionally in `contracts/openapi.yaml`.
 - Keep receipt summary shape consistent with the contract. In particular,
