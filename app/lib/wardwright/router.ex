@@ -714,6 +714,7 @@ defmodule Wardwright.Router do
       "stream_policy_blocked" -> 422
       "stream_policy_latency_exceeded" -> 422
       "stream_policy_retry_context_exceeded" -> 422
+      "stream_policy_retry_skipped_after_release" -> 409
       "stream_policy_retry_required" -> 409
       _ -> 200
     end
@@ -886,6 +887,39 @@ defmodule Wardwright.Router do
 
             {policy, %{provider | status: policy.status, content: nil}, stream_acc}
         end
+
+      policy.status == "stream_policy_retry_required" and stream_acc.sent? ->
+        skip_event =
+          %{
+            "type" => "attempt.retry_skipped_after_release",
+            "attempt_index" => attempt_index,
+            "retry_count" => retry_count,
+            "max_retries" => retry_budget,
+            "rule_id" => Map.get(trigger_event, "rule_id"),
+            "reason" => "response_already_started",
+            "released_bytes" => policy.released_bytes
+          }
+          |> reject_blank()
+
+        policy =
+          policy
+          |> Map.put(:status, "stream_policy_retry_skipped_after_release")
+          |> Map.update!(:events, &(&1 ++ [skip_event]))
+
+        stream_acc = send_stream_policy_terminal(stream_acc, policy)
+
+        policy =
+          policy
+          |> Map.put(:events, events ++ [skip_event])
+          |> Map.put(:attempts, attempts)
+          |> Map.put(:retry_count, retry_count)
+          |> Map.put(:max_retries, retry_budget)
+          |> Map.put(:called_provider, provider.called_provider)
+          |> Map.put(:mock, provider.mock)
+          |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
+
+        {policy, %{provider | status: policy.status, content: Enum.join(stream_acc.chunks)},
+         stream_acc}
 
       policy.status != "completed" and stream_acc.sent? ->
         stream_acc = send_stream_policy_terminal(stream_acc, policy)

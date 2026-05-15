@@ -2196,6 +2196,75 @@ defmodule WardwrightTest do
     assert released_bytes > 0
   end
 
+  test "bounded stream runtime skips retry once safe bytes have already reached SSE client" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["safe prefix that can release ", "Old", "Client(arg) now"]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "bounded-runtime-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1,
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "safe prefix"
+    assert conn.resp_body =~ "stream_policy_retry_skipped_after_release"
+    refute conn.resp_body =~ "Old"
+    refute conn.resp_body =~ "Client("
+    refute conn.resp_body =~ "NewClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "stream_policy_retry_skipped_after_release"
+    assert stream_policy["retry_count"] == 0
+    assert stream_policy["max_retries"] == 1
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] > 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "provider_status" => "cancelled",
+               "released_bytes" => released_bytes
+             }
+           ] = stream_policy["attempts"]
+
+    assert released_bytes > 0
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "attempt.retry_skipped_after_release" and
+               event["reason"] == "response_already_started" and
+               event["rule_id"] == "bounded-runtime-retry" and
+               event["released_bytes"] > 0
+           end)
+  end
+
   test "bounded stream runtime terminates SSE when provider fails after safe release" do
     config =
       unit_policy_config()

@@ -248,9 +248,18 @@ the client receives a terminal Wardwright SSE event and the receipt records the
 policy status. If no bytes have been sent, Wardwright can still fail closed with
 JSON.
 
+Retry actions only restart provider generation while the response is still
+unreleased. If a bounded-horizon policy has already sent safe bytes to the SSE
+client and a later rule asks for `retry` or `retry_with_reminder`, Wardwright
+cancels the provider attempt, emits `stream_policy_retry_skipped_after_release`
+as the terminal stream event, and records
+`attempt.retry_skipped_after_release` in the receipt instead of pretending a
+full restart is still possible.
+
 Remaining stream-runtime work includes raw provider-event/frame offsets when
-transport-level evidence matters, provider-specific pools, and a clearer
-operator-facing model for retries after any bytes have reached the client.
+transport-level evidence matters, provider-specific pools, and reroute/degrade
+semantics when retry is requested before release but the retried request no
+longer fits the originally selected target.
 
 ## State Scopes
 
