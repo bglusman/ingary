@@ -40,6 +40,9 @@ defmodule Wardwright.PolicyProjection do
       "engine" => engine(pattern["id"]),
       "phases" => phases(pattern["id"], config),
       "effects" => effects(pattern["id"]),
+      "route_workbench" => route_workbench(pattern["id"], config),
+      "assistant_contract" => assistant_contract(pattern["id"]),
+      "governance_escalation" => governance_escalation(pattern["id"]),
       "conflicts" => conflicts(pattern["id"]),
       "opaque_regions" => opaque_regions(pattern["id"]),
       "warnings" => warnings(pattern["id"])
@@ -356,6 +359,348 @@ defmodule Wardwright.PolicyProjection do
         "exact"
       )
     ]
+  end
+
+  defp route_workbench("route-privacy", config) do
+    route_graph = route_graph(config)
+    local_model = primary_model(config)
+    managed_model = secondary_model(config)
+    local_provider = provider_prefix(local_model)
+    baseline_short = Wardwright.RoutePlanner.select(config, 8_000)
+    baseline_large = Wardwright.RoutePlanner.select(config, 96_000)
+
+    restricted =
+      Wardwright.RoutePlanner.select(config, 96_000, %{"allowed_targets" => [local_provider]})
+
+    forced =
+      Wardwright.RoutePlanner.select(config, 8_000, %{
+        "forced_model" => managed_model
+      })
+
+    blocked = Wardwright.RoutePlanner.select(config, 96_000, %{"allowed_targets" => ["sandbox"]})
+
+    %{
+      "summary" =>
+        "Baseline route candidates come from the synthetic model route graph. Policy overlays run before provider selection and explain how the artifact narrowed, forced, rerouted, or blocked that baseline.",
+      "route_root" => route_graph["root"],
+      "nodes" => route_graph["nodes"],
+      "baseline_candidates" => [
+        route_candidate("short local fit", baseline_short),
+        route_candidate("large managed fit", baseline_large)
+      ],
+      "policy_constraints" => [
+        %{
+          "action" => "restrict_routes",
+          "constraint" => "allowed_targets = [\"#{local_provider}\"]",
+          "source_node_id" => "privacy.private-risk-branch",
+          "receipt_field" => "policy_route_constraints.allowed_targets",
+          "outcome" => "managed target removed; route fails closed if local cannot fit"
+        },
+        %{
+          "action" => "switch_model",
+          "constraint" => "forced_model = \"#{managed_model}\"",
+          "source_node_id" => "privacy.private-risk-branch",
+          "receipt_field" => "policy_route_constraints.forced_model",
+          "outcome" => "baseline selector is bypassed by a policy_override route"
+        },
+        %{
+          "action" => "reroute",
+          "constraint" => "forced_model = remediation target after failed attempt",
+          "source_node_id" => "privacy.private-risk-branch",
+          "receipt_field" => "policy_route_constraints.forced_model",
+          "outcome" =>
+            "same route override contract as switch_model, triggered after policy evidence"
+        },
+        %{
+          "action" => "block",
+          "constraint" => "allowed route set is empty",
+          "source_node_id" => "privacy.private-risk-branch",
+          "receipt_field" => "route_blocked",
+          "outcome" => "planner records route_blocked instead of falling through"
+        }
+      ],
+      "policy_outcomes" => [
+        route_outcome("restricted private request", "restrict_routes", restricted),
+        route_outcome("forced managed review", "switch_model", forced),
+        route_outcome("empty allow-list", "block", blocked)
+      ],
+      "model_differences" => [
+        %{
+          "model" => local_model,
+          "baseline_role" => "preferred for private short-context work",
+          "policy_overlay" => "kept by local-only restriction",
+          "risk_note" => "context window can still cause fail-closed route_blocked"
+        },
+        %{
+          "model" => managed_model,
+          "baseline_role" => "selected for larger prompts and available as fallback",
+          "policy_overlay" => "removed unless explicit cloud escalation exists",
+          "risk_note" => "can be forced by switch_model/reroute when the artifact authorizes it"
+        }
+      ]
+    }
+  end
+
+  defp route_workbench(_pattern_id, config) do
+    route_graph = route_graph(config)
+    baseline = Wardwright.RoutePlanner.select(config, 8_000)
+
+    %{
+      "summary" =>
+        "Route graph context is shown for orientation; this policy pattern does not currently emit route constraints.",
+      "route_root" => route_graph["root"],
+      "nodes" => route_graph["nodes"],
+      "baseline_candidates" => [route_candidate("baseline fit", baseline)],
+      "policy_constraints" => [],
+      "policy_outcomes" => [],
+      "model_differences" => []
+    }
+  end
+
+  defp route_graph(config) do
+    targets = Map.get(config, "targets", [])
+    target_ids = Enum.map(targets, &node_id(&1["model"]))
+
+    %{
+      "root" => Map.get(config, "route_root", "dispatcher.prompt_length"),
+      "nodes" => selector_nodes(config, target_ids) ++ Enum.map(targets, &target_node/1)
+    }
+  end
+
+  defp selector_nodes(config, default_target_ids) do
+    dispatchers =
+      config
+      |> Map.get("dispatchers", [])
+      |> case do
+        [] -> [%{"id" => "dispatcher.prompt_length", "models" => default_target_ids}]
+        configured -> configured
+      end
+      |> Enum.map(fn dispatcher ->
+        %{
+          "id" => dispatcher["id"],
+          "type" => "dispatcher",
+          "targets" => selector_target_ids(dispatcher, "models"),
+          "strategy" => "smallest_context_window"
+        }
+      end)
+
+    cascades =
+      config
+      |> Map.get("cascades", [])
+      |> Enum.map(fn cascade ->
+        %{
+          "id" => cascade["id"],
+          "type" => "cascade",
+          "targets" => selector_target_ids(cascade, "models"),
+          "strategy" => "ordered_fallback"
+        }
+      end)
+
+    alloys =
+      config
+      |> Map.get("alloys", [])
+      |> Enum.map(fn alloy ->
+        %{
+          "id" => alloy["id"],
+          "type" => "alloy",
+          "targets" => selector_target_ids(alloy, "constituents"),
+          "strategy" => Map.get(alloy, "strategy", "weighted"),
+          "partial_context" => Map.get(alloy, "partial_context", false)
+        }
+      end)
+
+    dispatchers ++ cascades ++ alloys
+  end
+
+  defp selector_target_ids(selector, key) do
+    selector
+    |> Map.get(key, Map.get(selector, "targets", []))
+    |> Enum.map(fn
+      model when is_binary(model) -> node_id(model)
+      %{"model" => model} -> node_id(model)
+      other -> node_id(to_string(other))
+    end)
+  end
+
+  defp target_node(target) do
+    %{
+      "id" => node_id(target["model"]),
+      "type" => "concrete_model",
+      "provider_id" => provider_prefix(target["model"]),
+      "upstream_model_id" => target["model"],
+      "context_window" => target["context_window"]
+    }
+  end
+
+  defp node_id(model) when is_binary(model), do: String.replace(model, "/", ".")
+  defp node_id(model), do: model |> to_string() |> String.replace("/", ".")
+
+  defp primary_model(config) do
+    config
+    |> Map.get("targets", [])
+    |> List.first(%{})
+    |> Map.get("model", Wardwright.local_model())
+  end
+
+  defp secondary_model(config) do
+    config
+    |> Map.get("targets", [])
+    |> Enum.at(1, %{})
+    |> Map.get("model", primary_model(config))
+  end
+
+  defp provider_prefix(model) when is_binary(model) do
+    model |> String.split("/", parts: 2) |> List.first()
+  end
+
+  defp provider_prefix(_model), do: "provider"
+
+  defp route_candidate(label, decision) do
+    %{
+      "label" => label,
+      "route_type" => decision.route_type,
+      "route_id" => decision.route_id,
+      "selected_model" => decision.selected_model,
+      "fallback_models" => decision.fallback_models,
+      "skipped" => decision.skipped,
+      "reason" => decision.reason
+    }
+  end
+
+  defp route_outcome(label, action, decision) do
+    %{
+      "label" => label,
+      "action" => action,
+      "route_type" => decision.route_type,
+      "selected_model" => decision.selected_model || "none",
+      "route_blocked" => decision.route_blocked,
+      "policy_route_constraints" => decision.policy_route_constraints,
+      "skipped" => decision.skipped,
+      "reason" => decision.reason
+    }
+  end
+
+  defp assistant_contract(pattern_id) do
+    %{
+      "status" => "mocked_static_panel",
+      "source_of_truth" =>
+        "The assistant may explain and propose, but only the deterministic policy artifact can change enforcement.",
+      "system_prompt" =>
+        "You are Wardwright's policy assistant. Ground every answer in the active projection, route plan, simulation trace, receipt, and policy artifact hash. Never imply a simulated or proposed rule is active until validate_policy_artifact passes and the operator activates the artifact.",
+      "tool_calls" => [
+        tool_call("explain_projection", ["artifact_hash", "projection_node_id"]),
+        tool_call("simulate_policy", ["artifact_hash", "scenario_id", "input_facts"]),
+        tool_call("propose_rule_change", ["artifact_hash", "operator_intent", "affected_phase"]),
+        tool_call("inspect_receipt", ["receipt_id", "fields"]),
+        tool_call("inspect_route_plan", ["synthetic_model", "route_root", "request_facts"]),
+        tool_call("validate_policy_artifact", ["artifact_hash", "candidate_patch"])
+      ],
+      "mock_messages" => assistant_messages(pattern_id)
+    }
+  end
+
+  defp tool_call(name, required_args) do
+    %{
+      "name" => name,
+      "required_args" => required_args,
+      "mode" => "read_only_or_candidate_patch"
+    }
+  end
+
+  defp assistant_messages("route-privacy") do
+    [
+      %{
+        "role" => "operator",
+        "text" => "Why did the managed model disappear for this private request?"
+      },
+      %{
+        "role" => "assistant",
+        "text" =>
+          "The active projection shows privacy.private-risk-branch emitted restrict_routes with allowed_targets [local]. I would inspect_route_plan, then inspect_receipt for policy_route_constraints before proposing any artifact change."
+      },
+      %{
+        "role" => "assistant",
+        "text" =>
+          "If the business intent is cloud review after approval, I can propose_rule_change, but activation still depends on validate_policy_artifact and an operator publishing the deterministic artifact."
+      }
+    ]
+  end
+
+  defp assistant_messages(_pattern_id) do
+    [
+      %{"role" => "operator", "text" => "Can this policy be made less noisy?"},
+      %{
+        "role" => "assistant",
+        "text" =>
+          "I can explain_projection and simulate_policy against fixture cases, then propose a candidate rule patch. The compiled artifact remains the authority."
+      }
+    ]
+  end
+
+  defp governance_escalation("route-privacy") do
+    %{
+      "status" => "roadmap_mock",
+      "mockability" =>
+        "Simulation currently records invocation intent only; no external agent is invoked by this LiveView spike.",
+      "steps" => [
+        escalation_step(
+          "1",
+          "deterministic",
+          "route.selecting",
+          "Artifact evaluates private-data-risk"
+        ),
+        escalation_step(
+          "2",
+          "deterministic",
+          "restrict_routes",
+          "Allowed targets narrow to local providers"
+        ),
+        escalation_step(
+          "3",
+          "agent_invocation_mock",
+          "agent.review_policy_exception",
+          "Future policy may ask an agent to gather approval context"
+        ),
+        escalation_step(
+          "4",
+          "deterministic",
+          "validate_policy_artifact",
+          "Only a validated artifact can alter enforcement"
+        )
+      ]
+    }
+  end
+
+  defp governance_escalation(_pattern_id) do
+    %{
+      "status" => "roadmap_mock",
+      "mockability" =>
+        "Agent escalation is shown as an invocation-only path and is not part of this deterministic policy.",
+      "steps" => [
+        escalation_step(
+          "1",
+          "deterministic",
+          "policy.match",
+          "Compiled artifact evaluates the request"
+        ),
+        escalation_step(
+          "2",
+          "agent_invocation_mock",
+          "agent.suggest_refinement",
+          "Assistant can propose a candidate patch"
+        ),
+        escalation_step(
+          "3",
+          "deterministic",
+          "validate_policy_artifact",
+          "Validation gates activation"
+        )
+      ]
+    }
+  end
+
+  defp escalation_step(id, kind, label, detail) do
+    %{"id" => id, "kind" => kind, "label" => label, "detail" => detail}
   end
 
   defp effect(id, node_id, phase, effect, target, confidence) do

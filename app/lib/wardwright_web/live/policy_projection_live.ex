@@ -127,6 +127,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         <% end %>
       </section>
 
+      <section class="workbench_grid">
+        <.route_workbench projection={@projection} />
+        <.assistant_panel contract={@projection["assistant_contract"]} />
+        <.escalation_roadmap escalation={@projection["governance_escalation"]} />
+      </section>
+
       <section class="split">
         <div class="panel">
           <div class="panel_header">
@@ -241,6 +247,158 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         </div>
       </section>
     </section>
+    """
+  end
+
+  attr(:projection, :map, required: true)
+
+  def route_workbench(assigns) do
+    assigns =
+      assign(assigns,
+        primary_model: model_diff_label(assigns.projection, 0),
+        secondary_model: model_diff_label(assigns.projection, 1)
+      )
+
+    ~H"""
+    <div class="panel route_panel">
+      <div class="panel_header">
+        <div>
+          <h2>Route Graph And Policy Overlay</h2>
+          <p><%= @projection["route_workbench"]["summary"] %></p>
+        </div>
+        <.badge value={@projection["route_workbench"]["route_root"] || "no route root"} />
+      </div>
+
+      <div class="route_canvas" aria-label="Model route graph with policy overlay">
+        <svg viewBox="0 0 760 260" role="img">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+              <path d="M0,0 L0,6 L7,3 z" />
+            </marker>
+          </defs>
+          <line x1="138" y1="126" x2="312" y2="76" class="route_edge" marker-end="url(#arrow)" />
+          <line x1="138" y1="134" x2="312" y2="184" class="route_edge" marker-end="url(#arrow)" />
+          <line x1="448" y1="76" x2="618" y2="76" class="route_edge policy_keep" marker-end="url(#arrow)" />
+          <line x1="448" y1="184" x2="618" y2="184" class="route_edge policy_remove" marker-end="url(#arrow)" />
+          <rect x="28" y="92" width="150" height="72" rx="8" class="route_node selector" />
+          <text x="103" y="122" text-anchor="middle">dispatcher</text>
+          <text x="103" y="144" text-anchor="middle" class="svg_note"><%= @projection["route_workbench"]["route_root"] %></text>
+          <rect x="304" y="42" width="156" height="72" rx="8" class="route_node model local" />
+          <text x="382" y="72" text-anchor="middle"><%= @primary_model %></text>
+          <text x="382" y="94" text-anchor="middle" class="svg_note">kept by policy</text>
+          <rect x="304" y="150" width="156" height="72" rx="8" class="route_node model managed" />
+          <text x="382" y="180" text-anchor="middle"><%= @secondary_model %></text>
+          <text x="382" y="202" text-anchor="middle" class="svg_note">baseline fallback</text>
+          <rect x="604" y="44" width="128" height="64" rx="8" class="route_node outcome allow" />
+          <text x="668" y="80" text-anchor="middle">allowed route</text>
+          <rect x="604" y="152" width="128" height="64" rx="8" class="route_node outcome block" />
+          <text x="668" y="180" text-anchor="middle">blocked or</text>
+          <text x="668" y="198" text-anchor="middle">forced</text>
+        </svg>
+      </div>
+
+      <div class="route_columns">
+        <div>
+          <h3>Baseline Candidates</h3>
+          <article :for={candidate <- @projection["route_workbench"]["baseline_candidates"]} class="route_fact">
+            <strong><%= candidate["label"] %></strong>
+            <span><%= candidate["route_type"] %> / <%= candidate["route_id"] %></span>
+            <small>selects <%= candidate["selected_model"] %>; <%= candidate["reason"] %></small>
+          </article>
+        </div>
+
+        <div>
+          <h3>Policy Outcomes</h3>
+          <article :for={outcome <- @projection["route_workbench"]["policy_outcomes"]} class={"route_fact #{if outcome["route_blocked"], do: "blocked", else: "policy"}"}>
+            <div>
+              <.badge value={outcome["action"]} />
+              <.badge value={if outcome["route_blocked"], do: "route_blocked", else: outcome["route_type"]} />
+            </div>
+            <strong><%= outcome["label"] %></strong>
+            <small><%= outcome["selected_model"] %>: <%= outcome["reason"] %></small>
+          </article>
+        </div>
+      </div>
+
+      <div class="constraint_strip">
+        <article :for={constraint <- @projection["route_workbench"]["policy_constraints"]} class="constraint_card">
+          <.badge value={constraint["action"]} />
+          <strong><%= constraint["constraint"] %></strong>
+          <span><%= constraint["outcome"] %></span>
+          <small>receipt: <%= constraint["receipt_field"] %></small>
+        </article>
+      </div>
+
+      <div class="model_diff">
+        <article :for={diff <- @projection["route_workbench"]["model_differences"]}>
+          <strong><%= diff["model"] %></strong>
+          <span><%= diff["baseline_role"] %></span>
+          <small><%= diff["policy_overlay"] %>. <%= diff["risk_note"] %>.</small>
+        </article>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:contract, :map, required: true)
+
+  def assistant_panel(assigns) do
+    ~H"""
+    <div class="panel assistant_panel">
+      <div class="panel_header">
+        <div>
+          <h2>AI Policy Assistant</h2>
+          <p><%= @contract["source_of_truth"] %></p>
+        </div>
+        <.badge value={@contract["status"]} />
+      </div>
+
+      <div class="chat_log">
+        <article :for={message <- @contract["mock_messages"]} class={"chat_message #{message["role"]}"}>
+          <span><%= message["role"] %></span>
+          <p><%= message["text"] %></p>
+        </article>
+      </div>
+
+      <h3>Prompt Contract</h3>
+      <pre><%= @contract["system_prompt"] %></pre>
+
+      <h3>Available Tool Calls</h3>
+      <div class="tool_grid">
+        <article :for={tool <- @contract["tool_calls"]} class="tool_call">
+          <strong><%= tool["name"] %></strong>
+          <span><%= Enum.join(tool["required_args"], ", ") %></span>
+          <small><%= tool["mode"] %></small>
+        </article>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:escalation, :map, required: true)
+
+  def escalation_roadmap(assigns) do
+    ~H"""
+    <div class="panel escalation_panel">
+      <div class="panel_header">
+        <div>
+          <h2>Governance Escalation Roadmap</h2>
+          <p><%= @escalation["mockability"] %></p>
+        </div>
+        <.badge value={@escalation["status"]} />
+      </div>
+
+      <div class="escalation_path">
+        <article :for={step <- @escalation["steps"]} class={"escalation_step #{step["kind"]}"}>
+          <span><%= step["id"] %></span>
+          <div>
+            <strong><%= step["label"] %></strong>
+            <small><%= step["detail"] %></small>
+          </div>
+          <.badge value={step["kind"]} />
+        </article>
+      </div>
+    </div>
     """
   end
 
@@ -385,6 +543,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .node_card.inferred, .node_card.declared { border-color: #d9bd72; background: #fffaf0; }
     .node_card.opaque { border-color: #df9a9a; background: #fff5f5; }
     .split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, 0.82fr); gap: 18px; align-items: start; }
+    .workbench_grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.85fr); gap: 18px; align-items: start; }
+    .route_panel { grid-row: span 2; }
     .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 14px; }
     .kv dt { color: #66727c; }
     .kv dd { margin: 0; font-weight: 800; overflow-wrap: anywhere; }
@@ -401,13 +561,46 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .effect_row.header { color: #66727c; background: #f3f6f8; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .trace_summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: start; }
     .trace_summary span { grid-column: 2; }
+    .route_canvas { overflow: auto; margin-bottom: 14px; border: 1px solid #d5dde4; border-radius: 8px; background: #f8fafb; }
+    .route_canvas svg { display: block; width: 100%; min-width: 620px; height: auto; }
+    .route_node { fill: #fff; stroke: #bac8d3; stroke-width: 2; }
+    .route_node.selector { fill: #eef4f8; }
+    .route_node.local, .route_node.outcome.allow { fill: #edf8f3; stroke: #7ab49f; }
+    .route_node.managed { fill: #fff7df; stroke: #d4ae50; }
+    .route_node.outcome.block { fill: #fff1f1; stroke: #d78383; }
+    .route_edge { stroke: #80909d; stroke-width: 3; fill: none; }
+    .route_edge.policy_keep { stroke: #3b8f72; }
+    .route_edge.policy_remove { stroke: #b25b5b; stroke-dasharray: 8 7; }
+    marker path { fill: #80909d; }
+    svg text { fill: #25313b; font-size: 15px; font-weight: 800; }
+    svg text.svg_note { fill: #66727c; font-size: 12px; font-weight: 700; }
+    .route_columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .route_fact, .constraint_card, .tool_call, .model_diff article, .chat_message, .escalation_step { padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .route_fact, .constraint_card, .tool_call, .model_diff article, .chat_message { display: grid; gap: 6px; }
+    .route_fact div { display: flex; flex-wrap: wrap; gap: 6px; }
+    .route_fact.policy { border-color: #d9bd72; background: #fffaf0; }
+    .route_fact.blocked { border-color: #df9a9a; background: #fff5f5; }
+    .route_fact span, .route_fact small, .constraint_card span, .constraint_card small, .tool_call span, .tool_call small, .model_diff span, .model_diff small, .chat_message span, .escalation_step small { color: #5e6b76; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+    .constraint_strip, .tool_grid, .model_diff, .chat_log, .escalation_path { display: grid; gap: 9px; }
+    .constraint_strip { margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+    .model_diff { margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .chat_message.operator { margin-left: 34px; border-color: #bac8d3; background: #f3f6f8; }
+    .chat_message.assistant { margin-right: 34px; border-color: #94c7b5; background: #f0faf6; }
+    .chat_message p { margin-bottom: 0; }
+    .tool_grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+    .escalation_step { display: grid; grid-template-columns: 32px minmax(0, 1fr) max-content; gap: 10px; align-items: center; }
+    .escalation_step > span { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; color: #fff; background: #586979; font-size: 12px; font-weight: 800; }
+    .escalation_step.deterministic { border-color: #94c7b5; background: #f0faf6; }
+    .escalation_step.agent_invocation_mock { border-color: #ad9ed8; background: #f6f2ff; }
+    .badge.route-blocked, .badge.blocked { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
+    .badge.agent-invocation-mock, .badge.roadmap-mock, .badge.mocked-static-panel { border-color: #ad9ed8; color: #4b3d78; background: #f6f2ff; }
     .badge { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; padding: 3px 8px; border: 1px solid #cad4dc; border-radius: 999px; color: #33414c; background: #f5f7f9; font-size: 12px; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
     .badge.exact, .badge.executed, .badge.passed, .badge.pass { border-color: #94c7b5; color: #1c654f; background: #edf8f3; }
     .badge.declared, .badge.inferred, .badge.inconclusive, .badge.warning, .badge.warn { border-color: #d9bd72; color: #73570d; background: #fff7df; }
     .badge.opaque, .badge.failed, .badge.block, .badge.conflicting { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
     pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
-    @media (max-width: 980px) { .shell, .split { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } }
+    @media (max-width: 980px) { .shell, .split, .workbench_grid, .route_columns { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event, .escalation_step { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .chat_message.operator, .chat_message.assistant { margin-left: 0; margin-right: 0; } }
     """
   end
 
@@ -450,6 +643,20 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp mode_label("phase_map"), do: "Phase map"
   defp mode_label("effect_matrix"), do: "Effect matrix"
   defp mode_label("trace_overlay"), do: "Trace overlay"
+
+  defp model_diff_label(projection, index) do
+    projection
+    |> get_in(["route_workbench", "model_differences"])
+    |> case do
+      diffs when is_list(diffs) ->
+        diffs
+        |> Enum.at(index, %{})
+        |> Map.get("model", "unconfigured")
+
+      _ ->
+        "unconfigured"
+    end
+  end
 
   defp node_label(projection, node_id) do
     projection["phases"]
