@@ -267,7 +267,10 @@ available, the attempt fails closed with `stream_policy_retry_context_exceeded`.
 
 Remaining stream-runtime work includes raw provider-event/frame offsets when
 transport-level evidence matters, provider-specific pools, circuit breaking,
-and richer health/degraded-state reporting.
+and using provider health/degraded-state in route policy. Current provider
+attempts already update `/admin/runtime` with per-provider/model health,
+attempt counts, last status, latency, and consecutive failure state so operators
+can observe instability before routing policy consumes it.
 
 ## State Scopes
 

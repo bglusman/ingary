@@ -4,6 +4,7 @@ defmodule Wardwright.Runtime do
   alias Wardwright.Runtime.{ModelRuntime, SessionRuntime}
 
   @anonymous_session "anonymous"
+  @providers_key "providers"
 
   def ensure_model(model_id, version) do
     case Registry.lookup(Wardwright.Runtime.Registry, {:model, model_id, version}) do
@@ -82,7 +83,8 @@ defmodule Wardwright.Runtime do
            [{{:"$2", :"$3", :"$4", :"$5"}}]}
         ])
         |> Enum.map(fn {_model_id, _version, _session_id, pid} -> SessionRuntime.status(pid) end)
-        |> Enum.sort_by(&{&1["model_id"], &1["version"], &1["session_id"]})
+        |> Enum.sort_by(&{&1["model_id"], &1["version"], &1["session_id"]}),
+      @providers_key => Wardwright.ProviderRuntime.providers_status()
     }
   end
 

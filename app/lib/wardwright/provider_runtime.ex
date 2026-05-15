@@ -1,9 +1,83 @@
 defmodule Wardwright.ProviderRuntime do
   @moduledoc false
 
+  use GenServer
+
   alias Wardwright.Runtime.Events
 
   @default_timeout_ms 180_000
+  @attempt_count :attempt_count
+  @cancelled_count :cancelled_count
+  @completed_count :completed_count
+  @configured "configured"
+  @consecutive_failures :consecutive_failures
+  @consecutive_failures_key "consecutive_failures"
+  @created_at_key "created_at"
+  @error_count :error_count
+  @error_count_key "error_count"
+  @health_key "health"
+  @kind_key "kind"
+  @last_attempt_at :last_attempt_at
+  @last_attempt_at_key "last_attempt_at"
+  @last_latency_ms :last_latency_ms
+  @last_latency_ms_key "last_latency_ms"
+  @last_status :last_status
+  @last_status_key "last_status"
+  @latency_ms_key "latency_ms"
+  @model_key "model"
+  @provider_id_key "provider_id"
+  @provider_kind_key "provider_kind"
+  @providers_key "providers"
+  @provider_timeout_ms_key "provider_timeout_ms"
+  @status_key "status"
+  @stream_key "stream"
+  @targets_key "targets"
+  @timeout_ms_key "timeout_ms"
+  @type_key "type"
+
+  def start_link(_opts) do
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  end
+
+  def reset do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, :reset)
+    else
+      :ok
+    end
+  end
+
+  def status do
+    %{@providers_key => providers_status()}
+  end
+
+  def providers_status do
+    observed =
+      if Process.whereis(__MODULE__) do
+        GenServer.call(__MODULE__, :status)
+      else
+        %{}
+      end
+
+    configured =
+      Wardwright.current_config()
+      |> Map.get(@targets_key, [])
+      |> Enum.map(&provider_status(&1, observed))
+
+    observed_only =
+      observed
+      |> Enum.reject(fn {_key, stats} ->
+        Enum.any?(
+          configured,
+          &(Map.get(&1, @provider_id_key) == stats.provider_id and
+              Map.get(&1, @model_key) == stats.model)
+        )
+      end)
+      |> Enum.map(fn {_key, stats} -> status_record(stats, false) end)
+
+    (configured ++ observed_only)
+    |> Enum.sort_by(&{Map.get(&1, @provider_id_key), Map.get(&1, @model_key)})
+  end
 
   def complete(target, request, provider_fun)
       when is_map(target) and is_function(provider_fun, 0) do
@@ -20,15 +94,15 @@ defmodule Wardwright.ProviderRuntime do
     timeout_ms = target |> timeout_ms() |> normalize_timeout_ms()
     started = System.monotonic_time(:millisecond)
     provider_id = provider_id(target)
-    model = Map.get(target, "model", "")
+    model = Map.get(target, @model_key, "")
     stream_ref = make_ref()
     parent = self()
 
     publish("provider.attempt.started", %{
-      "provider_id" => provider_id,
-      "model" => model,
-      "timeout_ms" => timeout_ms,
-      "stream" => true
+      @provider_id_key => provider_id,
+      @model_key => model,
+      @timeout_ms_key => timeout_ms,
+      @stream_key => true
     })
 
     task =
@@ -42,10 +116,10 @@ defmodule Wardwright.ProviderRuntime do
     {result, acc} = await_provider_stream(task, stream_ref, timeout_ms, acc, chunk_fun)
 
     publish("provider.attempt.finished", %{
-      "provider_id" => provider_id,
-      "model" => model,
-      "status" => result_status(result),
-      "latency_ms" => max(0, System.monotonic_time(:millisecond) - started)
+      @provider_id_key => provider_id,
+      @model_key => model,
+      @status_key => result_status(result),
+      @latency_ms_key => max(0, System.monotonic_time(:millisecond) - started)
     })
 
     {result, acc}
@@ -55,13 +129,13 @@ defmodule Wardwright.ProviderRuntime do
     timeout_ms = target |> timeout_ms() |> normalize_timeout_ms()
     started = System.monotonic_time(:millisecond)
     provider_id = provider_id(target)
-    model = Map.get(target, "model", "")
+    model = Map.get(target, @model_key, "")
 
     publish("provider.attempt.started", %{
-      "provider_id" => provider_id,
-      "model" => model,
-      "timeout_ms" => timeout_ms,
-      "stream" => stream? or Map.get(request, "stream", false) == true
+      @provider_id_key => provider_id,
+      @model_key => model,
+      @timeout_ms_key => timeout_ms,
+      @stream_key => stream? or Map.get(request, @stream_key, false) == true
     })
 
     result =
@@ -69,13 +143,26 @@ defmodule Wardwright.ProviderRuntime do
       |> await_provider(timeout_ms)
 
     publish("provider.attempt.finished", %{
-      "provider_id" => provider_id,
-      "model" => model,
-      "status" => result_status(result),
-      "latency_ms" => max(0, System.monotonic_time(:millisecond) - started)
+      @provider_id_key => provider_id,
+      @model_key => model,
+      @status_key => result_status(result),
+      @latency_ms_key => max(0, System.monotonic_time(:millisecond) - started)
     })
 
     result
+  end
+
+  @impl true
+  def init(state), do: {:ok, state}
+
+  @impl true
+  def handle_call(:reset, _from, _state), do: {:reply, :ok, %{}}
+
+  def handle_call(:status, _from, state), do: {:reply, state, state}
+
+  @impl true
+  def handle_cast({:provider_finished, event}, state) do
+    {:noreply, record_finished(state, event)}
   end
 
   defp await_provider(task, timeout_ms) do
@@ -153,7 +240,7 @@ defmodule Wardwright.ProviderRuntime do
   defp normalize_task_result(nil), do: nil
 
   defp timeout_ms(target) do
-    case integer_value(Map.get(target, "provider_timeout_ms")) do
+    case integer_value(Map.get(target, @provider_timeout_ms_key)) do
       value when value > 0 -> value
       _ -> @default_timeout_ms
     end
@@ -164,7 +251,7 @@ defmodule Wardwright.ProviderRuntime do
 
   defp provider_id(target) do
     target
-    |> Map.get("model", "")
+    |> Map.get(@model_key, "")
     |> String.split("/", parts: 2)
     |> List.first()
   end
@@ -176,15 +263,96 @@ defmodule Wardwright.ProviderRuntime do
   defp result_status(_), do: "provider_error"
 
   defp publish(type, event) do
+    event =
+      Map.merge(event, %{
+        @type_key => type,
+        @created_at_key => System.system_time(:second)
+      })
+
+    if type == "provider.attempt.finished", do: record_provider_finished(event)
+
     if Process.whereis(Wardwright.PubSub) do
-      Events.publish(
-        Events.topic(:models),
-        Map.merge(event, %{
-          "type" => type,
-          "created_at" => System.system_time(:second)
-        })
-      )
+      Events.publish(Events.topic(:models), event)
     end
+  end
+
+  defp record_provider_finished(event) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:provider_finished, event})
+    end
+  end
+
+  defp record_finished(state, event) do
+    provider_id = Map.get(event, @provider_id_key, "")
+    model = Map.get(event, @model_key, "")
+    key = {provider_id, model}
+    status = Map.get(event, @status_key, "provider_error")
+    previous = Map.get(state, key, empty_stats(provider_id, model))
+    failed? = status == "provider_error"
+
+    stats =
+      previous
+      |> Map.update!(@attempt_count, &(&1 + 1))
+      |> Map.update!(@completed_count, &(&1 + if(status == "completed", do: 1, else: 0)))
+      |> Map.update!(@cancelled_count, &(&1 + if(status == "cancelled", do: 1, else: 0)))
+      |> Map.update!(@error_count, &(&1 + if(failed?, do: 1, else: 0)))
+      |> Map.put(
+        @consecutive_failures,
+        if(failed?, do: previous.consecutive_failures + 1, else: 0)
+      )
+      |> Map.put(@last_status, status)
+      |> Map.put(@last_latency_ms, Map.get(event, @latency_ms_key))
+      |> Map.put(@last_attempt_at, Map.get(event, @created_at_key, System.system_time(:second)))
+
+    Map.put(state, key, stats)
+  end
+
+  defp provider_status(target, observed) do
+    provider_id = provider_id(target)
+    model = Map.get(target, @model_key, "")
+    key = {provider_id, model}
+
+    observed
+    |> Map.get(key, empty_stats(provider_id, model))
+    |> status_record(true)
+    |> Map.put(@kind_key, provider_kind(target))
+    |> Map.put(@timeout_ms_key, target |> timeout_ms() |> normalize_timeout_ms())
+  end
+
+  defp status_record(stats, configured?) do
+    %{
+      @provider_id_key => stats.provider_id,
+      @model_key => stats.model,
+      @configured => configured?,
+      @health_key => health(stats),
+      "attempt_count" => stats.attempt_count,
+      "completed_count" => stats.completed_count,
+      "cancelled_count" => stats.cancelled_count,
+      @error_count_key => stats.error_count,
+      @consecutive_failures_key => stats.consecutive_failures,
+      @last_status_key => stats.last_status,
+      @last_latency_ms_key => stats.last_latency_ms,
+      @last_attempt_at_key => stats.last_attempt_at
+    }
+  end
+
+  defp health(%{attempt_count: 0}), do: "unknown"
+  defp health(%{consecutive_failures: failures}) when failures > 0, do: "degraded"
+  defp health(_stats), do: "healthy"
+
+  defp empty_stats(provider_id, model) do
+    %{
+      provider_id: provider_id,
+      model: model,
+      attempt_count: 0,
+      completed_count: 0,
+      cancelled_count: 0,
+      error_count: 0,
+      consecutive_failures: 0,
+      last_status: nil,
+      last_latency_ms: nil,
+      last_attempt_at: nil
+    }
   end
 
   defp integer_value(value) when is_integer(value), do: value
@@ -197,4 +365,8 @@ defmodule Wardwright.ProviderRuntime do
   end
 
   defp integer_value(_), do: nil
+
+  defp provider_kind(target) do
+    Map.get(target, @provider_kind_key) || Map.get(target, @kind_key) || provider_id(target)
+  end
 end

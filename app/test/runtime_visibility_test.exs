@@ -177,6 +177,59 @@ defmodule Wardwright.RuntimeVisibilityTest do
     assert Process.alive?(restarted_model_a_pid)
   end
 
+  test "provider runtime exposes attempt health through admin runtime status" do
+    models_topic = Events.topic(:models)
+
+    assert :ok = Events.subscribe(models_topic)
+
+    target = %{
+      "model" => "direct/provider-health",
+      "provider_kind" => "canned_sequence",
+      "provider_timeout_ms" => 50
+    }
+
+    assert {:ok, "first response"} =
+             Wardwright.ProviderRuntime.complete(target, %{}, fn -> {:ok, "first response"} end)
+
+    assert {:error, "upstream exploded"} =
+             Wardwright.ProviderRuntime.complete(target, %{}, fn ->
+               {:error, "upstream exploded"}
+             end)
+
+    assert_receive {:wardwright_runtime_event, ^models_topic,
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "model" => "direct/provider-health",
+                      "status" => "completed"
+                    }}
+
+    assert_receive {:wardwright_runtime_event, ^models_topic,
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "model" => "direct/provider-health",
+                      "status" => "provider_error",
+                      "created_at" => finished_at
+                    }}
+
+    status =
+      :get
+      |> call("/admin/runtime")
+      |> then(&Jason.decode!(&1.resp_body))
+
+    assert %{
+             "provider_id" => "direct",
+             "model" => "direct/provider-health",
+             "configured" => false,
+             "health" => "degraded",
+             "attempt_count" => 2,
+             "completed_count" => 1,
+             "error_count" => 1,
+             "consecutive_failures" => 1,
+             "last_status" => "provider_error",
+             "last_attempt_at" => ^finished_at
+           } = Enum.find(status["providers"], &(&1["model"] == "direct/provider-health"))
+  end
+
   defp wait_for(fun, attempts \\ 20)
 
   defp wait_for(fun, attempts) when attempts > 0 do
