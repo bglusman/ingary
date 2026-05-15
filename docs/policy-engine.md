@@ -260,8 +260,10 @@ When retry is still possible but the reminder-augmented request no longer fits
 the originally selected target, Wardwright re-runs the route planner with the
 same route constraints before failing closed. If a larger eligible target is
 available, the retry attempt uses that target and records
-`attempt.retry_rerouted`; otherwise the attempt fails closed with
-`stream_policy_retry_context_exceeded`.
+`attempt.retry_rerouted`. Receipts also project those events into
+`final.route_transitions` so review tools can show route movement without
+parsing the lower-level stream event log. If no larger eligible target is
+available, the attempt fails closed with `stream_policy_retry_context_exceeded`.
 
 Remaining stream-runtime work includes raw provider-event/frame offsets when
 transport-level evidence matters, provider-specific pools, circuit breaking,

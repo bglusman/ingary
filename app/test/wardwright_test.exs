@@ -3007,6 +3007,20 @@ defmodule WardwrightTest do
     assert get_in(receipt, ["attempts", Access.at(0), "model"]) == "large-stream/model"
     assert get_in(receipt, ["final", "selected_model"]) == "large-stream/model"
 
+    assert [
+             %{
+               "phase" => "stream_retry",
+               "reason" => "retry_prompt_exceeded_selected_context",
+               "from_model" => "tiny-stream/model",
+               "to_model" => "large-stream/model",
+               "from_context_window" => 8,
+               "to_context_window" => 256,
+               "estimated_prompt_tokens" => estimated_prompt_tokens
+             }
+           ] = get_in(receipt, ["final", "route_transitions"])
+
+    assert estimated_prompt_tokens > 8
+
     stream_policy = get_in(receipt, ["final", "stream_policy"])
 
     assert stream_policy["status"] == "completed"

@@ -646,6 +646,33 @@ defmodule Wardwright.Router do
     final
     |> Map.put("stream_trigger_count", stream_policy.trigger_count)
     |> put_if_present("stream_policy_action", stream_policy.action)
+    |> put_stream_route_transitions(stream_policy)
+  end
+
+  defp put_stream_route_transitions(final, stream_policy) do
+    transitions =
+      stream_policy
+      |> Map.get(:events, [])
+      |> Enum.filter(&(Map.get(&1, "type") == "attempt.retry_rerouted"))
+      |> Enum.map(fn event ->
+        %{
+          "phase" => "stream_retry",
+          "reason" => Map.get(event, "reason"),
+          "from_model" => Map.get(event, "from_selected_model"),
+          "to_model" => Map.get(event, "selected_model"),
+          "from_context_window" => Map.get(event, "from_context_window"),
+          "to_context_window" => Map.get(event, "context_window"),
+          "estimated_prompt_tokens" => Map.get(event, "estimated_prompt_tokens"),
+          "route_type" => Map.get(event, "route_type"),
+          "fallback_used" => Map.get(event, "fallback_used")
+        }
+        |> reject_blank()
+      end)
+
+    case transitions do
+      [] -> final
+      _ -> Map.put(final, "route_transitions", transitions)
+    end
   end
 
   defp stream_policy_receipt(nil), do: nil
