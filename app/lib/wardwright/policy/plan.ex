@@ -255,7 +255,9 @@ defmodule Wardwright.Policy.Plan do
     target_model = record |> Map.get("target_model", Map.get(record, "model")) |> blank_to_nil()
 
     if target_model do
-      Map.put(route_constraints, "forced_model", target_model)
+      route_constraints
+      |> Map.put("forced_model", target_model)
+      |> maybe_put_allow_fallback(record)
     else
       route_constraints
     end
@@ -276,6 +278,7 @@ defmodule Wardwright.Policy.Plan do
     action_record
     |> maybe_put_string_list("allowed_targets", Map.get(rule, "allowed_targets"))
     |> maybe_put_string("target_model", Map.get(rule, "target_model", Map.get(rule, "model")))
+    |> maybe_put_boolean("allow_fallback", Map.get(rule, "allow_fallback"))
   end
 
   defp put_route_action_fields(action_record),
@@ -292,6 +295,16 @@ defmodule Wardwright.Policy.Plan do
       value -> Map.put(map, key, value)
     end
   end
+
+  defp maybe_put_boolean(map, key, value) when value in [true, false],
+    do: Map.put(map, key, value)
+
+  defp maybe_put_boolean(map, _key, _value), do: map
+
+  defp maybe_put_allow_fallback(route_constraints, %{"allow_fallback" => true}),
+    do: Map.put(route_constraints, "allow_fallback", true)
+
+  defp maybe_put_allow_fallback(route_constraints, _record), do: route_constraints
 
   defp normalize_string_list(values) when is_list(values) do
     values

@@ -25,7 +25,7 @@ defmodule Wardwright.RoutePlanner do
         |> root_selector()
         |> select_selector(config, targets, max(1, estimated_prompt_tokens), attrs)
       else
-        select_forced_model(forced_model, targets, max(1, estimated_prompt_tokens))
+        select_forced_model(forced_model, config, targets, max(1, estimated_prompt_tokens), attrs)
       end
 
     decision
@@ -104,7 +104,7 @@ defmodule Wardwright.RoutePlanner do
     })
   end
 
-  defp select_forced_model(model, targets, estimated) do
+  defp select_forced_model(model, config, targets, estimated, attrs) do
     forced = Map.get(targets, model)
     skipped = targets |> Map.delete(model) |> Map.values() |> Enum.map(&policy_skip/1)
 
@@ -121,20 +121,53 @@ defmodule Wardwright.RoutePlanner do
           {forced, skipped, "policy forced selected model"}
       end
 
-    selected_models = selected_models(selected, if(selected, do: [selected], else: []))
+    if selected == nil and Map.get(attrs, "allow_fallback") == true do
+      select_forced_fallback(
+        config,
+        targets,
+        estimated,
+        attrs,
+        forced_failure_skips(model, forced, estimated),
+        reason
+      )
+    else
+      selected_models = selected_models(selected, if(selected, do: [selected], else: []))
 
-    decision(selected, %{
-      route_type: "policy_override",
-      route_id: "policy.forced_model",
-      combine_strategy: "policy_forced_model",
-      selected_models: selected_models,
-      fallback_models: [],
-      skipped: skipped,
-      fallback_used: false,
-      reason: reason,
-      rule: "apply policy route override before provider selection"
-    })
+      decision(selected, %{
+        route_type: "policy_override",
+        route_id: "policy.forced_model",
+        combine_strategy: "policy_forced_model",
+        selected_models: selected_models,
+        fallback_models: [],
+        skipped: skipped,
+        fallback_used: false,
+        reason: reason,
+        rule: "apply policy route override before provider selection"
+      })
+    end
   end
+
+  defp select_forced_fallback(config, targets, estimated, attrs, forced_skipped, forced_reason) do
+    fallback =
+      config
+      |> root_selector()
+      |> select_selector(config, targets, estimated, Map.delete(attrs, "forced_model"))
+
+    fallback
+    |> Map.put(:route_type, "policy_override_fallback")
+    |> Map.put(:route_id, "policy.forced_model")
+    |> Map.put(:combine_strategy, "policy_forced_model_with_explicit_fallback")
+    |> Map.put(:fallback_used, true)
+    |> Map.put(:skipped, forced_skipped ++ Map.get(fallback, :skipped, []))
+    |> Map.put(:reason, "#{forced_reason}; explicit policy fallback allowed")
+    |> Map.put(:rule, "apply policy route override, then fall back only when allowed")
+  end
+
+  defp forced_failure_skips(model, nil, _estimated) do
+    [%{"target" => model, "reason" => "forced_model_unavailable"}]
+  end
+
+  defp forced_failure_skips(_model, forced, estimated), do: [context_skip(forced, estimated)]
 
   defp select_cascade(cascade, targets, estimated) do
     {eligible, skipped} =
@@ -385,9 +418,10 @@ defmodule Wardwright.RoutePlanner do
   defp route_constraints(attrs) do
     %{
       "allowed_targets" => Map.get(attrs, "allowed_targets"),
-      "forced_model" => Map.get(attrs, "forced_model")
+      "forced_model" => Map.get(attrs, "forced_model"),
+      "allow_fallback" => Map.get(attrs, "allow_fallback")
     }
-    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", [], false] end)
     |> Map.new()
   end
 

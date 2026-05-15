@@ -561,7 +561,7 @@ defmodule WardwrightTest do
     conn =
       call(:post, "/v1/chat/completions", %{
         model: "unit-model",
-        messages: [%{role: "user", content: "hard proof"}]
+        messages: [%{role: "user", content: "hard proof " <> String.duplicate("x", 60)}]
       })
 
     assert conn.status == 429
@@ -574,6 +574,60 @@ defmodule WardwrightTest do
 
     assert get_in(receipt, ["decision", "reason"]) ==
              "policy forced model was not in the allowed route set"
+  end
+
+  test "route override only falls back when explicitly allowed" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "missing-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "hard proof",
+          "target_model" => "missing/model",
+          "allow_fallback" => true
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hard proof " <> String.duplicate("x", 60)}]
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "completed"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert get_in(receipt, ["decision", "route_type"]) == "policy_override_fallback"
+    assert get_in(receipt, ["decision", "fallback_used"]) == true
+    assert get_in(receipt, ["decision", "route_blocked"]) == false
+    assert get_in(receipt, ["decision", "selected_model"]) == "medium/model"
+
+    assert get_in(receipt, ["decision", "policy_route_constraints"]) == %{
+             "forced_model" => "missing/model",
+             "allow_fallback" => true
+           }
+
+    refute Enum.any?(
+             get_in(receipt, ["decision", "skipped"]),
+             &match?(%{"target" => "medium/model", "reason" => "policy_route_gate"}, &1)
+           )
+
+    assert Enum.any?(
+             get_in(receipt, ["decision", "skipped"]),
+             &match?(%{"target" => "missing/model", "reason" => "forced_model_unavailable"}, &1)
+           )
+
+    assert Enum.any?(
+             get_in(receipt, ["decision", "skipped"]),
+             &match?(%{"target" => "tiny/model", "reason" => "context_window_too_small"}, &1)
+           )
   end
 
   test "route override fails closed when the forced model cannot fit the prompt" do

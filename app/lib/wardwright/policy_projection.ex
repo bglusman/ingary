@@ -327,7 +327,8 @@ defmodule Wardwright.PolicyProjection do
       "action" => Map.get(rule, "action", default_projected_action(rule)),
       "message" => Map.get(rule, "message", "route governance rule"),
       "allowed_targets" => Map.get(rule, "allowed_targets"),
-      "target_model" => Map.get(rule, "target_model", Map.get(rule, "model"))
+      "target_model" => Map.get(rule, "target_model", Map.get(rule, "model")),
+      "allow_fallback" => Map.get(rule, "allow_fallback")
     }
     |> Wardwright.Policy.Action.normalize(rule: rule)
   end
