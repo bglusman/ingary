@@ -60,8 +60,17 @@ model retry success or retry violation deterministically.
 The production runtime must sit behind a supervised provider boundary with
 explicit timeouts before live streaming replaces mock attempt streams.
 Non-streaming provider timeout failures surface as `provider_error` receipts.
-Streaming TTSR still needs provider-specific holdback, cancellation, and restart
-support before live provider streams can share these retry semantics.
+The current BEAM evaluator supports opt-in bounded holdback through
+`horizon_bytes` or `holdback_bytes` on stream rules. When every active stream
+rule declares a horizon, old safe bytes can be released while the most recent
+window stays available for split-boundary matching. If any active rule omits a
+horizon, the evaluator keeps the older full-buffer behavior so it does not
+pretend an unbounded rule is safe to stream past.
+
+Streaming TTSR still needs a router/runtime streaming state machine for
+provider-specific cancellation and restart while bytes are being sent to the
+client. Until that lands, live provider streams are parsed and evaluated before
+Wardwright chooses between SSE success and fail-closed JSON.
 
 ## Generated Simulation Cases
 

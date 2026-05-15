@@ -209,8 +209,19 @@ Split chunk boundaries are treated cautiously. Terminal block/retry checks and
 rewrite checks inspect the buffered stream window, so a pattern such as
 `OldClient(` is still caught if a provider emits `Old` and `Client(` in separate
 events. Non-native streaming provider fallbacks are treated as one held response
-unit rather than artificially chunked output. Mid-stream policy cancellation,
-latency budgets, and raw provider-event offsets are still future work.
+unit rather than artificially chunked output.
+
+Rules may opt into bounded horizon semantics by setting `horizon_bytes` or
+`holdback_bytes`. When every active stream rule declares a horizon, the evaluator
+can release UTF-8-safe safe prefixes while retaining the recent overlap window
+needed to detect split literal or regex matches. If any active stream rule omits
+a horizon, the evaluator keeps the older full-buffer behavior so an unbounded
+rule cannot accidentally miss a cross-chunk trigger.
+
+The current HTTP route still evaluates the provider stream before deciding
+between SSE success and fail-closed JSON. Mid-stream policy cancellation, partial
+release followed by abort/retry, latency budgets, and raw provider-event offsets
+are still future work.
 
 ## State Scopes
 

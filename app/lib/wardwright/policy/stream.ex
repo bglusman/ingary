@@ -8,22 +8,23 @@ defmodule Wardwright.Policy.Stream do
   def evaluate(chunks, rules, opts) when is_list(chunks) and is_list(rules) do
     chunks
     |> Enum.with_index()
-    |> Enum.reduce_while(initial_result(opts), fn {chunk, index}, result ->
+    |> Enum.reduce_while(initial_result(rules, opts), fn {chunk, index}, result ->
       stream_window = result.stream_buffer <> chunk
 
       case matching_rule(chunk, stream_window, rules) do
         nil ->
-          {:cont, append_generated_chunk(result, chunk, chunk)}
+          {:cont, append_unmatched_chunk(result, chunk, stream_window)}
 
         {rule, match_scope} ->
           apply_rule(result, chunk, stream_window, index, rule, match_scope)
       end
     end)
+    |> finalize_result()
   end
 
   def evaluate(chunks, _rules, opts), do: evaluate(chunks, [], opts)
 
-  defp initial_result(opts) do
+  defp initial_result(rules, opts) do
     %{
       status: "completed",
       chunks: [],
@@ -31,11 +32,13 @@ defmodule Wardwright.Policy.Stream do
       action: nil,
       events: [],
       stream_buffer: "",
+      horizon_bytes: Keyword.get(opts, :horizon_bytes) || stream_horizon_bytes(rules),
       released_to_consumer: true,
       attempt_index: Keyword.get(opts, :attempt_index, 0),
       generated_bytes: 0,
       released_bytes: 0,
       held_bytes: 0,
+      max_held_bytes: 0,
       rewritten_bytes: 0,
       blocked_bytes: 0
     }
@@ -75,38 +78,84 @@ defmodule Wardwright.Policy.Stream do
         end
 
       "drop_chunk" ->
-        {:cont, append_generated_chunk(result, chunk, nil)}
+        {:cont, append_dropped_chunk(result, chunk, stream_window)}
 
       action when action in ["block", "block_final"] ->
         {:halt,
-         %{
-           (result
-            |> add_generated_bytes(chunk))
-           | status: "stream_policy_blocked",
-             chunks: [],
-             stream_buffer: stream_window,
-             released_to_consumer: false,
-             released_bytes: 0,
-             held_bytes: byte_size(stream_window),
-             blocked_bytes: byte_size(stream_window)
-         }}
+         terminal_result(result, chunk, stream_window, "stream_policy_blocked",
+           blocked_bytes: byte_size(stream_window)
+         )}
 
       action when action in ["retry", "retry_with_reminder"] ->
-        {:halt,
-         %{
-           (result
-            |> add_generated_bytes(chunk))
-           | status: "stream_policy_retry_required",
-             chunks: [],
-             stream_buffer: stream_window,
-             released_to_consumer: false,
-             released_bytes: 0,
-             held_bytes: byte_size(stream_window)
-         }}
+        {:halt, terminal_result(result, chunk, stream_window, "stream_policy_retry_required")}
 
       _ ->
-        {:cont, append_generated_chunk(result, chunk, chunk)}
+        {:cont, append_unmatched_chunk(result, chunk, stream_window)}
     end
+  end
+
+  defp append_unmatched_chunk(%{horizon_bytes: nil} = result, generated_chunk, _stream_window),
+    do: append_generated_chunk(result, generated_chunk, generated_chunk)
+
+  defp append_unmatched_chunk(result, generated_chunk, stream_window) do
+    {released_chunk, held_window} = release_horizon_prefix(stream_window, result.horizon_bytes)
+
+    result
+    |> Map.put(:stream_buffer, held_window)
+    |> maybe_append_released_chunk(released_chunk)
+    |> add_generated_bytes(generated_chunk)
+    |> add_released_bytes(released_chunk)
+    |> update_max_held_bytes(held_window)
+  end
+
+  defp terminal_result(
+         %{horizon_bytes: nil} = result,
+         generated_chunk,
+         stream_window,
+         status,
+         opts
+       ) do
+    %{
+      (result
+       |> add_generated_bytes(generated_chunk))
+      | status: status,
+        chunks: [],
+        stream_buffer: stream_window,
+        released_to_consumer: false,
+        released_bytes: 0,
+        held_bytes: byte_size(stream_window),
+        max_held_bytes: max(result.max_held_bytes, byte_size(stream_window)),
+        blocked_bytes: Keyword.get(opts, :blocked_bytes, result.blocked_bytes)
+    }
+  end
+
+  defp terminal_result(result, generated_chunk, stream_window, status, opts) do
+    %{
+      (result
+       |> add_generated_bytes(generated_chunk))
+      | status: status,
+        stream_buffer: stream_window,
+        released_to_consumer: false,
+        held_bytes: byte_size(stream_window),
+        max_held_bytes: max(result.max_held_bytes, byte_size(stream_window)),
+        blocked_bytes: Keyword.get(opts, :blocked_bytes, result.blocked_bytes)
+    }
+  end
+
+  defp terminal_result(result, generated_chunk, stream_window, status),
+    do: terminal_result(result, generated_chunk, stream_window, status, [])
+
+  defp append_dropped_chunk(%{horizon_bytes: nil} = result, generated_chunk, stream_window) do
+    result
+    |> Map.put(:stream_buffer, stream_window)
+    |> add_generated_bytes(generated_chunk)
+    |> update_max_held_bytes(stream_window)
+  end
+
+  defp append_dropped_chunk(result, generated_chunk, _stream_window) do
+    result
+    |> add_generated_bytes(generated_chunk)
+    |> update_max_held_bytes()
   end
 
   defp append_generated_chunk(result, generated_chunk, nil),
@@ -114,6 +163,7 @@ defmodule Wardwright.Policy.Stream do
       result
       |> Map.update!(:stream_buffer, &(&1 <> generated_chunk))
       |> add_generated_bytes(generated_chunk)
+      |> update_max_held_bytes()
 
   defp append_generated_chunk(result, generated_chunk, released_chunk) do
     result
@@ -122,31 +172,86 @@ defmodule Wardwright.Policy.Stream do
     |> add_generated_bytes(generated_chunk)
     |> Map.update!(:released_bytes, &(&1 + byte_size(released_chunk)))
     |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(generated_chunk, released_chunk)))
+    |> update_max_held_bytes()
   end
 
-  defp append_rewritten_chunk(result, generated_chunk, released_chunk) do
+  defp append_rewritten_chunk(%{horizon_bytes: nil} = result, generated_chunk, released_chunk) do
     result
     |> Map.update!(:stream_buffer, &(&1 <> released_chunk))
     |> Map.update!(:chunks, &(&1 ++ [released_chunk]))
     |> add_generated_bytes(generated_chunk)
     |> Map.update!(:released_bytes, &(&1 + byte_size(released_chunk)))
     |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(generated_chunk, released_chunk)))
+    |> update_max_held_bytes()
+  end
+
+  defp append_rewritten_chunk(result, generated_chunk, released_chunk) do
+    stream_window = result.stream_buffer <> released_chunk
+    {released_prefix, held_window} = release_horizon_prefix(stream_window, result.horizon_bytes)
+
+    result
+    |> Map.put(:stream_buffer, held_window)
+    |> maybe_append_released_chunk(released_prefix)
+    |> add_generated_bytes(generated_chunk)
+    |> add_released_bytes(released_prefix)
+    |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(generated_chunk, released_chunk)))
+    |> update_max_held_bytes(held_window)
   end
 
   defp rewrite_stream_window(result, generated_chunk, stream_window, rule) do
     released_chunk = rewrite_chunk(stream_window, rule)
 
     result
+    |> put_rewritten_stream_window_chunk(released_chunk)
+    |> add_generated_bytes(generated_chunk)
+    |> Map.update!(:released_bytes, &(&1 + byte_size(released_chunk)))
+    |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(stream_window, released_chunk)))
+    |> update_max_held_bytes(stream_window)
+  end
+
+  defp put_rewritten_stream_window_chunk(%{horizon_bytes: nil} = result, released_chunk) do
+    result
     |> Map.put(:stream_buffer, released_chunk)
     |> Map.put(:chunks, [released_chunk])
-    |> add_generated_bytes(generated_chunk)
-    |> Map.put(:released_bytes, byte_size(released_chunk))
-    |> Map.update!(:rewritten_bytes, &(&1 + rewritten_bytes(stream_window, released_chunk)))
+    |> Map.put(:released_bytes, 0)
+  end
+
+  defp put_rewritten_stream_window_chunk(result, released_chunk) do
+    result
+    |> Map.put(:stream_buffer, "")
+    |> Map.update!(:chunks, &(&1 ++ [released_chunk]))
   end
 
   defp add_generated_bytes(result, generated_chunk) do
     Map.update!(result, :generated_bytes, &(&1 + byte_size(generated_chunk)))
   end
+
+  defp maybe_append_released_chunk(result, ""), do: result
+
+  defp maybe_append_released_chunk(result, released_chunk),
+    do: Map.update!(result, :chunks, &(&1 ++ [released_chunk]))
+
+  defp add_released_bytes(result, ""), do: result
+
+  defp add_released_bytes(result, released_chunk),
+    do: Map.update!(result, :released_bytes, &(&1 + byte_size(released_chunk)))
+
+  defp update_max_held_bytes(result), do: update_max_held_bytes(result, result.stream_buffer)
+
+  defp update_max_held_bytes(result, held_window) do
+    Map.update!(result, :max_held_bytes, &max(&1, byte_size(held_window)))
+  end
+
+  defp finalize_result(%{status: "completed", horizon_bytes: horizon} = result)
+       when is_integer(horizon) do
+    result
+    |> maybe_append_released_chunk(result.stream_buffer)
+    |> add_released_bytes(result.stream_buffer)
+    |> Map.put(:stream_buffer, "")
+    |> Map.put(:held_bytes, 0)
+  end
+
+  defp finalize_result(result), do: result
 
   defp event(rule, action, index, match_scope) do
     %{
@@ -222,6 +327,56 @@ defmodule Wardwright.Policy.Stream do
     if generated_chunk == released_chunk, do: 0, else: byte_size(generated_chunk)
   end
 
+  defp stream_horizon_bytes([]), do: nil
+
+  defp stream_horizon_bytes(rules) do
+    rules
+    |> Enum.reject(&(Map.get(&1, "action", "pass") == "pass"))
+    |> Enum.map(&rule_horizon_bytes/1)
+    |> case do
+      [] -> nil
+      horizons -> if Enum.all?(horizons, &is_integer/1), do: Enum.max(horizons), else: nil
+    end
+  end
+
+  defp rule_horizon_bytes(rule) do
+    rule
+    |> Map.get("horizon_bytes")
+    |> case do
+      nil -> Map.get(rule, "holdback_bytes")
+      value -> value
+    end
+    |> non_negative_integer()
+  end
+
+  defp release_horizon_prefix(stream_window, horizon_bytes)
+       when is_integer(horizon_bytes) and horizon_bytes >= 0 do
+    release_budget = max(byte_size(stream_window) - horizon_bytes, 0)
+    split_prefix_at_byte_limit(stream_window, release_budget)
+  end
+
+  defp release_horizon_prefix(stream_window, _horizon_bytes), do: {"", stream_window}
+
+  defp split_prefix_at_byte_limit(text, byte_limit) when byte_limit <= 0, do: {"", text}
+
+  defp split_prefix_at_byte_limit(text, byte_limit) do
+    graphemes = String.graphemes(text)
+
+    {count, _bytes} =
+      Enum.reduce_while(graphemes, {0, 0}, fn grapheme, {count, bytes} ->
+        next_bytes = bytes + byte_size(grapheme)
+
+        if next_bytes <= byte_limit do
+          {:cont, {count + 1, next_bytes}}
+        else
+          {:halt, {count, bytes}}
+        end
+      end)
+
+    {prefix, suffix} = Enum.split(graphemes, count)
+    {Enum.join(prefix), Enum.join(suffix)}
+  end
+
   defp integer_value(value) when is_integer(value), do: value
 
   defp integer_value(value) when is_binary(value) do
@@ -232,4 +387,11 @@ defmodule Wardwright.Policy.Stream do
   end
 
   defp integer_value(_value), do: nil
+
+  defp non_negative_integer(value) do
+    case integer_value(value) do
+      integer when is_integer(integer) and integer >= 0 -> integer
+      _ -> nil
+    end
+  end
 end

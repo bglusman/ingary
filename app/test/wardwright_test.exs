@@ -1583,6 +1583,124 @@ defmodule WardwrightTest do
            ] = stream_policy["attempts"]
   end
 
+  test "stream policy bounded horizon releases old safe bytes while retaining split triggers" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["safe prefix that can release ", "Old", "Client(arg) now"],
+        [
+          %{
+            "id" => "bounded-deprecated-client",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+    assert result.released_bytes > 0
+    assert result.held_bytes > byte_size("OldClient(")
+    assert result.blocked_bytes == result.held_bytes
+
+    released = Enum.join(result.chunks)
+    assert released != ""
+    refute released =~ "Old"
+    refute released =~ "Client("
+
+    assert [
+             %{
+               "rule_id" => "bounded-deprecated-client",
+               "action" => "block",
+               "match_scope" => "stream_window"
+             }
+           ] = result.events
+  end
+
+  test "stream policy bounded horizon releases remaining held bytes on completion" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["alpha ", "beta ", "gamma"],
+        [
+          %{
+            "id" => "never-matches",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "alpha beta gamma"
+    assert result.generated_bytes == byte_size("alpha beta gamma")
+    assert result.released_bytes == result.generated_bytes
+    assert result.held_bytes == 0
+    assert result.stream_buffer == ""
+    assert result.max_held_bytes <= byte_size("OldClient(")
+  end
+
+  test "stream policy bounded horizon never splits utf8 codepoints" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["ééé", "abc"],
+        [
+          %{
+            "id" => "unicode-near-miss",
+            "contains" => "missing",
+            "action" => "block",
+            "horizon_bytes" => 3
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "éééabc"
+    assert Enum.all?(result.chunks, &String.valid?/1)
+    assert result.released_bytes == byte_size("éééabc")
+  end
+
+  test "stream policy bounded horizon rewrites without duplicating held prefixes" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["abc ", "OldClient(", " done"],
+        [
+          %{
+            "id" => "bounded-rewrite",
+            "contains" => "OldClient(",
+            "action" => "rewrite_chunk",
+            "replacement" => "NewClient(",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "abc NewClient( done"
+    refute Enum.join(result.chunks) =~ "OldClient("
+    assert result.rewritten_bytes > 0
+  end
+
+  test "stream policy bounded horizon never flushes dropped chunks at completion" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["keep ", "DROP", " done"],
+        [
+          %{
+            "id" => "bounded-drop",
+            "contains" => "DROP",
+            "action" => "drop_chunk",
+            "horizon_bytes" => 5
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "keep  done"
+    refute Enum.join(result.chunks) =~ "DROP"
+    assert result.generated_bytes == byte_size("keep DROP done")
+    assert result.released_bytes == byte_size("keep  done")
+  end
+
   test "stream policy retry_with_reminder restarts generation before release" do
     config =
       unit_policy_config()
