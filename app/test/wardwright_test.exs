@@ -1650,6 +1650,45 @@ defmodule WardwrightTest do
     assert result.max_held_bytes <= byte_size("OldClient(")
   end
 
+  test "stream policy latency budget fails closed when held bytes age past budget" do
+    state =
+      Wardwright.Policy.Stream.start(
+        [
+          %{
+            "id" => "latency-budget",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient("),
+            "max_hold_ms" => 5
+          }
+        ],
+        now_ms: 100
+      )
+
+    {:cont, state, []} = Wardwright.Policy.Stream.consume(state, "held", now_ms: 100)
+    {:halt, state, []} = Wardwright.Policy.Stream.consume(state, " later", now_ms: 106)
+
+    assert state.status == "stream_policy_latency_exceeded"
+    assert state.action == "fail_closed"
+    assert state.released_to_consumer == false
+    assert state.released_bytes == 0
+    assert state.max_hold_ms == 5
+    assert state.max_observed_hold_ms == 6
+    assert state.held_bytes == byte_size("held later")
+    held_bytes = byte_size("held")
+
+    assert [
+             %{
+               "type" => "stream_policy.latency_exceeded",
+               "action" => "fail_closed",
+               "chunk_index" => 1,
+               "max_hold_ms" => 5,
+               "observed_hold_ms" => 6,
+               "held_bytes" => ^held_bytes
+             }
+           ] = state.events
+  end
+
   test "stream policy bounded horizon never splits utf8 codepoints" do
     result =
       Wardwright.Policy.Stream.evaluate(
@@ -2255,6 +2294,71 @@ defmodule WardwrightTest do
            ] = stream_policy["attempts"]
 
     assert provider_error =~ "provider timed out after 1ms"
+  end
+
+  test "stream latency budget fails closed before releasing over-held provider bytes" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "slow-hold/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["held", " later"],
+          "canned_delay_ms" => 15,
+          "provider_timeout_ms" => 1_000
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "slow-held-window",
+          "contains" => "OldClient(",
+          "action" => "block",
+          "horizon_bytes" => byte_size("OldClient("),
+          "max_hold_ms" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 422
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+    refute conn.resp_body =~ "data:"
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_latency_exceeded"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["status"] == "stream_policy_latency_exceeded"
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] == 0
+    assert stream_policy["max_hold_ms"] == 1
+    assert stream_policy["max_observed_hold_ms"] >= 1
+
+    assert [
+             %{
+               "status" => "stream_policy_latency_exceeded",
+               "provider_status" => "cancelled",
+               "released_to_consumer" => false,
+               "max_hold_ms" => 1
+             }
+           ] = stream_policy["attempts"]
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "stream_policy.latency_exceeded" and
+               event["max_hold_ms"] == 1 and
+               event["observed_hold_ms"] >= 1
+           end)
   end
 
   test "ollama stream targets use provider HTTP chunks for stream policy decisions" do
