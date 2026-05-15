@@ -57,6 +57,12 @@ The pure simulator does not call providers and does not produce replacement
 text. It consumes caller-provided attempt streams so UI and property tests can
 model retry success or retry violation deterministically.
 
+The production runtime must sit behind a supervised provider boundary with
+explicit timeouts before live streaming replaces mock attempt streams.
+Non-streaming provider timeout failures surface as `provider_error` receipts.
+Streaming TTSR still needs provider-specific holdback, cancellation, and restart
+support before live provider streams can share these retry semantics.
+
 ## Generated Simulation Cases
 
 Shared property probes must cover at least:

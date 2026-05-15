@@ -280,39 +280,36 @@ defmodule Wardwright do
         provider_outcome(nil, "completed", started, nil, false, true)
 
       target ->
-        case provider_kind(target) do
-          "mock" ->
-            provider_outcome(nil, "completed", started, nil, false, true)
+        Wardwright.ProviderRuntime.complete(target, request, fn ->
+          complete_target(target, request)
+        end)
+        |> provider_outcome_from_result(started)
+    end
+  end
 
-          "ollama" ->
-            target
-            |> complete_with_ollama(request)
-            |> provider_outcome_from_result(started)
+  defp complete_target(target, request) do
+    case provider_kind(target) do
+      "mock" ->
+        {:mock, nil}
 
-          "openai-compatible" ->
-            target
-            |> complete_with_openai_compatible(request)
-            |> provider_outcome_from_result(started)
+      "ollama" ->
+        complete_with_ollama(target, request)
 
-          "canned_sequence" ->
-            target
-            |> complete_with_canned_sequence(request)
-            |> provider_outcome_from_result(started)
+      "openai-compatible" ->
+        complete_with_openai_compatible(target, request)
 
-          kind ->
-            provider_outcome(
-              nil,
-              "provider_error",
-              started,
-              "unsupported provider kind #{inspect(kind)}",
-              true,
-              false
-            )
-        end
+      "canned_sequence" ->
+        complete_with_canned_sequence(target, request)
+
+      kind ->
+        {:error, "unsupported provider kind #{inspect(kind)}"}
     end
   end
 
   defp complete_with_canned_sequence(target, request) do
+    delay_ms = non_negative_integer(Map.get(target, "canned_delay_ms"), 0)
+    if delay_ms > 0, do: Process.sleep(delay_ms)
+
     outputs = Map.get(target, "canned_outputs", [])
     attempt_index = request |> Map.get("wardwright_attempt_index", 0) |> integer_value() || 0
 
@@ -351,7 +348,10 @@ defmodule Wardwright do
               target |> Map.get("credential_env", "") |> to_string() |> String.trim(),
             "credential_fnox_key" =>
               target |> Map.get("credential_fnox_key", "") |> to_string() |> String.trim(),
-            "canned_outputs" => normalize_canned_outputs(Map.get(target, "canned_outputs", []))
+            "canned_outputs" => normalize_canned_outputs(Map.get(target, "canned_outputs", [])),
+            "canned_delay_ms" => non_negative_integer(Map.get(target, "canned_delay_ms"), 0),
+            "provider_timeout_ms" =>
+              positive_integer(Map.get(target, "provider_timeout_ms"), 180_000)
           }
           |> Enum.reject(fn {_key, value} -> value == "" or value == [] end)
           |> Map.new()
@@ -674,6 +674,10 @@ defmodule Wardwright do
 
   defp provider_outcome_from_result({:ok, content}, started) do
     provider_outcome(content, "completed", started, nil, true, false)
+  end
+
+  defp provider_outcome_from_result({:mock, content}, started) do
+    provider_outcome(content, "completed", started, nil, false, true)
   end
 
   defp provider_outcome_from_result({:error, reason}, started) do

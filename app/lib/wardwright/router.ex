@@ -701,6 +701,7 @@ defmodule Wardwright.Router do
         "receipt_id" => receipt["receipt_id"],
         "selected_model" => decision.selected_model,
         "status" => get_in(receipt, ["final", "status"]),
+        "provider_error" => get_in(receipt, ["final", "provider_error"]),
         "structured_output" => get_in(receipt, ["final", "structured_output"]),
         "stream_policy" => get_in(receipt, ["final", "stream_policy"]),
         "alert_delivery" => get_in(receipt, ["final", "alert_delivery"])

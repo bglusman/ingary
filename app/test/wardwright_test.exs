@@ -822,6 +822,56 @@ defmodule WardwrightTest do
            ] = get_in(receipt, ["decision", "policy_actions"])
   end
 
+  test "provider runtime enforces target timeouts and publishes attempt visibility" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "slow/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_outputs" => ["late answer"],
+          "canned_delay_ms" => 25,
+          "provider_timeout_ms" => 1
+        }
+      ])
+      |> Map.put("governance", [])
+
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:models))
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hello"}]
+      })
+
+    assert conn.status == 502
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "provider_error"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "provider timed out after 1ms"
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+    assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == true
+    assert get_in(receipt, ["attempts", Access.at(0), "mock"]) == false
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.started",
+                      "provider_id" => "slow",
+                      "model" => "slow/model",
+                      "timeout_ms" => 1
+                    }}
+
+    assert_receive {:wardwright_runtime_event, "runtime:models",
+                    %{
+                      "type" => "provider.attempt.finished",
+                      "provider_id" => "slow",
+                      "model" => "slow/model",
+                      "status" => "provider_error"
+                    }}
+  end
+
   test "structured output guard retries canned provider outputs and records guard receipts" do
     config =
       structured_policy_config(
