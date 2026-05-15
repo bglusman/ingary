@@ -238,6 +238,26 @@ def assert_storage_health(result: ProbeResult) -> None:
     expect(isinstance(body.get("capabilities"), dict), "storage capabilities must be object")
 
 
+def assert_runtime_status(result: ProbeResult) -> None:
+    expect(result.status == 200, f"runtime status {result.status}")
+    body = result.body
+    models = body.get("models")
+    sessions = body.get("sessions")
+    expect(isinstance(models, list), "runtime models must be list")
+    expect(isinstance(sessions, list), "runtime sessions must be list")
+
+    for model in models:
+        expect(isinstance(model.get("model_id"), str) and model["model_id"], "runtime model_id must be string")
+        expect(isinstance(model.get("version"), str) and model["version"], "runtime model version must be string")
+        expect(isinstance(model.get("started_at"), int), "runtime model started_at must be integer")
+
+    for session in sessions:
+        expect(isinstance(session.get("model_id"), str) and session["model_id"], "runtime session model_id must be string")
+        expect(isinstance(session.get("version"), str) and session["version"], "runtime session version must be string")
+        expect(isinstance(session.get("session_id"), str) and session["session_id"], "runtime session_id must be string")
+        expect(isinstance(session.get("event_count"), int), "runtime session event_count must be integer")
+
+
 def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
     rng = random.Random(seed)
     latencies: dict[str, list[float]] = {
@@ -304,6 +324,11 @@ def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
         assert_storage_health(record("admin", request_json(base_url, "GET", "/admin/storage")))
     except Exception as exc:  # noqa: BLE001
         failures.append(f"/admin/storage: {exc}")
+
+    try:
+        assert_runtime_status(record("admin", request_json(base_url, "GET", "/admin/runtime")))
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"/admin/runtime: {exc}")
 
     print(f"base_url={base_url} seed={seed} fuzz_runs={fuzz_runs} receipts={len(receipt_ids)}")
     for kind, values in latencies.items():

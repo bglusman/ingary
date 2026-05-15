@@ -15,6 +15,9 @@ defmodule ElixirIngary.Application do
         ElixirIngary.ReceiptStore,
         ElixirIngary.PolicyCache,
         {Phoenix.PubSub, name: ElixirIngary.PubSub},
+        {Registry, keys: :unique, name: ElixirIngary.Runtime.Registry},
+        {DynamicSupervisor, strategy: :one_for_one, name: ElixirIngary.Runtime.ModelSupervisor},
+        {DynamicSupervisor, strategy: :one_for_one, name: ElixirIngary.Runtime.SessionSupervisor},
         endpoint_child(host, port)
       ]
       |> Enum.reject(&is_nil/1)

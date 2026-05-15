@@ -217,6 +217,17 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/StorageHealth"
+  /admin/runtime:
+    get:
+      tags: [Admin]
+      summary: Get supervised model and session runtime visibility state
+      responses:
+        "200":
+          description: Runtime model/session status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RuntimeStatus"
   /admin/synthetic-models:
     get:
       tags: [Admin]
@@ -607,6 +618,39 @@ components:
         read_health: { type: string }
         write_health: { type: string }
         capabilities:
+          type: object
+          additionalProperties: true
+    RuntimeStatus:
+      type: object
+      required: [models, sessions]
+      properties:
+        models:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuntimeModelStatus"
+        sessions:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuntimeSessionStatus"
+    RuntimeModelStatus:
+      type: object
+      required: [model_id, version, pid, started_at]
+      properties:
+        model_id: { type: string }
+        version: { type: string }
+        pid: { type: string }
+        started_at: { type: integer }
+    RuntimeSessionStatus:
+      type: object
+      required: [model_id, version, session_id, pid, started_at, event_count]
+      properties:
+        model_id: { type: string }
+        version: { type: string }
+        session_id: { type: string }
+        pid: { type: string }
+        started_at: { type: integer }
+        event_count: { type: integer }
+        last_event:
           type: object
           additionalProperties: true
     ErrorResponse:

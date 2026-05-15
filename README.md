@@ -44,6 +44,7 @@ The probe checks the common OpenAI-compatible and Wardwright-specific surface:
 - `GET /v1/receipts/{receipt_id}`
 - `GET /admin/providers`
 - `GET /admin/storage`
+- `GET /admin/runtime`
 - `GET /admin/synthetic-models`
 - flat and `ingary/` model namespace variants
 - caller provenance and receipt fields

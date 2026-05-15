@@ -49,6 +49,12 @@ defmodule ElixirIngary.Router do
       {request, policy} = apply_request_policies(request, caller)
       decision = route_decision(request)
 
+      record_runtime_event(model, caller, "route.selected", %{
+        "selected_model" => decision.selected_model,
+        "selected_provider" => decision.selected_provider,
+        "estimated_prompt_tokens" => decision.estimated_prompt_tokens
+      })
+
       provider =
         if Map.get(request, "stream") == true do
           %{
@@ -69,6 +75,13 @@ defmodule ElixirIngary.Router do
         |> apply_provider_outcome(provider)
 
       ElixirIngary.ReceiptStore.insert(receipt)
+
+      record_runtime_event(model, caller, "receipt.finalized", %{
+        "receipt_id" => receipt["receipt_id"],
+        "status" => get_in(receipt, ["final", "status"]),
+        "simulation" => false,
+        "alert_count" => get_in(receipt, ["final", "alert_count"]) || 0
+      })
 
       conn =
         conn
@@ -95,8 +108,23 @@ defmodule ElixirIngary.Router do
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       {request, policy} = apply_request_policies(request, caller)
       decision = route_decision(request)
+
+      record_runtime_event(model, caller, "simulation.route_selected", %{
+        "selected_model" => decision.selected_model,
+        "selected_provider" => decision.selected_provider,
+        "estimated_prompt_tokens" => decision.estimated_prompt_tokens
+      })
+
       receipt = build_receipt("simulated", model, caller, request, decision, false, policy)
       ElixirIngary.ReceiptStore.insert(receipt)
+
+      record_runtime_event(model, caller, "receipt.finalized", %{
+        "receipt_id" => receipt["receipt_id"],
+        "status" => get_in(receipt, ["final", "status"]),
+        "simulation" => true,
+        "alert_count" => get_in(receipt, ["final", "alert_count"]) || 0
+      })
+
       json(conn, 200, %{"receipt" => receipt})
     else
       {:error, message} -> error(conn, 400, message, "invalid_request", "bad_request")
@@ -141,6 +169,10 @@ defmodule ElixirIngary.Router do
 
   get "/admin/storage" do
     json(conn, 200, ElixirIngary.ReceiptStore.health())
+  end
+
+  get "/admin/runtime" do
+    json(conn, 200, ElixirIngary.Runtime.status())
   end
 
   post "/v1/policy-cache/events" do
@@ -434,6 +466,23 @@ defmodule ElixirIngary.Router do
   end
 
   defp caller_context(conn, _metadata), do: caller_context(conn, %{})
+
+  defp session_id(caller), do: get_in(caller, ["session_id", "value"])
+
+  defp record_runtime_event(model, caller, type, fields) do
+    version = ElixirIngary.current_config()["version"]
+
+    case ElixirIngary.Runtime.record_session_event(
+           model,
+           version,
+           session_id(caller),
+           type,
+           fields
+         ) do
+      {:ok, _event} -> :ok
+      _ -> :ok
+    end
+  end
 
   defp header_or_metadata(conn, metadata, header_name, metadata_key) do
     case conn |> get_req_header(header_name) |> List.first() |> blank_to_nil() do

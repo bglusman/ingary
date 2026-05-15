@@ -15,6 +15,18 @@ defmodule ElixirIngary.ReceiptStore do
       put_in(state, [:receipts, receipt["receipt_id"]], receipt)
     end)
 
+    ElixirIngary.Runtime.Events.publish(ElixirIngary.Runtime.Events.topic(:receipts), %{
+      "type" => "receipt.stored",
+      "receipt_id" => receipt["receipt_id"],
+      "synthetic_model" => receipt["synthetic_model"],
+      "synthetic_version" => receipt["synthetic_version"],
+      "session_id" => sourced_value(receipt, ["caller", "session_id"]),
+      "run_id" => sourced_value(receipt, ["caller", "run_id"]) || receipt["run_id"],
+      "status" => get_in(receipt, ["final", "status"]),
+      "simulation" => receipt["simulation"] || false,
+      "created_at" => receipt["created_at"]
+    })
+
     receipt
   end
 

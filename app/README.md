@@ -45,15 +45,16 @@ mix test
 - `GET /v1/receipts/{id}`
 - `GET /admin/providers`
 - `GET /admin/storage`
+- `GET /admin/runtime`
 - `GET /admin/synthetic-models`
 
 The public synthetic model is available as both `coding-balanced` and
 `ingary/coding-balanced`. Requests are routed by a simple prompt-length
 estimate: prompts at or below 32,768 estimated tokens select
 `local/qwen-coder`; larger prompts select `managed/kimi-k2.6`. Chat and
-simulation calls write in-memory receipts. Caller context is extracted from
-`X-Ingary-*` and `X-Client-Request-Id` headers first, then from request
-`metadata`.
+simulation calls write in-memory receipts and publish runtime visibility events
+through Phoenix PubSub. Caller context is extracted from `X-Ingary-*` and
+`X-Client-Request-Id` headers first, then from request `metadata`.
 
 ## BEAM Direction
 

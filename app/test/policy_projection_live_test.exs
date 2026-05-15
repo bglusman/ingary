@@ -83,4 +83,26 @@ defmodule ElixirIngary.PolicyProjectionLiveTest do
     assert matrix_html =~ "Effect matrix"
     assert matrix_html =~ "route.allowed_targets"
   end
+
+  test "LiveView workbench updates from runtime PubSub visibility events" do
+    {:ok, view, html} = live(build_conn(), "/policies/route-privacy/phase_map")
+
+    assert html =~ "Runtime Visibility"
+    refute html =~ "route.selected"
+
+    assert {:ok, %{"type" => "route.selected"}} =
+             ElixirIngary.Runtime.record_session_event(
+               "coding-balanced",
+               "2026-05-13.mock",
+               "liveview-session",
+               "route.selected",
+               %{"selected_model" => "mock/liveview"}
+             )
+
+    updated = render(view)
+
+    assert updated =~ "route.selected"
+    assert updated =~ "liveview-session"
+    assert updated =~ "mock/liveview"
+  end
 end

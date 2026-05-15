@@ -7,6 +7,11 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
 
   @impl true
   def mount(params, _session, socket) do
+    if connected?(socket) do
+      ElixirIngary.Runtime.Events.subscribe(ElixirIngary.Runtime.Events.topic(:models))
+      ElixirIngary.Runtime.Events.subscribe(ElixirIngary.Runtime.Events.topic(:receipts))
+    end
+
     {:ok, assign_projection(socket, params)}
   end
 
@@ -33,6 +38,19 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
     |> assign(:simulations, simulations)
     |> assign(:selected_simulation, List.first(simulations))
     |> assign(:selected_node, selected_node)
+    |> assign_new(:runtime_status, fn -> ElixirIngary.Runtime.status() end)
+    |> assign_new(:runtime_events, fn -> [] end)
+  end
+
+  @impl true
+  def handle_info({:ingary_runtime_event, topic, event}, socket) do
+    event = Map.put(event, "topic", topic)
+    events = [event | socket.assigns.runtime_events] |> Enum.take(8)
+
+    {:noreply,
+     socket
+     |> assign(:runtime_events, events)
+     |> assign(:runtime_status, ElixirIngary.Runtime.status())}
   end
 
   @impl true
@@ -42,7 +60,7 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
       <div class="brand">
         <span class="mark">IG</span>
         <div>
-          <strong>Ingary</strong>
+          <strong>Wardwright</strong>
           <span>Policy projection workbench</span>
         </div>
       </div>
@@ -110,6 +128,34 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
       </section>
 
       <section class="split">
+        <div class="panel">
+          <div class="panel_header">
+            <div>
+              <h2>Runtime Visibility</h2>
+              <p>Live PubSub projection of model and session runtime activity.</p>
+            </div>
+            <.badge value={"#{length(@runtime_status["sessions"])} sessions"} />
+          </div>
+
+          <dl class="kv">
+            <dt>Models</dt>
+            <dd><%= length(@runtime_status["models"]) %></dd>
+            <dt>Sessions</dt>
+            <dd><%= length(@runtime_status["sessions"]) %></dd>
+            <dt>Last Event</dt>
+            <dd><%= runtime_event_label(List.first(@runtime_events)) %></dd>
+          </dl>
+
+          <div class="timeline compact">
+            <article :for={event <- @runtime_events} class="trace_event info">
+              <span><%= event["topic"] %></span>
+              <strong><%= event["type"] %></strong>
+              <.badge value={"seq #{event["sequence"] || "-"}"} />
+              <small><%= runtime_event_detail(event) %></small>
+            </article>
+          </div>
+        </div>
+
         <div class="panel">
           <div class="panel_header">
             <div>
@@ -370,6 +416,20 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
     |> List.first()
     |> Map.get("nodes", [])
     |> List.first()
+  end
+
+  defp runtime_event_label(nil), do: "No runtime events observed"
+  defp runtime_event_label(event), do: event["type"]
+
+  defp runtime_event_detail(event) do
+    [
+      event["model_id"],
+      event["session_id"],
+      event["receipt_id"],
+      event["selected_model"]
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" / ")
   end
 
   defp normalize_pattern(nil), do: "tts-retry"
