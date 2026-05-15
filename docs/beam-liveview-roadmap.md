@@ -142,4 +142,5 @@ The first goal is a dense operational workbench, not a marketing dashboard.
    Dune should be evaluated separately from Gleam. Gleam is a typed core
    language; Dune is an Elixir sandbox candidate. Compare Dune with Starlark on
    sandbox strength, timeout/reduction limits, source review, visualization,
-   ergonomics, and sidecar/NIF/backpressure tradeoffs.
+   ergonomics, and sidecar/NIF/backpressure tradeoffs. Track executable
+   findings in [Sandbox Language Evaluation](sandbox-language-evaluation.html).
