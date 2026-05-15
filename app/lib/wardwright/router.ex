@@ -79,12 +79,14 @@ defmodule Wardwright.Router do
         |> put_resp_header("x-wardwright-receipt-id", receipt["receipt_id"])
         |> put_resp_header("x-wardwright-selected-model", decision.selected_model)
 
-      if Map.get(request, "stream") == true do
+      status = response_status(receipt)
+
+      if Map.get(request, "stream") == true and status == 200 do
         stream_chat(conn, request, decision)
       else
         json(
           conn,
-          response_status(receipt),
+          status,
           chat_response(request, receipt, decision, provider.content)
         )
       end
@@ -103,7 +105,7 @@ defmodule Wardwright.Router do
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       Wardwright.Policy.History.record_request(caller, request)
       {request, policy} = apply_request_policies(request, caller)
-      {policy, _fail_closed?} = deliver_policy_alerts(policy)
+      {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request)
 
       record_runtime_event(model, caller, "simulation.route_selected", %{
@@ -112,7 +114,8 @@ defmodule Wardwright.Router do
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens
       })
 
-      receipt = build_receipt("simulated", model, caller, request, decision, false, policy)
+      status = if fail_closed?, do: "policy_failed_closed", else: "simulated"
+      receipt = build_receipt(status, model, caller, request, decision, false, policy)
       Wardwright.ReceiptStore.insert(receipt)
 
       record_runtime_event(model, caller, "receipt.finalized", %{
@@ -394,14 +397,15 @@ defmodule Wardwright.Router do
 
       policy = Map.update!(policy, "actions", &[action_record | &1])
 
-      if action == "escalate" do
+      if action in ["escalate", "alert_async"] do
         event = %{
           "type" => "policy.alert",
           "rule_id" => rule_id,
           "message" => message,
           "severity" => severity,
           "history_count" => count,
-          "threshold" => threshold
+          "threshold" => threshold,
+          "idempotency_key" => Map.get(rule, "idempotency_key")
         }
 
         {request,

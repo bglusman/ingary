@@ -452,6 +452,50 @@ defmodule WardwrightTest do
     assert [%{"outcome" => "failed_closed"}] = get_in(body, ["wardwright", "alert_delivery"])
   end
 
+  test "alert fail-closed blocks streaming and simulation paths consistently" do
+    config =
+      unit_policy_config()
+      |> Map.put("alert_delivery", %{"capacity" => 0, "on_full" => "fail_closed"})
+      |> Map.put("governance", [
+        %{
+          "id" => "stream-alert",
+          "kind" => "request_guard",
+          "action" => "alert_async",
+          "contains" => "alert me"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    stream =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "alert me"}]
+      })
+
+    assert stream.status == 429
+    assert get_resp_header(stream, "content-type") == ["application/json; charset=utf-8"]
+
+    assert get_in(Jason.decode!(stream.resp_body), ["wardwright", "status"]) ==
+             "policy_failed_closed"
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    simulated =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "alert me"}]
+        }
+      })
+
+    assert simulated.status == 200
+
+    assert get_in(Jason.decode!(simulated.resp_body), ["receipt", "final", "status"]) ==
+             "policy_failed_closed"
+  end
+
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
     assert %{"engine" => "wasm", "action" => "block", "status" => "error"} =
              Wardwright.Policy.Engine.evaluate(%{"engine" => "wasm"}, %{})
