@@ -17,18 +17,6 @@ ok() { echo -e "${GREEN}✓${NC} $*"; }
 
 staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
 
-if echo "$staged_files" | grep -qE '^backends/rust-ingary/|Cargo\.(toml|lock)$'; then
-  note "rust fmt/test..."
-  (cd backends/rust-ingary && cargo fmt --check && cargo test) || fail "Rust checks failed"
-  ok "Rust checks clean"
-fi
-
-if echo "$staged_files" | grep -qE '^backends/go-ingary/'; then
-  note "go test..."
-  (cd backends/go-ingary && go test -count=1 ./...) || fail "Go checks failed"
-  ok "Go checks clean"
-fi
-
 if echo "$staged_files" | grep -qE '^backends/elixir-ingary/'; then
   note "elixir format/test..."
   (cd backends/elixir-ingary && mix format --check-formatted && mix test) || fail "Elixir checks failed"

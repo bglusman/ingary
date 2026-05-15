@@ -55,30 +55,28 @@ simulation calls write in-memory receipts. Caller context is extracted from
 `X-Ingary-*` and `X-Client-Request-Id` headers first, then from request
 `metadata`.
 
-## Elixir Fit Critique
+## BEAM Direction
 
-Elixir is a strong fit for this platform's runtime shape. BEAM processes map
+Elixir is the active backend direction for this platform. BEAM processes map
 well to request-scoped route planning, provider attempts, receipt writing, and
 stream policy governors. Supervision trees make provider adapter lifecycles,
 health workers, rate-limit state, and circuit breakers explicit instead of
 incidental. Streaming is also a real advantage: Cowboy/Plug can chunk SSE
 today, and a fuller implementation could use GenStage/Broadway or plain
 process mailboxes to model backpressure between provider streams, policy
-inspection, and client release.
+inspection, and client release. Phoenix LiveView now owns the first-party
+policy projection workbench.
 
-The tradeoff is packaging and ecosystem fit. Rust or Go produce simpler static
-binaries for edge nodes and self-hosted operators who want one artifact. Elixir
-releases are mature, but OTP distribution, runtime tuning, and container image
-discipline become part of the product. Provider SDK coverage is also less
-uniform than JavaScript, Python, Go, or Rust, so a serious Elixir backend should
-prefer normalized HTTP adapters over vendor SDK dependence.
+The tradeoff is packaging and ecosystem fit. Elixir releases are mature, but OTP
+distribution, runtime tuning, and container image discipline become part of the
+product. Provider SDK coverage is also less uniform than JavaScript or Python,
+so this backend should prefer normalized HTTP adapters over vendor SDK
+dependence.
 
-Policy VM choices should stay open. Elixir can embed policy as native modules,
-run external WASM through a NIF/port boundary, call out to OPA/Rego, evaluate
-CEL through a service or port, or host a small DSL compiled to Erlang terms.
-Starlark is one option only if its operational and sandboxing story wins; the
-platform should not assume it as the policy substrate.
+Policy execution is split by trust tier. Local/operator-authored policy can use
+structured primitives and Dune-backed BEAM snippets with timeout, reduction, and
+memory caps. Externally shared or untrusted policy should target a stronger
+portable boundary such as WASM, a sidecar, or a hosted policy service.
 
-Recommendation: Elixir is worth a serious backend spike for stream governance,
-receipts, and adapter supervision. It is less compelling if the primary product
-constraint is a tiny single-binary install footprint.
+The old Go and Rust backend prototypes remain in git history as bakeoff
+evidence, but they are no longer part of the live tree.

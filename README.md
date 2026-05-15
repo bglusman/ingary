@@ -8,9 +8,11 @@ The core idea: clients call stable model names such as `coding-balanced` or
 provider selection, context-window fit checks, fallback policy, stream
 governance, caller traceability, and receipts explaining every decision.
 
-This repository is intentionally prototype-heavy right now. The goal is to pick
-a production foundation using a shared HTTP contract and measurable behavior
-rather than choosing a language from preference alone.
+This repository used to keep multiple backend prototypes alive while Ingary
+selected a production foundation through shared contracts and measurable
+behavior. The active implementation direction is now BEAM-first: Elixir owns
+runtime plumbing and LiveView, while Gleam is the preferred home for
+correctness-heavy pure policy logic when the boundary is stable enough.
 
 ## Current Contents
 
@@ -18,9 +20,7 @@ rather than choosing a language from preference alone.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
-- `backends/rust-ingary` - clean Rust backend prototype.
-- `backends/go-ingary` - clean Go backend prototype.
-- `backends/elixir-ingary` - clean Elixir backend prototype.
+- `backends/elixir-ingary` - active Elixir/LiveView backend prototype.
 - `frontend/web` - Vite/React UI prototype.
 - `docs/rfcs/ingary-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `ingary.org`.
@@ -50,17 +50,15 @@ The probe checks the common OpenAI-compatible and Ingary-specific surface:
 - caller provenance and receipt fields
 - basic latency percentiles
 
-## Current Prototype Test State
+## Current Test State
 
-| Prototype | BDD scenarios | Baseline contract probe | Dynamic generated model properties |
-|---|---:|---:|---:|
-| Go | Passing | Passing | Passing |
-| Rust | Passing | Passing | Passing |
-| Elixir | Passing | Passing | Passing |
+The old Go and Rust backend prototypes remain available in git history, but
+they are no longer part of the live tree or local verification gate. The active
+backend is `backends/elixir-ingary`.
 
 Dynamic generated model properties require the prototype-only
-`POST /__test/config` endpoint. It exists to keep the prototypes comparable
-while the production configuration API is still being designed.
+`POST /__test/config` endpoint. It exists while the production configuration API
+is still being designed.
 
 Run the storage/sink reference fixture with:
 
@@ -68,17 +66,11 @@ Run the storage/sink reference fixture with:
 python3 tests/storage_contract.py --store all --cases 50
 ```
 
-## Local Backend Matrix
+## Local Development
 
-For side-by-side frontend testing, run the prototypes on separate ports:
+Run the active backend and UI:
 
 ```bash
-# Go
-(cd backends/go-ingary && go run .)
-
-# Rust
-(cd backends/rust-ingary && INGARY_BIND=127.0.0.1:8797 cargo run)
-
 # Elixir
 (cd backends/elixir-ingary && INGARY_BIND=127.0.0.1:8791 mix run --no-halt)
 
@@ -86,11 +78,8 @@ For side-by-side frontend testing, run the prototypes on separate ports:
 (cd frontend/web && npm run dev -- --host 127.0.0.1)
 ```
 
-The frontend at `http://127.0.0.1:5173` has a temporary backend selector for:
-
-- Go: `http://127.0.0.1:8787`
-- Rust: `http://127.0.0.1:8797`
-- Elixir: `http://127.0.0.1:8791`
+The backend also exposes the LiveView policy projection workbench at
+`/policies`.
 
 ## Storage Direction
 

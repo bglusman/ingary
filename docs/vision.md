@@ -120,22 +120,25 @@ inside a larger gateway.
 ## Implementation Direction
 
 The repository initially kept Go, Rust, and Elixir backend prototypes alive so
-they could be measured against the same contract. The current tentative
-implementation direction is **Elixir plus Gleam on the BEAM**: Elixir owns
-supervision, process boundaries, HTTP, LiveView, provider IO, telemetry, and
-dynamic runtime behavior; Gleam owns correctness-heavy pure decision logic where
-typed data and exhaustive pattern matching can prevent policy bugs. Fork-based
-prototypes have been removed. Systems such as LiteLLM, TensorZero, and Helicone
-remain useful integration targets and sources of product ideas, but Ingary
-should not begin life as a long-running fork of any of them.
+they could be measured against the same contract. That comparison has now served
+its purpose. The current implementation direction is **Elixir plus Gleam on the
+BEAM**: Elixir owns supervision, process boundaries, HTTP, LiveView, provider
+IO, telemetry, and dynamic runtime behavior; Gleam owns correctness-heavy pure
+decision logic where typed data and exhaustive pattern matching can prevent
+policy bugs. The Go and Rust backends remain in git history as evidence, but
+they are no longer carried in the live tree. Systems such as LiteLLM,
+TensorZero, and Helicone remain useful integration targets and sources of
+product ideas, but Ingary should not begin life as a long-running fork of any of
+them.
 
 The first durable implementation should prioritize:
 
 1. a small, clear OpenAI-compatible gateway surface
 2. real receipt storage and queryability
 3. policy hooks for request, route, stream, and output phases
-4. a portable policy-engine contract, with explicit state scopes and Starlark as
-   the first advanced option to test against structured primitives
+4. a policy-engine contract with explicit state scopes and two execution tiers:
+   Dune-backed BEAM snippets for trusted local policy, and WASM/sidecar/hosted
+   execution for externally shared or untrusted policy
 5. a LiveView-first UI that exposes model definitions, live behavior, receipts,
    policy outcomes, simulations, and policy-shape explanations
 

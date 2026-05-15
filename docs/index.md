@@ -23,8 +23,9 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
 <div class="notice">
   <strong>Status:</strong> Ingary is early and docs-driven. This site describes
   the product shape we are building toward, while the repository contains
-  working prototypes, shared contracts, and tests used to choose the first
-  production foundation.
+  the active BEAM implementation, shared contracts, and tests used to validate
+  policy behavior. See the [Backend Selection Decision](backend-selection-decision.html)
+  for the pruning rationale.
 </div>
 
 ## What Ingary Adds
@@ -66,22 +67,23 @@ and runtime visibility for constrained agentic workflows.
 
 The active prototype started by comparing Go, Rust, and Elixir backends against
 the same HTTP contract, storage contract, BDD scenarios, and property-style
-probes. Recent bakeoffs make the tentative primary direction Elixir plus Gleam:
-Elixir for runtime plumbing and supervision, Gleam for correctness-heavy pure
-business logic, and LiveView for the operator UI. Fork-based foundation spikes
-have been removed from the codebase; the current direction is to integrate with
-systems such as LiteLLM and TensorZero where useful, while keeping Ingary's
-synthetic-model semantics independent.
+probes. That comparison has served its purpose. The live codebase now keeps the
+Elixir backend as the primary runtime, with Gleam planned for correctness-heavy
+pure business logic and LiveView for the operator UI. The old Go and Rust
+backends remain available in git history, but they are no longer part of the
+current tree or verification gate.
 
 Near-term work:
 
 1. Implement real built-in governors for request, route, stream, and output phases.
 2. Add alert sinks and policy receipt events.
 3. Add durable SQLite storage for model definitions and receipts.
-4. Add Starlark as the first portable advanced policy language.
-5. Move the policy projection and simulation workbench toward LiveView.
-6. Keep WASM, Dune, and external policy engines as later pluggable execution
-   targets.
+4. Make the LiveView policy projection and simulation workbench consume real
+   compiled policy artifacts.
+5. Use Dune-backed BEAM snippets for trusted local programmable policy only
+   where structured primitives are insufficient.
+6. Require WASM, a sidecar, or a hosted policy service for externally shared or
+   otherwise untrusted programmable policy.
 
 ## Name
 

@@ -1,16 +1,6 @@
 [tools]
-rust = "1.95.0"
-go = "1.26.3"
 erlang = "28.5"
 elixir = "1.19.5-otp-28"
-
-[tasks."check:go"]
-description = "Run Go backend tests"
-run = "cd backends/go-ingary && go test ./..."
-
-[tasks."check:rust"]
-description = "Run Rust formatting and tests"
-run = "cd backends/rust-ingary && cargo fmt --check && cargo test"
 
 [tasks."check:elixir"]
 description = "Run Elixir formatting and tests"
@@ -34,42 +24,16 @@ run = "uv run pytest -m 'backend and not live_llm' tests/test_bakeoff_*.py"
 
 [tasks.check]
 description = "Run all baseline checks"
-depends = ["check:go", "check:rust", "check:elixir", "check:frontend", "check:contracts"]
-
-[tasks."run:go"]
-description = "Run Go backend on 127.0.0.1:8787"
-env = { INGARY_ALLOW_TEST_CREDENTIALS = "1" }
-run = "cd backends/go-ingary && go run ."
-
-[tasks."run:rust"]
-description = "Run Rust backend on 127.0.0.1:8797"
-env = { INGARY_BIND = "127.0.0.1:8797", INGARY_ALLOW_TEST_CREDENTIALS = "1" }
-run = "cd backends/rust-ingary && cargo run"
+depends = ["check:elixir", "check:frontend", "check:contracts"]
 
 [tasks."run:elixir"]
 description = "Run Elixir backend on 127.0.0.1:8791"
 env = { INGARY_BIND = "127.0.0.1:8791", INGARY_ALLOW_TEST_CREDENTIALS = "1" }
 run = "cd backends/elixir-ingary && mix run --no-halt"
 
-[tasks."probe:go"]
-description = "Probe the Go backend contract"
-run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8787 --fuzz-runs 10"
-
-[tasks."probe:rust"]
-description = "Probe the Rust backend contract"
-run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8797 --fuzz-runs 10"
-
 [tasks."probe:elixir"]
 description = "Probe the Elixir backend contract"
 run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-runs 10"
-
-[tasks."config:go:local"]
-description = "Load ignored local provider targets into the Go backend"
-run = "curl -fsS -X POST http://127.0.0.1:8787/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
-
-[tasks."config:rust:local"]
-description = "Load ignored local provider targets into the Rust backend"
-run = "curl -fsS -X POST http://127.0.0.1:8797/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
 
 [tasks."config:elixir:local"]
 description = "Load ignored local provider targets into the Elixir backend"

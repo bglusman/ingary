@@ -17,12 +17,6 @@ done
 pass() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
-echo "── Go ───────────────────────────────────────────────"
-(cd backends/go-ingary && go test -count=1 ./...) && pass "go test" || fail "go test"
-
-echo "── Rust ─────────────────────────────────────────────"
-(cd backends/rust-ingary && cargo fmt --check && cargo test) && pass "rust fmt/test" || fail "rust fmt/test"
-
 echo "── Elixir ───────────────────────────────────────────"
 (cd backends/elixir-ingary && mix format --check-formatted && mix test) && pass "elixir format/test" || fail "elixir format/test"
 

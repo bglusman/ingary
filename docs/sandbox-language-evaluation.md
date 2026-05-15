@@ -28,6 +28,20 @@ editor.
 | JS/Deno | Strong model familiarity and mature tooling | Operational/runtime boundary is separate from BEAM supervision |
 | Lua/Luerl | Designed for embedded scripting and BEAM-compatible options exist | Less likely to be authored well by generic LLMs than JS/Starlark/Elixir |
 
+## Execution Tiers
+
+Ingary should not force one sandbox language to satisfy every trust model.
+Policy execution should be split by provenance:
+
+| Tier | Engines | Intended use | Boundary |
+| --- | --- | --- | --- |
+| Local trusted | structured primitives, Dune | operator-owned rules, AI-authored local snippets, fast iteration | BEAM supervision plus allowlist, timeout, reduction, memory, and receipt controls |
+| Portable untrusted | WASM, sidecar, hosted policy service | externally shared packages, marketplace policies, third-party policy code | capability-based host ABI, fuel, memory limits, deterministic IO, provenance metadata |
+
+Dune is therefore an ergonomics and local-control candidate. It should not be
+marketed as the hostile-code boundary. WASM or an isolated external process
+should be required before policy crosses an external trust boundary.
+
 ## Dune Spike Findings
 
 The initial Elixir spike adds `ElixirIngary.PolicySandbox.Dune`, a thin adapter

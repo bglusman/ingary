@@ -20,9 +20,10 @@ move toward a BEAM architecture:
   simulation, receipts, and runtime state can be driven directly from the same
   supervised backend.
 
-This is a tentative selection, not a declaration that the other prototypes are
-useless. Go and Rust remain useful comparisons for deployment footprint,
-embedding, and policy engine experiments. The key difference is that Elixir and
+This selection is now strong enough that the old Go and Rust backend prototypes
+have been removed from the live tree. They remain useful historical evidence in
+git, but active implementation should happen on the BEAM unless a later spike
+shows a concrete reason to reverse course. The key difference is that Elixir and
 Gleam do not need to compete as whole backends: each pure function or runtime
 boundary can be assigned to the language that fits it best.
 
