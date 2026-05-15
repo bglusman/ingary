@@ -90,6 +90,10 @@ Wardwright should treat storage as part of the product contract:
   should be justified by concrete needs such as BEAM-native replication,
   multi-writer coordination, ad hoc query surfaces, hosted/team deployments,
   migrations, or external reporting.
+- Phoenix PubSub should carry live visibility events for LiveView and cluster
+  projections early. It is a visibility bus, not an excuse for arbitrary
+  cross-node mutation of a live session, and multi-node delivery still needs
+  explicit clustering configuration.
 - Redis is optional ephemeral infrastructure only.
 - DuckDB, warehouses, and database sinks are likely analytics/export companions,
   not automatically the live request-path system of record.

@@ -19,6 +19,11 @@ move toward a BEAM architecture:
 - **Phoenix LiveView** owns the first-party operator UI so policy authoring,
   simulation, receipts, and runtime state can be driven directly from the same
   supervised backend.
+- **Phoenix PubSub** is the early visibility bus between supervised runtime
+  state and LiveView projections. Session/model processes should publish
+  receipt events, policy transitions, queue health, and simulation updates so
+  the UI and other nodes can observe behavior without taking ownership of the
+  hot session state.
 
 This selection is now strong enough that the old Go and Rust backend prototypes
 have been removed from the live tree. They remain useful historical evidence in
@@ -68,10 +73,21 @@ Required runtime tests:
 - crash or restart one model runtime and prove other models continue
 - saturate or timeout a sidecar/alert queue and prove unrelated failure domains
   do not inherit backpressure
+- publish model/session/receipt events over PubSub and prove LiveView-style
+  subscribers see ordered visibility updates without mutating session state
 - run a dirty NIF policy evaluation and document scheduler isolation separately
   from killability
 - emit receipts with model id/version, session id, policy version, attempt id,
   and failure domain
+
+Cluster visibility should start as PubSub-backed projections, not distributed
+session mutation. A session should have one authoritative owner process tree at
+a time. Other nodes can subscribe to visibility topics, render near-real-time
+state, and consume receipt/event projections. Cross-node session handoff,
+distributed locking, or multi-node mutation should be treated as later explicit
+features with their own failure semantics. Phoenix PubSub is the application
+mechanism; actual multi-node delivery still requires an explicit node discovery
+and clustering configuration such as distributed Erlang/libcluster.
 
 Sidecars remain attractive for hard killability, but they must be scored as
 backpressure and scaling risks: queue depth, single-worker serialization,
@@ -93,6 +109,12 @@ Initial LiveView surfaces:
 - runtime dashboard for model/session trees, queue depth, restarts, and policy
   failures
 - advanced policy editor with a deterministic artifact preview
+
+LiveView pages should subscribe to PubSub topics for the model, session,
+receipt, policy artifact, and simulation scope they are rendering. The server
+projection remains authoritative: PubSub messages should be small invalidation
+or event records that cause the LiveView to update from supervised state,
+durable receipts, or cached projections.
 
 The UI must render stable backend projections rather than engine-specific
 implementation details. The policy artifact and compiled plan remain the
@@ -137,7 +159,7 @@ The first goal is a dense operational workbench, not a marketing dashboard.
 4. **Runtime Isolation Demo**
    Build model/session dynamic supervisors in the primary Elixir backend and
    expose a small LiveView or admin endpoint that shows child trees, restarts,
-   queue depth, and failure-domain receipts.
+   queue depth, PubSub visibility topics, and failure-domain receipts.
 
 5. **Dune vs Starlark Sandbox Spike**
    Dune should be evaluated separately from Gleam. Gleam is a typed core

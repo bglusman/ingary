@@ -80,11 +80,13 @@ Near-term work:
 3. Add file-backed durable storage for model definitions and receipts, with
    Mnesia/SQL providers gated on concrete query, replication, or concurrency
    needs.
-4. Make the LiveView policy projection and simulation workbench consume real
+4. Publish model/session/receipt/policy events over Phoenix PubSub so LiveView
+   and cluster nodes get near-real-time visibility without owning session state.
+5. Make the LiveView policy projection and simulation workbench consume real
    compiled policy artifacts.
-5. Use Dune-backed BEAM snippets for trusted local programmable policy only
+6. Use Dune-backed BEAM snippets for trusted local programmable policy only
    where structured primitives are insufficient.
-6. Require WASM, a sidecar, or a hosted policy service for externally shared or
+7. Require WASM, a sidecar, or a hosted policy service for externally shared or
    otherwise untrusted programmable policy.
 
 ## Name

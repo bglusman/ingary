@@ -123,13 +123,17 @@ The repository initially kept Go, Rust, and Elixir backend prototypes alive so
 they could be measured against the same contract. That comparison has now served
 its purpose. The current implementation direction is **Elixir plus Gleam on the
 BEAM**: Elixir owns supervision, process boundaries, HTTP, LiveView, provider
-IO, telemetry, and dynamic runtime behavior; Gleam owns correctness-heavy pure
-decision logic where typed data and exhaustive pattern matching can prevent
-policy bugs. The Go and Rust backends remain in git history as evidence, but
-they are no longer carried in the live tree. Systems such as LiteLLM,
-TensorZero, and Helicone remain useful integration targets and sources of
-product ideas, but Wardwright should not begin life as a long-running fork of any of
-them.
+IO, telemetry, PubSub visibility, and dynamic runtime behavior; Gleam owns
+correctness-heavy pure decision logic where typed data and exhaustive pattern
+matching can prevent policy bugs. Session/model processes should publish
+receipt, policy, queue, and simulation events over Phoenix PubSub so LiveView
+and other cluster nodes can observe runtime behavior without directly mutating
+another node's hot session state once a deployment has explicit node discovery
+and clustering configured. The Go and Rust backends remain in git history as
+evidence, but they are no longer carried in the live tree. Systems such as
+LiteLLM, TensorZero, and Helicone remain useful integration targets and sources
+of product ideas, but Wardwright should not begin life as a long-running fork of
+any of them.
 
 The first durable implementation should prioritize:
 
@@ -137,11 +141,13 @@ The first durable implementation should prioritize:
 2. ETS-backed runtime state plus file-backed durable receipt storage and
    queryability, with Mnesia or SQL stores introduced when they buy concrete
    replication, query, concurrency, or deployment behavior
-3. policy hooks for request, route, stream, and output phases
-4. a policy-engine contract with explicit state scopes and two execution tiers:
+3. PubSub-backed visibility for LiveView and cluster projections, while
+   authoritative session mutation remains owned by one runtime subtree
+4. policy hooks for request, route, stream, and output phases
+5. a policy-engine contract with explicit state scopes and two execution tiers:
    Dune-backed BEAM snippets for trusted local policy, and WASM/sidecar/hosted
    execution for externally shared or untrusted policy
-5. a LiveView-first UI that exposes model definitions, live behavior, receipts,
+6. a LiveView-first UI that exposes model definitions, live behavior, receipts,
    policy outcomes, simulations, and policy-shape explanations
 
 See [Use Cases](use-cases.html) for the first policy examples that should drive
