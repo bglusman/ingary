@@ -10,6 +10,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     if connected?(socket) do
       Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:models))
       Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:receipts))
+      Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:policies))
     end
 
     {:ok, assign_projection(socket, params)}
@@ -40,6 +41,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     |> assign(:selected_node, selected_node)
     |> assign_new(:runtime_status, fn -> Wardwright.Runtime.status() end)
     |> assign_new(:runtime_events, fn -> [] end)
+    |> assign_new(:policy_cache_status, fn -> Wardwright.PolicyCache.status() end)
+    |> assign_new(:policy_cache_events, fn -> Wardwright.PolicyCache.recent(%{}, 8) end)
   end
 
   @impl true
@@ -50,7 +53,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     {:noreply,
      socket
      |> assign(:runtime_events, events)
-     |> assign(:runtime_status, Wardwright.Runtime.status())}
+     |> assign(:runtime_status, Wardwright.Runtime.status())
+     |> assign(:policy_cache_status, Wardwright.PolicyCache.status())
+     |> assign(:policy_cache_events, Wardwright.PolicyCache.recent(%{}, 8))}
   end
 
   @impl true
@@ -179,6 +184,34 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <h3>Actions</h3>
           <div class="chips">
             <span :for={action <- @selected_node["actions"]} class="chip"><%= action %></span>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel_header">
+            <div>
+              <h2>History Cache</h2>
+              <p>Bounded policy facts available to history-aware rules.</p>
+            </div>
+            <.badge value={"#{@policy_cache_status["entry_count"]}/#{@policy_cache_status["max_entries"]}"} />
+          </div>
+
+          <dl class="kv">
+            <dt>Store</dt>
+            <dd><%= @policy_cache_status["kind"] %></dd>
+            <dt>Recent Limit</dt>
+            <dd><%= @policy_cache_status["recent_limit"] %></dd>
+            <dt>Next Sequence</dt>
+            <dd><%= @policy_cache_status["next_sequence"] %></dd>
+          </dl>
+
+          <div class="timeline compact">
+            <article :for={event <- @policy_cache_events} class="trace_event info">
+              <span><%= event["kind"] %></span>
+              <strong><%= event["key"] %></strong>
+              <.badge value={"seq #{event["sequence"]}"} />
+              <small><%= policy_cache_event_detail(event) %></small>
+            </article>
           </div>
         </div>
 
@@ -430,6 +463,22 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" / ")
+  end
+
+  defp policy_cache_event_detail(event) do
+    scope =
+      event
+      |> Map.get("scope", %{})
+      |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
+      |> Enum.join(", ")
+
+    cond do
+      scope != "" ->
+        scope
+
+      true ->
+        "global scope"
+    end
   end
 
   defp normalize_pattern(nil), do: "tts-retry"

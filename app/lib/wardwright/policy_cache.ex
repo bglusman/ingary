@@ -1,56 +1,105 @@
 defmodule Wardwright.PolicyCache do
   @moduledoc false
 
-  use Agent
+  use GenServer
+
+  @table :wardwright_policy_cache
 
   def start_link(_opts) do
-    Agent.start_link(fn -> initial_state(%{}) end, name: __MODULE__)
+    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
   end
 
   def configure(config) do
-    Agent.update(__MODULE__, fn _state -> initial_state(config || %{}) end)
+    GenServer.call(__MODULE__, {:configure, config || %{}})
   end
 
   def add(input) when is_map(input) do
-    Agent.get_and_update(__MODULE__, fn state ->
-      with {:ok, event} <- build_event(input, state) do
-        events = [event | state.events] |> evict(state.config)
-        {{:ok, event}, %{state | next: state.next + 1, events: events}}
-      else
-        {:error, message} -> {{:error, message}, state}
-      end
-    end)
+    GenServer.call(__MODULE__, {:add, input})
   end
 
   def recent(filter \\ %{}, limit \\ nil) do
-    Agent.get(__MODULE__, fn state ->
-      limit = normalize_limit(limit, state.config)
-
-      state.events
-      |> Enum.sort_by(& &1["sequence"], :desc)
-      |> Enum.filter(&matches?(&1, filter || %{}))
-      |> Enum.take(limit)
-    end)
+    GenServer.call(__MODULE__, {:recent, filter || %{}, limit})
   end
 
   def count(filter \\ %{}) do
-    Agent.get(__MODULE__, fn state ->
-      Enum.count(state.events, &matches?(&1, filter || %{}))
-    end)
+    GenServer.call(__MODULE__, {:count, filter || %{}})
+  end
+
+  def status do
+    GenServer.call(__MODULE__, :status)
   end
 
   def reset, do: configure(%{})
 
-  defp initial_state(config) do
-    %{config: normalize_config(config), next: 0, events: []}
+  @impl true
+  def init(config) do
+    table =
+      :ets.new(@table, [
+        :ordered_set,
+        :protected,
+        :named_table,
+        read_concurrency: true,
+        write_concurrency: true
+      ])
+
+    {:ok, %{config: normalize_config(config), next: 0, table: table}}
   end
 
-  defp normalize_config(config) do
-    %{
-      "max_entries" => positive_integer(config["max_entries"], 64),
-      "recent_limit" => positive_integer(config["recent_limit"], 20)
-    }
+  @impl true
+  def handle_call({:configure, config}, _from, state) do
+    :ets.delete_all_objects(state.table)
+    state = %{state | config: normalize_config(config), next: 0}
+    {:reply, :ok, state}
   end
+
+  def handle_call({:add, input}, _from, state) do
+    with {:ok, event} <- build_event(input, state) do
+      :ets.insert(state.table, {event["sequence"], event})
+      evict(state.table, state.config)
+      state = %{state | next: state.next + 1}
+      publish_added(event, state)
+      {:reply, {:ok, event}, state}
+    else
+      {:error, message} ->
+        {:reply, {:error, message}, state}
+    end
+  end
+
+  def handle_call({:recent, filter, limit}, _from, state) do
+    limit = normalize_limit(limit, state.config)
+
+    events =
+      state.table
+      |> events()
+      |> Enum.sort_by(& &1["sequence"], :desc)
+      |> Enum.filter(&matches?(&1, filter))
+      |> Enum.take(limit)
+
+    {:reply, events, state}
+  end
+
+  def handle_call({:count, filter}, _from, state) do
+    count =
+      state.table
+      |> events()
+      |> Enum.count(&matches?(&1, filter))
+
+    {:reply, count, state}
+  end
+
+  def handle_call(:status, _from, state) do
+    {:reply,
+     %{
+       "kind" => "ets_bounded_recent_history",
+       "max_entries" => state.config["max_entries"],
+       "recent_limit" => state.config["recent_limit"],
+       "entry_count" => :ets.info(state.table, :size) || 0,
+       "next_sequence" => state.next + 1,
+       "bounded" => true
+     }, state}
+  end
+
+  defp initial_event_count(table), do: :ets.info(table, :size) || 0
 
   defp build_event(input, state) do
     kind = input |> Map.get("kind", "") |> to_string() |> String.trim()
@@ -83,10 +132,37 @@ defmodule Wardwright.PolicyCache do
     end
   end
 
-  defp evict(events, config) do
-    events
-    |> Enum.sort_by(fn event -> {event["created_at_unix_ms"], event["sequence"]} end)
-    |> Enum.take(-config["max_entries"])
+  defp evict(table, config) do
+    excess = initial_event_count(table) - config["max_entries"]
+
+    if excess > 0 do
+      table
+      |> events()
+      |> Enum.sort_by(fn event -> {event["created_at_unix_ms"], event["sequence"]} end)
+      |> Enum.take(excess)
+      |> Enum.each(fn event -> :ets.delete(table, event["sequence"]) end)
+    end
+  end
+
+  defp events(table) do
+    table
+    |> :ets.tab2list()
+    |> Enum.map(fn {_sequence, event} -> event end)
+  end
+
+  defp publish_added(event, state) do
+    if Process.whereis(Wardwright.PubSub) do
+      Wardwright.Runtime.Events.publish(Wardwright.Runtime.Events.topic(:policies), %{
+        "type" => "policy_cache.event_recorded",
+        "sequence" => event["sequence"],
+        "kind" => event["kind"],
+        "key" => event["key"],
+        "scope" => event["scope"],
+        "created_at_unix_ms" => event["created_at_unix_ms"],
+        "entry_count" => initial_event_count(state.table),
+        "max_entries" => state.config["max_entries"]
+      })
+    end
   end
 
   defp matches?(event, filter) do
@@ -102,6 +178,13 @@ defmodule Wardwright.PolicyCache do
   defp normalize_limit(limit, config) do
     limit = positive_integer(limit, config["recent_limit"])
     min(limit, config["recent_limit"])
+  end
+
+  defp normalize_config(config) do
+    %{
+      "max_entries" => positive_integer(config["max_entries"], 64),
+      "recent_limit" => positive_integer(config["recent_limit"], 20)
+    }
   end
 
   defp clean_scope(scope) when is_map(scope) do

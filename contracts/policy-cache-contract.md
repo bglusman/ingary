@@ -1,7 +1,8 @@
 # Policy Cache Contract
 
 The policy cache is a bounded, in-memory history surface for facts that policy
-rules may inspect during request evaluation. It is not the durable receipt
+rules may inspect during request evaluation. The BEAM implementation owns this
+hot state in ETS behind `Wardwright.PolicyCache`. It is not the durable receipt
 store and must not become an ambient log of prompts or completions.
 
 ## Configuration
@@ -21,6 +22,8 @@ Synthetic model config may include:
 - `recent_limit` caps query results returned by the recent-history API.
 - Replacing test config clears the cache, so policy tests do not inherit stale
   history.
+- Writes publish a redacted `policy_cache.event_recorded` event on the runtime
+  policy PubSub topic so LiveView can monitor active history without polling.
 
 ## Event Shape
 
@@ -49,6 +52,9 @@ Eviction is deterministic:
 3. Recent queries return surviving entries newest-sequence first.
 
 This makes eviction property-testable without depending on process time.
+The cache must report its active cap and entry count so operators can see
+whether history-driven policy rules are working from a small recent window or a
+larger local memory horizon.
 
 ## Recent History API
 

@@ -79,6 +79,38 @@ defmodule WardwrightTest do
              })
   end
 
+  test "policy cache is bounded ETS-backed runtime state and publishes writes" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 2, "recent_limit" => 2})
+    assert :ok = Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:policies))
+
+    for index <- 1..3 do
+      assert {:ok, %{"sequence" => ^index}} =
+               Wardwright.PolicyCache.add(%{
+                 "kind" => "tool_call",
+                 "key" => "shell:#{index}",
+                 "scope" => %{"session_id" => "session-a"},
+                 "created_at_unix_ms" => index
+               })
+    end
+
+    assert_receive {:wardwright_runtime_event, "runtime:policies",
+                    %{
+                      "type" => "policy_cache.event_recorded",
+                      "sequence" => 1,
+                      "entry_count" => 1,
+                      "max_entries" => 2
+                    }}
+
+    assert %{
+             "kind" => "ets_bounded_recent_history",
+             "bounded" => true,
+             "entry_count" => 2,
+             "max_entries" => 2
+           } = Wardwright.PolicyCache.status()
+
+    assert [%{"sequence" => 3}, %{"sequence" => 2}] = Wardwright.PolicyCache.recent(%{}, 10)
+  end
+
   test "history threshold policy reads only configured cache scope" do
     config =
       unit_policy_config()

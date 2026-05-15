@@ -88,6 +88,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/phase_map")
 
     assert html =~ "Runtime Visibility"
+    assert html =~ "History Cache"
     refute html =~ "route.selected"
 
     assert {:ok, %{"type" => "route.selected"}} =
@@ -104,5 +105,51 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert updated =~ "route.selected"
     assert updated =~ "liveview-session"
     assert updated =~ "mock/liveview"
+  end
+
+  test "LiveView workbench shows bounded policy cache writes as live history" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 4, "recent_limit" => 4})
+
+    {:ok, view, html} = live(build_conn(), "/policies/route-privacy/phase_map")
+
+    assert html =~ "History Cache"
+    assert html =~ "0/4"
+    refute html =~ "tool_call"
+
+    assert {:ok, _event} =
+             Wardwright.PolicyCache.add(%{
+               "kind" => "tool_call",
+               "key" => "shell:ls",
+               "scope" => %{"session_id" => "live-history-session"},
+               "created_at_unix_ms" => 1
+             })
+
+    updated = render(view)
+
+    assert updated =~ "1/4"
+    assert updated =~ "tool_call"
+    assert updated =~ "shell:ls"
+    assert updated =~ "live-history-session"
+  end
+
+  test "LiveView history cache does not render raw cached text by default" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 4, "recent_limit" => 4})
+
+    {:ok, view, _html} = live(build_conn(), "/policies/route-privacy/phase_map")
+
+    assert {:ok, _event} =
+             Wardwright.PolicyCache.add(%{
+               "kind" => "request_text",
+               "key" => "chat_completion",
+               "value" => %{"text" => "do not show this private prompt"},
+               "created_at_unix_ms" => 1
+             })
+
+    updated = render(view)
+
+    assert updated =~ "request_text"
+    assert updated =~ "chat_completion"
+    assert updated =~ "global scope"
+    refute updated =~ "do not show this private prompt"
   end
 end
