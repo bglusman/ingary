@@ -496,6 +496,86 @@ defmodule WardwrightTest do
              "policy_failed_closed"
   end
 
+  test "stream policy rewrites matched chunks before release and records receipt evidence" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client",
+          "contains" => "OldClient(",
+          "action" => "rewrite_chunk",
+          "replacement" => "NewClient("
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{"mock_stream_chunks" => ["use OldClient(", "arg) now"]},
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["final", "stream_trigger_count"]) == 1
+    assert get_in(receipt, ["final", "stream_policy_action"]) == "rewrite_chunk"
+    assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == true
+
+    assert [
+             %{
+               "rule_id" => "deprecated-client",
+               "action" => "rewrite_chunk",
+               "chunk_index" => 0
+             }
+           ] = get_in(receipt, ["final", "stream_policy", "events"])
+  end
+
+  test "stream policy block returns fail-closed JSON instead of SSE" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "secret-stream",
+          "regex" => "secret-[0-9]+",
+          "action" => "block"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{"mock_stream_chunks" => ["safe prefix ", "secret-123"]},
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 422
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_blocked"
+    assert get_in(body, ["wardwright", "selected_model"]) == "tiny/model"
+    assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == false
+
+    assert get_in(receipt, ["final", "stream_policy", "events", Access.at(0), "rule_id"]) ==
+             "secret-stream"
+  end
+
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
     assert %{"engine" => "wasm", "action" => "block", "status" => "error"} =
              Wardwright.Policy.Engine.evaluate(%{"engine" => "wasm"}, %{})
