@@ -23,7 +23,7 @@ defmodule ElixirIngary.Application do
     result = Supervisor.start_link(children, opts)
 
     if serve_http?() do
-      Logger.info("elixir-ingary mock listening on http://#{:inet.ntoa(host)}:#{port}")
+      Logger.info("ingary app listening on http://#{:inet.ntoa(host)}:#{port}")
     end
 
     result

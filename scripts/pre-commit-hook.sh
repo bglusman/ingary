@@ -17,10 +17,10 @@ ok() { echo -e "${GREEN}✓${NC} $*"; }
 
 staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
 
-if echo "$staged_files" | grep -qE '^backends/elixir-ingary/'; then
-  note "elixir format/test..."
-  (cd backends/elixir-ingary && mix format --check-formatted && mix test) || fail "Elixir checks failed"
-  ok "Elixir checks clean"
+if echo "$staged_files" | grep -qE '^app/'; then
+  note "app format/test..."
+  (cd app && mix format --check-formatted && mix test) || fail "App checks failed"
+  ok "App checks clean"
 fi
 
 if echo "$staged_files" | grep -qE '^frontend/web/'; then

@@ -1,13 +1,13 @@
-# elixir-ingary
+# Ingary App
 
-Minimal Elixir/Plug prototype for the Ingary synthetic model platform contract.
-It serves mock responses only; no provider credentials or outbound model calls
-are involved.
+Elixir/LiveView implementation of the Ingary synthetic model platform contract.
+It currently serves mock model responses and local policy evaluation surfaces;
+real provider credentials and outbound model calls are not wired here yet.
 
 ## Run
 
 ```bash
-cd backends/elixir-ingary
+cd app
 mix deps.get
 mix run --no-halt
 ```

@@ -20,7 +20,7 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
-- `backends/elixir-ingary` - active Elixir/LiveView backend prototype.
+- `app` - active Elixir/LiveView backend prototype.
 - `frontend/web` - Vite/React UI prototype.
 - `docs/rfcs/ingary-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `ingary.org`.
@@ -54,7 +54,7 @@ The probe checks the common OpenAI-compatible and Ingary-specific surface:
 
 The old Go and Rust backend prototypes remain available in git history, but
 they are no longer part of the live tree or local verification gate. The active
-backend is `backends/elixir-ingary`.
+backend is `app`.
 
 Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. It exists while the production configuration API
@@ -72,7 +72,7 @@ Run the active backend and UI:
 
 ```bash
 # Elixir
-(cd backends/elixir-ingary && INGARY_BIND=127.0.0.1:8791 mix run --no-halt)
+(cd app && INGARY_BIND=127.0.0.1:8791 mix run --no-halt)
 
 # Frontend
 (cd frontend/web && npm run dev -- --host 127.0.0.1)

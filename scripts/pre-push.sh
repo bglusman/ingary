@@ -17,8 +17,8 @@ done
 pass() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
-echo "── Elixir ───────────────────────────────────────────"
-(cd backends/elixir-ingary && mix format --check-formatted && mix test) && pass "elixir format/test" || fail "elixir format/test"
+echo "── App ──────────────────────────────────────────────"
+(cd app && mix format --check-formatted && mix test) && pass "app format/test" || fail "app format/test"
 
 echo "── Frontend ─────────────────────────────────────────"
 (cd frontend/web && npm run build) && pass "frontend build" || fail "frontend build"

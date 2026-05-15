@@ -12,8 +12,8 @@ implementation should focus on **Elixir plus Gleam on the BEAM**.
 
 ## Decision
 
-- Keep `backends/elixir-ingary` as the active backend.
-- Remove `backends/go-ingary` and `backends/rust-ingary` from the live tree.
+- Move the active Elixir/LiveView application to `app`.
+- Remove the old Go and Rust backend prototype directories from the live tree.
 - Keep shared HTTP/storage/policy contracts and Python probes.
 - Keep historical bakeoff docs and git history as the record of comparison.
 - Update local hooks and mise tasks so routine checks exercise the active stack

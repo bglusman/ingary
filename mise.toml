@@ -2,9 +2,9 @@
 erlang = "28.5"
 elixir = "1.19.5-otp-28"
 
-[tasks."check:elixir"]
-description = "Run Elixir formatting and tests"
-run = "cd backends/elixir-ingary && mix format --check-formatted && mix test"
+[tasks."check:app"]
+description = "Run app formatting and tests"
+run = "cd app && mix format --check-formatted && mix test"
 
 [tasks."check:frontend"]
 description = "Install frontend dependencies and build"
@@ -24,17 +24,17 @@ run = "uv run pytest -m 'backend and not live_llm' tests/test_bakeoff_*.py"
 
 [tasks.check]
 description = "Run all baseline checks"
-depends = ["check:elixir", "check:frontend", "check:contracts"]
+depends = ["check:app", "check:frontend", "check:contracts"]
 
-[tasks."run:elixir"]
-description = "Run Elixir backend on 127.0.0.1:8791"
+[tasks."run:app"]
+description = "Run app on 127.0.0.1:8791"
 env = { INGARY_BIND = "127.0.0.1:8791", INGARY_ALLOW_TEST_CREDENTIALS = "1" }
-run = "cd backends/elixir-ingary && mix run --no-halt"
+run = "cd app && mix run --no-halt"
 
-[tasks."probe:elixir"]
-description = "Probe the Elixir backend contract"
+[tasks."probe:app"]
+description = "Probe the app contract"
 run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-runs 10"
 
-[tasks."config:elixir:local"]
-description = "Load ignored local provider targets into the Elixir backend"
+[tasks."config:app:local"]
+description = "Load ignored local provider targets into the app"
 run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
