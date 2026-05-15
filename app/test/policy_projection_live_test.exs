@@ -45,6 +45,64 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert [%{"class" => "ordered"}] = projection["conflicts"]
   end
 
+  test "route projection graph exposes policy overlay and assistant governance contract" do
+    projection = Wardwright.PolicyProjection.projection("route-privacy")
+
+    graph = projection["route_graph_overlay"]
+
+    assert graph["root"] == "dispatcher.prompt_length"
+    assert graph["receipt_fields"] == ["policy_route_constraints", "route_blocked"]
+    assert graph["policy_overlay"]["constraint"] == "restrict_routes"
+
+    assert Enum.any?(graph["nodes"], fn node ->
+             node["label"] == Wardwright.managed_model() and
+               node["policy_state"] == "constrained" and
+               node["policy_note"] =~ "restrict_routes"
+           end)
+
+    assert Enum.any?(projection["model_policy_differences"], fn row ->
+             row["model"] == Wardwright.managed_model() and row["policy_overlay"] =~ "removed"
+           end)
+
+    assert %{"source_of_truth" => "deterministic_policy_artifact", "tools" => tools} =
+             projection["assistant_contract"]
+
+    assert MapSet.new(Enum.map(tools, & &1["name"])) ==
+             MapSet.new([
+               "explain_projection",
+               "simulate_policy",
+               "propose_rule_change",
+               "inspect_receipt",
+               "inspect_route_plan",
+               "validate_policy_artifact"
+             ])
+
+    assert [
+             %{
+               "kind" => "agent_escalation",
+               "activation" => "simulation_invocation_only",
+               "distinct_from_deterministic_actions" => true
+             }
+           ] = projection["governance_actions"]
+  end
+
+  test "route projection graph is derived from the supplied config" do
+    config =
+      Wardwright.default_config()
+      |> Map.put("route_root", "cascade.private-first")
+      |> Map.put("cascades", [
+        %{"id" => "cascade.private-first", "models" => [Wardwright.local_model()]}
+      ])
+
+    graph = Wardwright.PolicyProjection.projection("route-privacy", config)["route_graph_overlay"]
+
+    assert graph["root"] == "cascade.private-first"
+
+    assert Enum.any?(graph["nodes"], fn node ->
+             node["id"] == "cascade.private-first" and node["type"] == "cascade"
+           end)
+  end
+
   test "simulation traces link execution evidence back to projection nodes" do
     projection = Wardwright.PolicyProjection.projection("tts-retry")
     node_ids = projection["phases"] |> Enum.flat_map(& &1["nodes"]) |> MapSet.new(& &1["id"])
@@ -82,6 +140,21 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert matrix_html =~ "Private context route gate"
     assert matrix_html =~ "Effect matrix"
     assert matrix_html =~ "route.allowed_targets"
+  end
+
+  test "LiveView route graph renders graph, assistant, and governance panels" do
+    {:ok, _view, html} = live(build_conn(), "/policies/route-privacy/route_graph")
+
+    assert html =~ "Route graph"
+    assert html =~ "data-route-graph="
+    assert html =~ "Model Policy Differences"
+    assert html =~ "AI Policy Assistant"
+    assert html =~ "inspect_route_plan"
+    assert html =~ "validate_policy_artifact"
+    assert html =~ "Governance Escalation"
+    assert html =~ "simulation_invocation_only"
+    assert html =~ "policy_route_constraints"
+    assert html =~ "route_blocked"
   end
 
   test "LiveView workbench updates from runtime PubSub visibility events" do

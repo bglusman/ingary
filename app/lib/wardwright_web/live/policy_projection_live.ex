@@ -3,7 +3,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   use Phoenix.LiveView, layout: {WardwrightWeb.Layouts, :root}
 
-  @modes ["phase_map", "effect_matrix", "trace_overlay"]
+  @modes ["route_graph", "phase_map", "effect_matrix", "trace_overlay"]
 
   @impl true
   def mount(params, _session, socket) do
@@ -122,9 +122,92 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <%= if @mode == "trace_overlay" do %>
             <.trace_overlay projection={@projection} simulation={@selected_simulation} />
           <% else %>
-            <.phase_map projection={@projection} />
+            <%= if @mode == "route_graph" do %>
+              <.route_graph_workbench projection={@projection} />
+            <% else %>
+              <.phase_map projection={@projection} />
+            <% end %>
           <% end %>
         <% end %>
+      </section>
+
+      <section class="dashboard_grid">
+        <div class="panel">
+          <div class="panel_header">
+            <div>
+              <h2>Model Policy Differences</h2>
+              <p>Baseline route behavior beside policy overlay effects for each model candidate.</p>
+            </div>
+            <.badge value={@projection["route_graph_overlay"]["policy_overlay"]["constraint"]} />
+          </div>
+
+          <div class="model_diff_table">
+            <div class="model_diff_row header">
+              <span>Model</span>
+              <span>Baseline</span>
+              <span>Policy</span>
+              <span>Receipt</span>
+            </div>
+            <div :for={row <- @projection["model_policy_differences"]} class="model_diff_row">
+              <strong><%= row["model"] %></strong>
+              <span><%= row["baseline"] %></span>
+              <span><%= row["policy_overlay"] %></span>
+              <span><%= row["receipt_effect"] %></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel assistant_panel">
+          <div class="panel_header">
+            <div>
+              <h2>AI Policy Assistant</h2>
+              <p>
+                Mocked chat contract. The assistant can explain and draft, but activation remains bound to the deterministic policy artifact.
+              </p>
+            </div>
+            <.badge value={@projection["assistant_contract"]["status"]} />
+          </div>
+
+          <div class="chat_stack">
+            <article class="chat_message operator">
+              <strong>Operator</strong>
+              <span>Why did the route policy remove a candidate, and what receipt field proves it?</span>
+            </article>
+            <article class="chat_message assistant">
+              <strong>Assistant</strong>
+              <span>
+                I would call inspect_route_plan, explain_projection, then inspect_receipt. The receipt fields to inspect are policy_route_constraints and route_blocked.
+              </span>
+            </article>
+          </div>
+
+          <h3>Capability Contract</h3>
+          <p class="assistant_prompt"><%= @projection["assistant_contract"]["prompt"] %></p>
+          <div class="tool_grid">
+            <span :for={tool <- @projection["assistant_contract"]["tools"]} class="tool_chip">
+              <strong><%= tool["name"] %></strong>
+              <small><%= tool["description"] %></small>
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel governance_panel">
+        <div class="panel_header">
+          <div>
+            <h2>Governance Escalation</h2>
+            <p>Optional agent handoff is shown separately from deterministic actions such as restrict_routes, switch_model, reroute, and block.</p>
+          </div>
+          <.badge value="mockable" />
+        </div>
+
+        <div class="governance_actions">
+          <article :for={action <- @projection["governance_actions"]} class="governance_action">
+            <.badge value={action["activation"]} />
+            <strong><%= action["id"] %></strong>
+            <span><%= action["summary"] %></span>
+          </article>
+        </div>
       </section>
 
       <section class="split">
@@ -241,6 +324,46 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         </div>
       </section>
     </section>
+    """
+  end
+
+  attr(:projection, :map, required: true)
+
+  def route_graph_workbench(assigns) do
+    ~H"""
+    <div
+      id="route-graph-workbench"
+      class="route_graph_workbench"
+      data-route-graph={Jason.encode!(@projection["route_graph_overlay"])}
+    >
+      <div class="route_graph_canvas" data-graph-canvas>
+        <div class="route_graph_fallback">
+          <article
+            :for={node <- @projection["route_graph_overlay"]["nodes"]}
+            class={"route_node #{node["type"]} #{node["policy_state"]}"}
+          >
+            <strong><%= node["label"] %></strong>
+            <.badge value={node["policy_state"]} />
+            <span><%= node["policy_note"] %></span>
+          </article>
+        </div>
+      </div>
+
+      <aside class="route_graph_inspector" data-graph-inspector>
+        <.badge value={@projection["route_graph_overlay"]["policy_overlay"]["constraint"]} />
+        <h3>Policy Overlay</h3>
+        <p><%= @projection["route_graph_overlay"]["policy_overlay"]["outcome"] %></p>
+
+        <dl class="kv">
+          <dt>Root</dt>
+          <dd><%= @projection["route_graph_overlay"]["root"] %></dd>
+          <dt>Receipt fields</dt>
+          <dd><%= Enum.join(@projection["route_graph_overlay"]["receipt_fields"], ", ") %></dd>
+          <dt>Preview</dt>
+          <dd><code><%= Jason.encode!(@projection["route_graph_overlay"]["policy_overlay"]["receipt_preview"]) %></code></dd>
+        </dl>
+      </aside>
+    </div>
     """
   end
 
@@ -375,10 +498,26 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .mode_tabs { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid #d5dde4; border-radius: 8px; background: #f3f6f8; }
     .mode_tabs a { border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; }
     .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; }
+    .dashboard_grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr); gap: 18px; align-items: start; }
     .phase_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-    .phase_column, .node_stack, .timeline, .finding_list, .trace_overlay, .effect_matrix, .chips { display: grid; gap: 9px; }
-    .phase_header, .node_card, .finding, .trace_event, .trace_summary, .effect_row { padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
-    .phase_header span, .node_card span, .trace_summary span, .finding span, .trace_event small { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .route_graph_workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 0.38fr); gap: 14px; align-items: stretch; }
+    .route_graph_canvas { min-height: 360px; border: 1px solid #d5dde4; border-radius: 8px; background: #f8fafb; overflow: hidden; }
+    .route_graph_canvas svg { display: block; width: 100%; height: 360px; }
+    .route_graph_edge { stroke: #8b99a5; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+    .route_graph_node rect { stroke: #7c8a96; stroke-width: 1.5; fill: #fff; rx: 6; }
+    .route_graph_node text { fill: #25313b; font-size: 12px; font-weight: 800; pointer-events: none; }
+    .route_graph_node .node_meta { fill: #64717c; font-size: 11px; font-weight: 600; }
+    .route_graph_node.constrained rect, .route_node.constrained { stroke: #d98181; fill: #fff2f2; }
+    .route_graph_node.forced rect, .route_node.forced { stroke: #599f83; fill: #eef9f4; }
+    .route_graph_node.bypassed rect, .route_node.bypassed { stroke: #d7b966; fill: #fff8df; }
+    .route_graph_node.baseline rect, .route_node.baseline { stroke: #8fa1b1; fill: #f7fafc; }
+    .route_graph_node.selected rect { stroke-width: 3; }
+    .route_graph_fallback { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; padding: 12px; }
+    .route_node { display: grid; gap: 8px; min-height: 110px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fff; }
+    .route_graph_inspector { display: grid; align-content: start; gap: 10px; padding: 14px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .phase_column, .node_stack, .timeline, .finding_list, .trace_overlay, .effect_matrix, .chips, .chat_stack, .tool_grid, .governance_actions, .model_diff_table { display: grid; gap: 9px; }
+    .phase_header, .node_card, .finding, .trace_event, .trace_summary, .effect_row, .chat_message, .tool_chip, .governance_action, .model_diff_row { padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .phase_header span, .node_card span, .trace_summary span, .finding span, .trace_event small, .route_node span, .chat_message span, .tool_chip small, .governance_action span, .model_diff_row span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
     .node_card { display: grid; gap: 8px; min-height: 116px; }
     .node_card div { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .node_card.executed, .node_card.exact { border-color: #94c7b5; background: #f0faf6; }
@@ -399,15 +538,25 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .trace_event.block { border-color: #df9a9a; background: #fff5f5; }
     .effect_row { display: grid; grid-template-columns: minmax(140px, 1.1fr) minmax(140px, 1fr) minmax(130px, 1fr) minmax(100px, 0.7fr) max-content; gap: 10px; align-items: center; }
     .effect_row.header { color: #66727c; background: #f3f6f8; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .model_diff_row { display: grid; grid-template-columns: minmax(150px, 0.8fr) repeat(3, minmax(150px, 1fr)); gap: 10px; align-items: start; }
+    .model_diff_row.header { color: #66727c; background: #f3f6f8; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .trace_summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: start; }
     .trace_summary span { grid-column: 2; }
+    .assistant_panel h3 { margin-top: 14px; }
+    .assistant_prompt { padding: 10px; border-left: 3px solid #8fa1b1; background: #f8fafb; font-size: 13px; }
+    .chat_message { display: grid; gap: 5px; }
+    .chat_message.operator { border-color: #8fa1b1; background: #f7fafc; }
+    .chat_message.assistant { border-color: #94c7b5; background: #f0faf6; }
+    .tool_grid { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+    .tool_chip { display: grid; gap: 4px; }
+    .governance_action { display: grid; grid-template-columns: max-content minmax(220px, 0.5fr) minmax(0, 1fr); gap: 10px; align-items: center; }
     .badge { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; padding: 3px 8px; border: 1px solid #cad4dc; border-radius: 999px; color: #33414c; background: #f5f7f9; font-size: 12px; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
     .badge.exact, .badge.executed, .badge.passed, .badge.pass { border-color: #94c7b5; color: #1c654f; background: #edf8f3; }
     .badge.declared, .badge.inferred, .badge.inconclusive, .badge.warning, .badge.warn { border-color: #d9bd72; color: #73570d; background: #fff7df; }
     .badge.opaque, .badge.failed, .badge.block, .badge.conflicting { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
     pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
-    @media (max-width: 980px) { .shell, .split { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } }
+    @media (max-width: 980px) { .shell, .split, .dashboard_grid, .route_graph_workbench { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event, .model_diff_row, .governance_action { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } }
     """
   end
 
@@ -443,11 +592,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   defp normalize_mode(mode) when mode in @modes, do: mode
-  defp normalize_mode(_), do: "phase_map"
+  defp normalize_mode(_), do: "route_graph"
 
   defp path(pattern_id, mode), do: "/policies/#{pattern_id}/#{mode}"
 
   defp mode_label("phase_map"), do: "Phase map"
+  defp mode_label("route_graph"), do: "Route graph"
   defp mode_label("effect_matrix"), do: "Effect matrix"
   defp mode_label("trace_overlay"), do: "Trace overlay"
 

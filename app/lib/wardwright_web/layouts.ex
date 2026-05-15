@@ -14,6 +14,7 @@ defmodule WardwrightWeb.Layouts do
         <style>
           <%= WardwrightWeb.PolicyProjectionLive.styles() %>
         </style>
+        <script defer src="/assets/policy_workbench.js"></script>
       </head>
       <body>
         <main class="shell">

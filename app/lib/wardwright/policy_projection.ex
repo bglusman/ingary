@@ -38,6 +38,10 @@ defmodule Wardwright.PolicyProjection do
       "projection_schema" => "wardwright.policy_projection.v1",
       "artifact" => artifact(pattern, config),
       "engine" => engine(pattern["id"]),
+      "route_graph_overlay" => route_graph_overlay(pattern["id"], config),
+      "model_policy_differences" => model_policy_differences(pattern["id"], config),
+      "assistant_contract" => assistant_contract(),
+      "governance_actions" => governance_actions(pattern["id"]),
       "phases" => phases(pattern["id"], config),
       "effects" => effects(pattern["id"]),
       "conflicts" => conflicts(pattern["id"]),
@@ -122,6 +126,304 @@ defmodule Wardwright.PolicyProjection do
         "can_emit_source_spans" => false
       }
     }
+  end
+
+  defp route_graph_overlay(pattern_id, config) do
+    route_graph = route_graph(config)
+    root_id = route_graph["root"]
+    nodes = Map.get(route_graph, "nodes", [])
+    policy = route_policy_overlay(pattern_id, config)
+
+    %{
+      "root" => root_id,
+      "nodes" =>
+        Enum.map(nodes, fn node ->
+          node
+          |> Map.take(["id", "type", "strategy", "targets", "provider_id", "upstream_model_id"])
+          |> Map.put("label", route_node_label(node))
+          |> Map.put("policy_state", route_node_policy_state(node, policy))
+          |> Map.put("policy_note", route_node_policy_note(node, policy))
+        end),
+      "edges" => route_edges(nodes),
+      "policy_overlay" => policy,
+      "receipt_fields" => ["policy_route_constraints", "route_blocked"]
+    }
+  end
+
+  defp route_graph(config) do
+    targets = Map.get(config, "targets", [])
+    target_ids = Enum.map(targets, &route_target_id(&1["model"]))
+
+    %{
+      "root" => Map.get(config, "route_root", "dispatcher.prompt_length"),
+      "nodes" => route_selector_nodes(config, target_ids) ++ route_target_nodes(targets)
+    }
+  end
+
+  defp route_selector_nodes(config, default_target_ids) do
+    dispatchers =
+      config
+      |> Map.get("dispatchers", [])
+      |> case do
+        [] -> [%{"id" => "dispatcher.prompt_length", "models" => default_target_ids}]
+        configured -> configured
+      end
+      |> Enum.map(fn dispatcher ->
+        %{
+          "id" => dispatcher["id"],
+          "type" => "dispatcher",
+          "targets" => selector_target_ids(dispatcher, "models"),
+          "strategy" => "smallest_context_window"
+        }
+      end)
+
+    cascades =
+      config
+      |> Map.get("cascades", [])
+      |> Enum.map(fn cascade ->
+        %{
+          "id" => cascade["id"],
+          "type" => "cascade",
+          "targets" => selector_target_ids(cascade, "models"),
+          "strategy" => "ordered_fallback"
+        }
+      end)
+
+    alloys =
+      config
+      |> Map.get("alloys", [])
+      |> Enum.map(fn alloy ->
+        %{
+          "id" => alloy["id"],
+          "type" => "alloy",
+          "targets" => selector_target_ids(alloy, "constituents"),
+          "strategy" => Map.get(alloy, "strategy", "weighted")
+        }
+      end)
+
+    dispatchers ++ cascades ++ alloys
+  end
+
+  defp route_target_nodes(targets) do
+    Enum.map(targets, fn target ->
+      %{
+        "id" => route_target_id(target["model"]),
+        "type" => "concrete_model",
+        "provider_id" => target["model"] |> String.split("/", parts: 2) |> List.first(),
+        "upstream_model_id" => target["model"]
+      }
+    end)
+  end
+
+  defp selector_target_ids(selector, key) do
+    selector
+    |> Map.get(key, Map.get(selector, "targets", []))
+    |> Enum.map(fn
+      model when is_binary(model) -> route_target_id(model)
+      %{"model" => model} -> route_target_id(model)
+      other -> route_target_id(to_string(other))
+    end)
+  end
+
+  defp route_target_id(model), do: String.replace(to_string(model), "/", ".")
+
+  defp route_policy_overlay("route-privacy", _config) do
+    %{
+      "constraint" => "restrict_routes",
+      "allowed_targets" => ["local"],
+      "blocked_targets" => ["managed"],
+      "forced_model" => nil,
+      "outcome" => "managed cloud candidates removed before provider selection",
+      "receipt_preview" => %{
+        "policy_route_constraints" => %{"allowed_targets" => ["local"]},
+        "route_blocked" => false
+      }
+    }
+  end
+
+  defp route_policy_overlay("ambiguous-success", _config) do
+    %{
+      "constraint" => "block",
+      "allowed_targets" => [],
+      "blocked_targets" => [],
+      "forced_model" => nil,
+      "outcome" => "route graph is unchanged; final output can be held for operator review",
+      "receipt_preview" => %{
+        "policy_route_constraints" => %{},
+        "route_blocked" => false
+      }
+    }
+  end
+
+  defp route_policy_overlay(_pattern_id, _config) do
+    %{
+      "constraint" => "reroute",
+      "allowed_targets" => [],
+      "blocked_targets" => [],
+      "forced_model" => Wardwright.managed_model(),
+      "outcome" => "retry path may switch model after the deterministic stream guard fires",
+      "receipt_preview" => %{
+        "policy_route_constraints" => %{"forced_model" => Wardwright.managed_model()},
+        "route_blocked" => false
+      }
+    }
+  end
+
+  defp route_node_label(%{"upstream_model_id" => model}), do: model
+  defp route_node_label(%{"id" => id}), do: id
+
+  defp route_node_policy_state(%{"upstream_model_id" => model}, %{"forced_model" => forced_model})
+       when is_binary(forced_model) do
+    if model == forced_model, do: "forced", else: "bypassed"
+  end
+
+  defp route_node_policy_state(%{"upstream_model_id" => model}, %{"blocked_targets" => blocked})
+       when blocked != [] do
+    provider = model |> String.split("/", parts: 2) |> List.first()
+
+    if provider in blocked, do: "constrained", else: "eligible"
+  end
+
+  defp route_node_policy_state(%{"type" => type}, _policy)
+       when type in ["dispatcher", "cascade", "alloy"],
+       do: "baseline"
+
+  defp route_node_policy_state(_node, _policy), do: "eligible"
+
+  defp route_node_policy_note(%{"upstream_model_id" => model}, %{"blocked_targets" => blocked})
+       when blocked != [] do
+    provider = model |> String.split("/", parts: 2) |> List.first()
+
+    if provider in blocked do
+      "removed by restrict_routes"
+    else
+      "kept as policy-eligible candidate"
+    end
+  end
+
+  defp route_node_policy_note(%{"upstream_model_id" => model}, %{"forced_model" => forced_model})
+       when is_binary(forced_model) do
+    if model == forced_model,
+      do: "forced by policy override",
+      else: "not selected by forced model"
+  end
+
+  defp route_node_policy_note(%{"type" => type}, %{"constraint" => constraint})
+       when type in ["dispatcher", "cascade", "alloy"] do
+    "baseline #{type}; overlay action #{constraint}"
+  end
+
+  defp route_node_policy_note(_node, _policy), do: "baseline candidate"
+
+  defp route_edges(nodes) do
+    nodes
+    |> Enum.flat_map(fn node ->
+      node
+      |> Map.get("targets", [])
+      |> Enum.map(fn target -> %{"from" => node["id"], "to" => target, "kind" => "baseline"} end)
+    end)
+  end
+
+  defp model_policy_differences("route-privacy", _config) do
+    [
+      %{
+        "model" => Wardwright.local_model(),
+        "baseline" => "eligible local fallback",
+        "policy_overlay" => "kept by restrict_routes allowed_targets=local",
+        "receipt_effect" => "selected unless prompt exceeds context window"
+      },
+      %{
+        "model" => Wardwright.managed_model(),
+        "baseline" => "eligible for larger prompts",
+        "policy_overlay" => "removed when private-data-risk lacks approval",
+        "receipt_effect" => "appears in skipped with policy_route_gate reason"
+      }
+    ]
+  end
+
+  defp model_policy_differences("ambiguous-success", _config) do
+    [
+      %{
+        "model" => Wardwright.local_model(),
+        "baseline" => "normal route candidate",
+        "policy_overlay" => "unchanged by output finalizing policy",
+        "receipt_effect" => "receipt receives alert annotation only"
+      },
+      %{
+        "model" => Wardwright.managed_model(),
+        "baseline" => "normal route candidate",
+        "policy_overlay" => "unchanged by output finalizing policy",
+        "receipt_effect" => "receipt receives alert annotation only"
+      }
+    ]
+  end
+
+  defp model_policy_differences(_pattern_id, _config) do
+    [
+      %{
+        "model" => Wardwright.local_model(),
+        "baseline" => "first candidate for small prompts",
+        "policy_overlay" => "may be bypassed after retry arbitration",
+        "receipt_effect" => "retry event records the stream policy trigger"
+      },
+      %{
+        "model" => Wardwright.managed_model(),
+        "baseline" => "fallback for larger prompts",
+        "policy_overlay" => "mock reroute target after stream guard trigger",
+        "receipt_effect" => "policy_route_constraints forced_model preview"
+      }
+    ]
+  end
+
+  defp assistant_contract do
+    %{
+      "status" => "mocked_static_contract",
+      "source_of_truth" => "deterministic_policy_artifact",
+      "prompt" =>
+        "Help operators understand projection evidence and propose draft policy changes. Never treat simulation output as authority; validate every suggestion against the deterministic artifact before activation.",
+      "tools" => [
+        tool(
+          "explain_projection",
+          "Summarize projection nodes, effects, conflicts, and opaque regions."
+        ),
+        tool("simulate_policy", "Run a named scenario against the compiled policy projection."),
+        tool("propose_rule_change", "Draft a policy artifact patch for operator review only."),
+        tool("inspect_receipt", "Read receipt policy fields, skipped routes, and final status."),
+        tool(
+          "inspect_route_plan",
+          "Inspect baseline route candidates and policy route constraints."
+        ),
+        tool("validate_policy_artifact", "Check normalized artifact shape before any activation.")
+      ]
+    }
+  end
+
+  defp tool(name, description), do: %{"name" => name, "description" => description}
+
+  defp governance_actions("route-privacy") do
+    [
+      %{
+        "id" => "agent-escalation.private-route-exception",
+        "kind" => "agent_escalation",
+        "activation" => "simulation_invocation_only",
+        "summary" =>
+          "Mock an escalation packet when local-only routing would block a request that claims an urgent cloud exception.",
+        "distinct_from_deterministic_actions" => true
+      }
+    ]
+  end
+
+  defp governance_actions(_pattern_id) do
+    [
+      %{
+        "id" => "agent-escalation.policy-review",
+        "kind" => "agent_escalation",
+        "activation" => "simulation_invocation_only",
+        "summary" =>
+          "Mock a review handoff for ambiguous evidence; the compiled artifact still owns allow, reroute, retry, and block behavior.",
+        "distinct_from_deterministic_actions" => true
+      }
+    ]
   end
 
   defp phases("ambiguous-success", _config) do
