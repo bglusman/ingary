@@ -142,6 +142,54 @@ defmodule WardwrightTest do
              2
   end
 
+  test "history threshold uses safe defaults for blank operator-facing fields" do
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 8, "recent_limit" => 8})
+      |> Map.put("governance", [
+        %{
+          "id" => "repeat-tool",
+          "kind" => "history_threshold",
+          "action" => "annotate",
+          "cache_kind" => "tool_call",
+          "cache_key" => "shell:ls",
+          "cache_scope" => "session_id",
+          "threshold" => 0,
+          "message" => "",
+          "severity" => ""
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    assert call(:post, "/v1/policy-cache/events", %{
+             kind: "tool_call",
+             key: "shell:ls",
+             scope: %{session_id: "session-a"}
+           }).status == 201
+
+    conn =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
+        [{"x-wardwright-session-id", "session-a"}]
+      )
+
+    action =
+      get_in(Jason.decode!(conn.resp_body), [
+        "receipt",
+        "decision",
+        "policy_actions",
+        Access.at(0)
+      ])
+
+    assert action["message"] == "policy cache threshold matched"
+    assert action["severity"] == "info"
+    assert action["threshold"] == 1
+    assert action["history_count"] == 1
+  end
+
   test "lists flat and prefixed public models" do
     conn = call(:get, "/v1/models")
     assert conn.status == 200
@@ -342,6 +390,75 @@ defmodule WardwrightTest do
              )
   end
 
+  test "structured schema and semantic validation fail closed for boundary violations" do
+    config = structured_policy_config([~s({"answer":"unused","confidence":0.95})], 3)
+
+    for invalid_output <- [
+          ~s({"answer":"extra field","confidence":0.95,"debug":true}),
+          ~s({"answer":"too high","confidence":1.01}),
+          ~s({"answer":"","confidence":0.95}),
+          ~s({"answer":"bad citation","confidence":0.95,"citations":[123]})
+        ] do
+      assert {:error, "schema_validation", "structured-json"} =
+               Wardwright.Policy.StructuredOutput.validate_output(
+                 invalid_output,
+                 config["structured_output"]
+               )
+    end
+
+    invalid_path_config =
+      config
+      |> get_in(["structured_output"])
+      |> put_in(["semantic_rules"], [
+        %{
+          "id" => "confidence-pointer-required",
+          "kind" => "json_path_number",
+          "path" => "confidence",
+          "gte" => 0.7
+        }
+      ])
+
+    assert {:error, "semantic_validation", "confidence-pointer-required"} =
+             Wardwright.Policy.StructuredOutput.validate_output(
+               ~s({"answer":"valid","confidence":0.95}),
+               invalid_path_config
+             )
+  end
+
+  test "structured semantic rules traverse nested JSON pointer paths" do
+    config =
+      structured_policy_config([~s({"answer":"unused","confidence":0.95})], 3)
+      |> get_in(["structured_output"])
+      |> put_in(["schemas"], %{
+        "nested_answer_v1" => %{
+          "type" => "object",
+          "required" => ["answer"],
+          "properties" => %{},
+          "additionalProperties" => true
+        }
+      })
+      |> put_in(["semantic_rules"], [
+        %{
+          "id" => "nested-minimum-confidence",
+          "kind" => "json_path_number",
+          "path" => "/answer/confidence",
+          "gte" => 0.7
+        }
+      ])
+
+    assert {:error, "semantic_validation", "nested-minimum-confidence"} =
+             Wardwright.Policy.StructuredOutput.validate_output(
+               ~s({"answer":{"text":"too uncertain","confidence":0.2}}),
+               config
+             )
+
+    assert {:ok, "nested_answer_v1", _parsed} =
+             Wardwright.Policy.StructuredOutput.validate_output(
+               ~s({"answer":{"text":"confident","confidence":0.91}}),
+               config
+             )
+  end
+
   test "structured guard honors integer attempt budgets exactly" do
     config =
       structured_policy_config(["{not json"], 5)
@@ -450,6 +567,52 @@ defmodule WardwrightTest do
     body = Jason.decode!(conn.resp_body)
     assert get_in(body, ["wardwright", "status"]) == "policy_failed_closed"
     assert [%{"outcome" => "failed_closed"}] = get_in(body, ["wardwright", "alert_delivery"])
+  end
+
+  test "successful alert delivery records queued receipts without failing closed" do
+    config =
+      unit_policy_config()
+      |> Map.put("alert_delivery", %{"capacity" => 4, "on_full" => "fail_closed"})
+      |> Map.put("governance", [
+        %{
+          "id" => "always-alert",
+          "kind" => "request_guard",
+          "action" => "alert_async",
+          "contains" => "alert me",
+          "message" => "operator review requested",
+          "severity" => "warning"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "alert me"}]
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert [
+             %{
+               "outcome" => "queued",
+               "rule_id" => "always-alert",
+               "idempotency_key" => ":always-alert:operator review requested:warning"
+             }
+           ] = get_in(body, ["wardwright", "alert_delivery"])
+
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert [
+             %{
+               "type" => "policy.alert",
+               "rule_id" => "always-alert",
+               "message" => "operator review requested",
+               "severity" => "warning"
+             }
+           ] = get_in(receipt, ["final", "events"])
   end
 
   test "alert fail-closed blocks streaming and simulation paths consistently" do

@@ -127,7 +127,9 @@ defmodule Wardwright.Policy.StructuredOutput do
         MapSet.subset?(MapSet.new(Map.keys(parsed)), allowed)
 
     properties_ok? =
-      Enum.all?(parsed, fn {key, value} -> property_valid?(value, properties[key]) end)
+      Enum.all?(properties, fn {key, property_schema} ->
+        not Map.has_key?(parsed, key) or property_valid?(parsed[key], property_schema)
+      end)
 
     required_ok? and additional_ok? and properties_ok?
   end

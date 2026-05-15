@@ -106,6 +106,51 @@ defmodule Wardwright.RuntimeVisibilityTest do
            )
   end
 
+  test "chat requests with malformed metadata still read session visibility headers" do
+    session_id = "runtime-session-#{System.unique_integer([:positive])}"
+    model_topic = Events.topic(:model, "coding-balanced", "2026-05-13.mock")
+    assert :ok = Events.subscribe(model_topic)
+
+    conn =
+      call(
+        :post,
+        "/v1/chat/completions",
+        %{
+          model: "coding-balanced",
+          messages: [%{role: "user", content: "hello with malformed metadata"}],
+          metadata: "not-a-map"
+        },
+        [{"x-wardwright-session-id", session_id}]
+      )
+
+    assert conn.status == 200
+
+    assert_receive {:wardwright_runtime_event, ^model_topic,
+                    %{
+                      "type" => "session.started",
+                      "session_id" => ^session_id,
+                      "sequence" => 1
+                    }}
+
+    assert_receive {:wardwright_runtime_event, ^model_topic,
+                    %{
+                      "type" => "route.selected",
+                      "session_id" => ^session_id,
+                      "sequence" => 2
+                    }}
+
+    status =
+      :get
+      |> call("/admin/runtime")
+      |> then(&Jason.decode!(&1.resp_body))
+
+    assert Enum.any?(
+             status["sessions"],
+             &(&1["model_id"] == "coding-balanced" and &1["session_id"] == session_id and
+                 &1["event_count"] == 3)
+           )
+  end
+
   test "model runtime crash restarts without stopping another model session" do
     model_a = "runtime-model-a-#{System.unique_integer([:positive])}"
     model_b = "runtime-model-b-#{System.unique_integer([:positive])}"
