@@ -218,6 +218,13 @@ needed to detect split literal or regex matches. If any active stream rule omits
 a horizon, the evaluator keeps the older full-buffer behavior so an unbounded
 rule cannot accidentally miss a cross-chunk trigger.
 
+The evaluator now exposes the same behavior as an incremental arbiter:
+initialize state for a ruleset, consume one normalized provider chunk, receive
+the newly releasable output chunks for that step, and finish the stream to flush
+the held suffix. This gives the router a deterministic policy boundary for a
+future implementation that sends SSE while continuing to enforce the holdback
+window.
+
 The current HTTP route still evaluates the provider stream before deciding
 between SSE success and fail-closed JSON. Mid-stream policy cancellation, partial
 release followed by abort/retry, latency budgets, and raw provider-event offsets

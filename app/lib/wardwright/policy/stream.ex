@@ -7,27 +7,59 @@ defmodule Wardwright.Policy.Stream do
 
   def evaluate(chunks, rules, opts) when is_list(chunks) and is_list(rules) do
     chunks
-    |> Enum.with_index()
-    |> Enum.reduce_while(initial_result(rules, opts), fn {chunk, index}, result ->
-      stream_window = result.stream_buffer <> chunk
+    |> Enum.reduce_while(start(rules, opts), fn chunk, result ->
+      case consume(result, chunk) do
+        {:cont, result, _released_chunks} ->
+          {:cont, result}
 
-      case matching_rule(chunk, stream_window, rules) do
+        {:halt, result, _released_chunks} ->
+          {:halt, result}
+      end
+    end)
+    |> finish()
+    |> elem(0)
+  end
+
+  def evaluate(chunks, _rules, opts), do: evaluate(chunks, [], opts)
+
+  def start(rules, opts \\ []) when is_list(rules) do
+    initial_result(rules, opts)
+  end
+
+  def consume(%{status: status} = result, _chunk) when status != "completed" do
+    {:halt, result, []}
+  end
+
+  def consume(result, chunk) when is_map(result) do
+    before_chunks = result.chunks
+    chunk_index = Map.get(result, :next_chunk_index, 0)
+    stream_window = result.stream_buffer <> chunk
+
+    {control, result} =
+      case matching_rule(chunk, stream_window, result.rules) do
         nil ->
           {:cont, append_unmatched_chunk(result, chunk, stream_window)}
 
         {rule, match_scope} ->
-          apply_rule(result, chunk, stream_window, index, rule, match_scope)
+          apply_rule(result, chunk, stream_window, chunk_index, rule, match_scope)
       end
-    end)
-    |> finalize_result()
+
+    result = Map.put(result, :next_chunk_index, chunk_index + 1)
+    {control, result, released_since(before_chunks, result.chunks)}
   end
 
-  def evaluate(chunks, _rules, opts), do: evaluate(chunks, [], opts)
+  def finish(result) when is_map(result) do
+    before_chunks = result.chunks
+    result = finalize_result(result)
+    {result, released_since(before_chunks, result.chunks)}
+  end
 
   defp initial_result(rules, opts) do
     %{
       status: "completed",
       chunks: [],
+      rules: rules,
+      next_chunk_index: 0,
       trigger_count: 0,
       action: nil,
       events: [],
@@ -230,6 +262,10 @@ defmodule Wardwright.Policy.Stream do
 
   defp maybe_append_released_chunk(result, released_chunk),
     do: Map.update!(result, :chunks, &(&1 ++ [released_chunk]))
+
+  defp released_since(before_chunks, after_chunks) do
+    Enum.drop(after_chunks, length(before_chunks))
+  end
 
   defp add_released_bytes(result, ""), do: result
 

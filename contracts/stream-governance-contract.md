@@ -67,6 +67,11 @@ window stays available for split-boundary matching. If any active rule omits a
 horizon, the evaluator keeps the older full-buffer behavior so it does not
 pretend an unbounded rule is safe to stream past.
 
+The evaluator also exposes an incremental arbiter API: initialize policy state,
+consume one normalized provider chunk, receive the newly releasable text chunks,
+and finish the stream to flush any remaining held suffix. That API is the
+contract boundary for the future router/runtime streaming state machine.
+
 Streaming TTSR still needs a router/runtime streaming state machine for
 provider-specific cancellation and restart while bytes are being sent to the
 client. Until that lands, live provider streams are parsed and evaluated before
