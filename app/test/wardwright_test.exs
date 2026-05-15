@@ -1168,6 +1168,8 @@ defmodule WardwrightTest do
     assert get_in(body, ["wardwright", "status"]) == "stream_policy_blocked"
     assert get_in(body, ["wardwright", "selected_model"]) == "tiny/model"
     assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+    assert get_in(body, ["wardwright", "stream_policy", "generated_bytes"]) > 0
+    assert get_in(body, ["wardwright", "stream_policy", "held_bytes"]) > 0
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
     receipt = Wardwright.ReceiptStore.get(receipt_id)
@@ -1215,6 +1217,196 @@ defmodule WardwrightTest do
                "match_scope" => "stream_window"
              }
            ] = get_in(body, ["wardwright", "stream_policy", "events"])
+  end
+
+  test "stream policy retry_with_reminder restarts generation before release" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{
+          "mock_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        },
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["status"] == "completed"
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["max_retries"] == 1
+    assert stream_policy["released_to_consumer"] == true
+    assert stream_policy["released_bytes"] > 0
+    assert stream_policy["held_bytes"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "generated_bytes" => generated_bytes,
+               "held_bytes" => held_bytes
+             },
+             %{"status" => "completed", "released_to_consumer" => true}
+           ] = stream_policy["attempts"]
+
+    assert held_bytes > 0
+    assert generated_bytes > 0
+
+    assert [
+             %{
+               "type" => "stream_policy.triggered",
+               "rule_id" => "deprecated-client-retry",
+               "action" => "retry_with_reminder"
+             },
+             %{
+               "type" => "attempt.retry_requested",
+               "rule_id" => "deprecated-client-retry",
+               "retry_count" => 1,
+               "reminder" => "Use NewClient instead."
+             }
+           ] = stream_policy["events"]
+  end
+
+  test "stream policy retry budget exhaustion keeps violating bytes unreleased" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-budget",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{
+          "mock_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["still OldClient(", "arg) now"]
+          ]
+        },
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_retry_required"
+    assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+    refute conn.resp_body =~ "data:"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["max_retries"] == 1
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["held_bytes"] > 0
+    assert stream_policy["generated_bytes"] > 0
+    assert stream_policy["released_bytes"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "generated_bytes" => first_attempt_bytes
+             },
+             %{
+               "status" => "stream_policy_retry_required",
+               "released_to_consumer" => false,
+               "generated_bytes" => second_attempt_bytes
+             }
+           ] = stream_policy["attempts"]
+
+    assert first_attempt_bytes > 0
+    assert second_attempt_bytes > 0
+  end
+
+  test "stream policy retry budgets are scoped to the triggered rule" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "deprecated-client-no-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 0
+        },
+        %{
+          "id" => "unrelated-generous-retry",
+          "contains" => "OtherClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use ThirdClient instead.",
+          "max_retries" => 3
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{
+          "mock_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        },
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["wardwright", "stream_policy", "max_retries"]) == 0
+    assert get_in(body, ["wardwright", "stream_policy", "retry_count"]) == 0
+    assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "action" => "retry_with_reminder",
+               "released_to_consumer" => false
+             }
+           ] = get_in(receipt, ["final", "stream_policy", "attempts"])
   end
 
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do

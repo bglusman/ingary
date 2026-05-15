@@ -344,10 +344,7 @@ defmodule Wardwright.Router do
 
   defp provider_outcome(request, decision, false) when is_map(request) do
     if Map.get(request, "stream") == true do
-      stream_policy =
-        request
-        |> stream_chunks(decision)
-        |> Wardwright.Policy.Stream.evaluate(Wardwright.current_config()["stream_rules"] || [])
+      stream_policy = evaluate_stream_policy(request, decision)
 
       %{
         content: nil,
@@ -658,7 +655,15 @@ defmodule Wardwright.Router do
       "trigger_count" => stream_policy.trigger_count,
       "action" => stream_policy.action,
       "events" => stream_policy.events,
-      "released_to_consumer" => stream_policy.released_to_consumer
+      "released_to_consumer" => stream_policy.released_to_consumer,
+      "retry_count" => Map.get(stream_policy, :retry_count, 0),
+      "max_retries" => Map.get(stream_policy, :max_retries, 0),
+      "attempts" => Map.get(stream_policy, :attempts, []),
+      "generated_bytes" => Map.get(stream_policy, :generated_bytes, 0),
+      "released_bytes" => Map.get(stream_policy, :released_bytes, 0),
+      "held_bytes" => Map.get(stream_policy, :held_bytes, 0),
+      "rewritten_bytes" => Map.get(stream_policy, :rewritten_bytes, 0),
+      "blocked_bytes" => Map.get(stream_policy, :blocked_bytes, 0)
     }
   end
 
@@ -723,7 +728,7 @@ defmodule Wardwright.Router do
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
 
-    chunks = chunks || stream_chunks(request, decision)
+    chunks = chunks || stream_chunks(request, decision, 0)
 
     conn =
       Enum.reduce(Enum.with_index(chunks), conn, fn {text, index}, acc ->
@@ -743,9 +748,103 @@ defmodule Wardwright.Router do
     conn
   end
 
-  defp stream_chunks(request, decision) do
+  defp evaluate_stream_policy(request, decision) do
+    rules = Wardwright.current_config()["stream_rules"] || []
+
+    evaluate_stream_attempt(request, decision, rules, 0, 0, 0, [], [])
+  end
+
+  defp evaluate_stream_attempt(
+         request,
+         decision,
+         rules,
+         active_retry_budget,
+         attempt_index,
+         retry_count,
+         events,
+         attempts
+       ) do
+    chunks = stream_chunks(request, decision, attempt_index)
+    policy = Wardwright.Policy.Stream.evaluate(chunks, rules, attempt_index: attempt_index)
+    attempt = stream_attempt(policy, attempt_index)
+    events = events ++ policy.events
+    attempts = attempts ++ [attempt]
+
+    trigger_event = List.last(policy.events) || %{}
+    retry_budget = stream_retry_budget(trigger_event, active_retry_budget)
+
+    if policy.status == "stream_policy_retry_required" and retry_count < retry_budget do
+      retry_event = %{
+        "type" => "attempt.retry_requested",
+        "attempt_index" => attempt_index,
+        "next_attempt_index" => attempt_index + 1,
+        "retry_count" => retry_count + 1,
+        "max_retries" => retry_budget,
+        "rule_id" => Map.get(trigger_event, "rule_id"),
+        "reminder" => Map.get(trigger_event, "reminder")
+      }
+
+      evaluate_stream_attempt(
+        request,
+        decision,
+        rules,
+        retry_budget,
+        attempt_index + 1,
+        retry_count + 1,
+        events ++ [reject_blank(retry_event)],
+        attempts
+      )
+    else
+      policy
+      |> Map.put(:events, events)
+      |> Map.put(:attempts, attempts)
+      |> Map.put(:retry_count, retry_count)
+      |> Map.put(:max_retries, retry_budget)
+    end
+  end
+
+  defp stream_attempt(policy, attempt_index) do
+    %{
+      "attempt_index" => attempt_index,
+      "status" => policy.status,
+      "action" => policy.action,
+      "trigger_count" => policy.trigger_count,
+      "released_to_consumer" => policy.released_to_consumer,
+      "generated_bytes" => policy.generated_bytes,
+      "released_bytes" => policy.released_bytes,
+      "held_bytes" => policy.held_bytes,
+      "rewritten_bytes" => policy.rewritten_bytes,
+      "blocked_bytes" => policy.blocked_bytes
+    }
+    |> reject_blank()
+  end
+
+  defp stream_retry_budget(%{"action" => action} = trigger_event, _active_retry_budget)
+       when action in ["retry", "retry_with_reminder"] do
+    trigger_event
+    |> Map.get("max_retries", 1)
+    |> integer_value()
+    |> max(0)
+  end
+
+  defp stream_retry_budget(_trigger_event, active_retry_budget), do: active_retry_budget
+
+  defp stream_chunks(request, decision, attempt_index) do
     mock_chunks =
-      if allow_mock_stream_chunks?(), do: get_in(request, ["metadata", "mock_stream_chunks"])
+      if allow_mock_stream_chunks?() do
+        attempt_chunks = get_in(request, ["metadata", "mock_stream_attempt_chunks"])
+
+        cond do
+          is_list(attempt_chunks) and is_list(Enum.at(attempt_chunks, attempt_index)) ->
+            Enum.at(attempt_chunks, attempt_index)
+
+          attempt_index == 0 ->
+            get_in(request, ["metadata", "mock_stream_chunks"])
+
+          true ->
+            nil
+        end
+      end
 
     case mock_chunks do
       chunks when is_list(chunks) and chunks != [] ->
@@ -762,6 +861,23 @@ defmodule Wardwright.Router do
 
   defp allow_mock_stream_chunks? do
     Application.get_env(:wardwright, :allow_mock_stream_chunks, false)
+  end
+
+  defp integer_value(value) when is_integer(value), do: value
+
+  defp integer_value(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {integer, ""} -> integer
+      _ -> nil
+    end
+  end
+
+  defp integer_value(_value), do: nil
+
+  defp reject_blank(map) do
+    map
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+    |> Map.new()
   end
 
   defp test_config_allowed? do
