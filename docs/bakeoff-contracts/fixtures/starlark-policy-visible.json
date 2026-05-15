@@ -1,8 +1,8 @@
 {
-  "schema": "ingary.bakeoff.visible_starlark_policy.v1",
+  "schema": "wardwright.bakeoff.visible_starlark_policy.v1",
   "input": {
     "request": {
-      "model": "ingary/coding-balanced",
+      "model": "wardwright/coding-balanced",
       "estimated_tokens": 1200,
       "metadata": {"tenant": "example", "session": "s1"}
     },
@@ -35,8 +35,8 @@
     },
     {
       "name": "switch_large_context",
-      "source": "def evaluate(ctx):\n    if ctx[\"request\"][\"estimated_tokens\"] > 1000:\n        return {\"action\": \"switch_model\", \"model\": \"ingary/large-context\", \"reason\": \"large prompt\"}\n    return {\"action\": \"allow\", \"reason\": \"small prompt\"}\n",
-      "expected": {"action": "switch_model", "model": "ingary/large-context"}
+      "source": "def evaluate(ctx):\n    if ctx[\"request\"][\"estimated_tokens\"] > 1000:\n        return {\"action\": \"switch_model\", \"model\": \"wardwright/large-context\", \"reason\": \"large prompt\"}\n    return {\"action\": \"allow\", \"reason\": \"small prompt\"}\n",
+      "expected": {"action": "switch_model", "model": "wardwright/large-context"}
     }
   ],
   "negative_policies": [

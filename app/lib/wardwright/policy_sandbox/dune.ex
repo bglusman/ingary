@@ -1,4 +1,4 @@
-defmodule ElixirIngary.PolicySandbox.Dune do
+defmodule Wardwright.PolicySandbox.Dune do
   @moduledoc """
   Thin Dune adapter for evaluating BEAM-native policy snippets.
 

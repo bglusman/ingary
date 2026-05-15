@@ -1,4 +1,4 @@
-# Ingary Contract Tests
+# Wardwright Contract Tests
 
 `contract_probe.py` is the first shared HTTP contract and fuzz probe for the
 backend prototypes. It intentionally uses only the Python standard library so
@@ -23,7 +23,7 @@ The probe checks:
 - `GET /admin/providers`
 - `GET /admin/storage`
 - `GET /admin/synthetic-models`
-- flat and `ingary/` model namespace variants
+- flat and `wardwright/` model namespace variants
 - caller metadata precedence and receipt provenance
 - basic latency percentiles
 
@@ -94,14 +94,14 @@ Current generated space:
 - threshold requests at each context boundary and one token around it
 - generated stream-rule markers for the pure buffered-horizon oracle
 - generated request-policy markers with `escalate` governance actions
-- fixed caller dimensions supplied through Ingary headers
+- fixed caller dimensions supplied through Wardwright headers
 
 Current asserted properties:
 
 - route selection picks the smallest context window that fits the estimate
 - if no target fits, route selection falls back to the largest context window
 - skipped targets are exactly the smaller windows that could not fit
-- model IDs work in both flat and `ingary/` prefixed namespaces
+- model IDs work in both flat and `wardwright/` prefixed namespaces
 - receipts preserve selected model, skipped count, and caller provenance
 - matching request governance records a policy action, alert count, and
   `policy.alert` event
@@ -176,13 +176,13 @@ observed output as a deterministic mocked-model regression fixture.
 Optional live-LLM smoke tests:
 
 ```bash
-INGARY_LIVE_LLM=1 \
-INGARY_LIVE_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
-INGARY_LIVE_LLM_MODEL=<local-or-remote-model> \
+WARDWRIGHT_LIVE_LLM=1 \
+WARDWRIGHT_LIVE_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
+WARDWRIGHT_LIVE_LLM_MODEL=<local-or-remote-model> \
 uv run pytest -m live_llm tests/test_bakeoff_live_llm_smoke.py
 ```
 
-Set `INGARY_LIVE_LLM_API_KEY` when the target endpoint requires bearer auth.
+Set `WARDWRIGHT_LIVE_LLM_API_KEY` when the target endpoint requires bearer auth.
 
 Bakeoff agents may run or adapt optional live-LLM discovery tests during
 implementation, but they must not run the held-out Python backend oracle. The

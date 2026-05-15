@@ -1,7 +1,7 @@
 [project]
-name = "ingary-shared-tests"
+name = "wardwright-shared-tests"
 version = "0.1.0"
-description = "Shared Python BDD and property tests for Ingary prototype bakeoffs."
+description = "Shared Python BDD and property tests for Wardwright prototype bakeoffs."
 requires-python = ">=3.10"
 dependencies = [
   "hypothesis>=6.146.0",
@@ -13,6 +13,6 @@ dependencies = [
 addopts = "-ra"
 testpaths = ["tests"]
 markers = [
-  "backend: requires a running Ingary backend",
+  "backend: requires a running Wardwright backend",
   "live_llm: optional live model/provider realism checks, not for default CI",
 ]

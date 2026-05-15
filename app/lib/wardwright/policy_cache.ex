@@ -1,4 +1,4 @@
-defmodule ElixirIngary.PolicyCache do
+defmodule Wardwright.PolicyCache do
   @moduledoc false
 
   use Agent

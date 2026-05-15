@@ -1,7 +1,7 @@
-defmodule ElixirIngary.Runtime.Events do
+defmodule Wardwright.Runtime.Events do
   @moduledoc false
 
-  @pubsub ElixirIngary.PubSub
+  @pubsub Wardwright.PubSub
 
   def topic(:models), do: "runtime:models"
   def topic(:receipts), do: "runtime:receipts"
@@ -15,7 +15,7 @@ defmodule ElixirIngary.Runtime.Events do
   def subscribe(topic) when is_binary(topic), do: Phoenix.PubSub.subscribe(@pubsub, topic)
 
   def publish(topic, event) when is_binary(topic) and is_map(event) do
-    Phoenix.PubSub.broadcast(@pubsub, topic, {:ingary_runtime_event, topic, event})
+    Phoenix.PubSub.broadcast(@pubsub, topic, {:wardwright_runtime_event, topic, event})
     event
   end
 

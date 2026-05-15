@@ -7,7 +7,7 @@ description: The product vision and current architecture direction for Wardwrigh
 # Wardwright Vision
 
 Wardwright is a synthetic model platform for agentic systems. A caller asks for a
-stable model name, such as `coding-balanced` or `ingary/json-extractor`; Wardwright
+stable model name, such as `coding-balanced` or `wardwright/json-extractor`; Wardwright
 decides what that name means today, records why, and exposes the result through
 an OpenAI-compatible interface.
 
@@ -110,11 +110,11 @@ Wardwright should work in two deployment shapes:
 
 - **Wardwright as the caller entry point:** agents call Wardwright; Wardwright can use
   LiteLLM, Helicone, OpenRouter, Ollama, or direct provider adapters downstream.
-- **Wardwright behind another gateway:** a gateway exposes `ingary/*` model names;
+- **Wardwright behind another gateway:** a gateway exposes `wardwright/*` model names;
   Wardwright owns those model definitions and calls concrete providers downstream.
 
 The preferred public namespace is flat when Wardwright owns the whole model catalog
-and prefixed, such as `ingary/coding-balanced`, when Wardwright is one provider
+and prefixed, such as `wardwright/coding-balanced`, when Wardwright is one provider
 inside a larger gateway.
 
 ## Implementation Direction

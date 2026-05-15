@@ -1,15 +1,15 @@
-defmodule ElixirIngaryWeb.PolicyProjectionLive do
+defmodule WardwrightWeb.PolicyProjectionLive do
   @moduledoc false
 
-  use Phoenix.LiveView, layout: {ElixirIngaryWeb.Layouts, :root}
+  use Phoenix.LiveView, layout: {WardwrightWeb.Layouts, :root}
 
   @modes ["phase_map", "effect_matrix", "trace_overlay"]
 
   @impl true
   def mount(params, _session, socket) do
     if connected?(socket) do
-      ElixirIngary.Runtime.Events.subscribe(ElixirIngary.Runtime.Events.topic(:models))
-      ElixirIngary.Runtime.Events.subscribe(ElixirIngary.Runtime.Events.topic(:receipts))
+      Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:models))
+      Wardwright.Runtime.Events.subscribe(Wardwright.Runtime.Events.topic(:receipts))
     end
 
     {:ok, assign_projection(socket, params)}
@@ -23,34 +23,34 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
   defp assign_projection(socket, params) do
     pattern_id = normalize_pattern(Map.get(params, "pattern"))
     mode = normalize_mode(Map.get(params, "mode"))
-    projection = ElixirIngary.PolicyProjection.projection(pattern_id)
-    simulations = ElixirIngary.PolicyProjection.simulations(pattern_id)
+    projection = Wardwright.PolicyProjection.projection(pattern_id)
+    simulations = Wardwright.PolicyProjection.simulations(pattern_id)
     selected_node = first_node(projection)
 
     socket
     |> assign(:page_title, "Policy Workbench")
     |> assign(:modes, @modes)
-    |> assign(:patterns, ElixirIngary.PolicyProjection.patterns())
-    |> assign(:selected_pattern, ElixirIngary.PolicyProjection.pattern(pattern_id))
+    |> assign(:patterns, Wardwright.PolicyProjection.patterns())
+    |> assign(:selected_pattern, Wardwright.PolicyProjection.pattern(pattern_id))
     |> assign(:selected_pattern_id, pattern_id)
     |> assign(:mode, mode)
     |> assign(:projection, projection)
     |> assign(:simulations, simulations)
     |> assign(:selected_simulation, List.first(simulations))
     |> assign(:selected_node, selected_node)
-    |> assign_new(:runtime_status, fn -> ElixirIngary.Runtime.status() end)
+    |> assign_new(:runtime_status, fn -> Wardwright.Runtime.status() end)
     |> assign_new(:runtime_events, fn -> [] end)
   end
 
   @impl true
-  def handle_info({:ingary_runtime_event, topic, event}, socket) do
+  def handle_info({:wardwright_runtime_event, topic, event}, socket) do
     event = Map.put(event, "topic", topic)
     events = [event | socket.assigns.runtime_events] |> Enum.take(8)
 
     {:noreply,
      socket
      |> assign(:runtime_events, events)
-     |> assign(:runtime_status, ElixirIngary.Runtime.status())}
+     |> assign(:runtime_status, Wardwright.Runtime.status())}
   end
 
   @impl true
@@ -435,7 +435,7 @@ defmodule ElixirIngaryWeb.PolicyProjectionLive do
   defp normalize_pattern(nil), do: "tts-retry"
 
   defp normalize_pattern(pattern_id) do
-    if Enum.any?(ElixirIngary.PolicyProjection.patterns(), &(&1["id"] == pattern_id)) do
+    if Enum.any?(Wardwright.PolicyProjection.patterns(), &(&1["id"] == pattern_id)) do
       pattern_id
     else
       "tts-retry"

@@ -15,7 +15,7 @@ mix run --no-halt
 The server binds to `127.0.0.1:8787` by default. Override with:
 
 ```bash
-INGARY_BIND=127.0.0.1:8788 mix run --no-halt
+WARDWRIGHT_BIND=127.0.0.1:8788 mix run --no-halt
 ```
 
 Smoke check:
@@ -25,8 +25,8 @@ curl http://127.0.0.1:8787/v1/models
 
 curl -s http://127.0.0.1:8787/v1/chat/completions \
   -H 'content-type: application/json' \
-  -H 'x-ingary-agent-id: smoke-agent' \
-  -d '{"model":"ingary/coding-balanced","messages":[{"role":"user","content":"hello"}]}'
+  -H 'x-wardwright-agent-id: smoke-agent' \
+  -d '{"model":"wardwright/coding-balanced","messages":[{"role":"user","content":"hello"}]}'
 ```
 
 Run tests:
@@ -49,11 +49,11 @@ mix test
 - `GET /admin/synthetic-models`
 
 The public synthetic model is available as both `coding-balanced` and
-`ingary/coding-balanced`. Requests are routed by a simple prompt-length
+`wardwright/coding-balanced`. Requests are routed by a simple prompt-length
 estimate: prompts at or below 32,768 estimated tokens select
 `local/qwen-coder`; larger prompts select `managed/kimi-k2.6`. Chat and
 simulation calls write in-memory receipts and publish runtime visibility events
-through Phoenix PubSub. Caller context is extracted from `X-Ingary-*` and
+through Phoenix PubSub. Caller context is extracted from `X-Wardwright-*` and
 `X-Client-Request-Id` headers first, then from request `metadata`.
 
 ## BEAM Direction

@@ -1,18 +1,18 @@
 ---
 layout: default
-title: Ingary Extraction
+title: Wardwright Extraction
 ---
 
-# RFC: Ingary Extraction
+# RFC: Wardwright Extraction
 
 Status: Draft for critique
 
-Project name: Ingary
+Project name: Wardwright
 
 ## Purpose
 
 Extract Calciforge's synthetic model idea into a standalone product and
-library named Ingary. Calciforge should become the first consumer, but Ingary must
+library named Wardwright. Calciforge should become the first consumer, but Wardwright must
 stand on its own as a lighter, less Calciforge-opinionated model control plane
 with an OpenAI-compatible HTTP API, a Rust API, provider-adapter boundaries,
 stream governance, receipts, and a UI for understanding and editing model
@@ -230,15 +230,15 @@ Receipts must include:
 Proposed Rust workspace:
 
 ```text
-ingary/
+wardwright/
   crates/
-    ingary-core/           # route graph, validation, planner, receipts
-    ingary-policy/         # declarative policy + bounded policy VM
-    ingary-stream/         # stream event normalization and ring buffers
-    ingary-adapters/       # provider adapter traits and built-in adapters
-    ingary-gateway/        # HTTP server, auth, persistence, OpenAI compat
-    ingary-ui/             # web UI app
-    ingary-cli/            # config validation, simulation, local admin
+    wardwright-core/           # route graph, validation, planner, receipts
+    wardwright-policy/         # declarative policy + bounded policy VM
+    wardwright-stream/         # stream event normalization and ring buffers
+    wardwright-adapters/       # provider adapter traits and built-in adapters
+    wardwright-gateway/        # HTTP server, auth, persistence, OpenAI compat
+    wardwright-ui/             # web UI app
+    wardwright-cli/            # config validation, simulation, local admin
 ```
 
 Names are placeholders. If the product name does not abbreviate cleanly, use
@@ -284,7 +284,7 @@ headers and/or request metadata. The gateway should also preserve a stable
 anonymous caller ID when the deployment cannot or should not know the human
 user.
 
-Calciforge integration can start by using `ingary-core` and `ingary-adapters`
+Calciforge integration can start by using `wardwright-core` and `wardwright-adapters`
 directly. Later, Calciforge can call the standalone HTTP boundary if that
 becomes the cleaner deployment shape.
 
@@ -317,8 +317,8 @@ Identity source priority:
 1. Trusted server-side auth context: API key, mTLS identity, OIDC/JWT claim, or
    deployment-owned reverse proxy header.
 2. Product-owned explicit headers, for clients that can set them:
-   `X-Ingary-Tenant-Id`, `X-Ingary-Application-Id`, `X-Ingary-Agent-Id`,
-   `X-Ingary-User-Id`, `X-Ingary-Session-Id`, `X-Ingary-Run-Id`, and
+   `X-Wardwright-Tenant-Id`, `X-Wardwright-Application-Id`, `X-Wardwright-Agent-Id`,
+   `X-Wardwright-User-Id`, `X-Wardwright-Session-Id`, `X-Wardwright-Run-Id`, and
    `X-Client-Request-Id`.
 3. Request-body metadata when the client or SDK supports it.
 4. Provider/gateway metadata from an upstream boundary such as LiteLLM team,
@@ -446,22 +446,22 @@ json-extractor-cheap
 Recommended names when another gateway owns a shared model namespace:
 
 ```text
-ingary/coding-balanced
-ingary/local-first-private
-ingary/json-extractor-cheap
+wardwright/coding-balanced
+wardwright/local-first-private
+wardwright/json-extractor-cheap
 ```
 
 Non-goal:
 
 - Do not register every concrete model as a separate public provider/model by
-  default. That makes Ingary look like a provider catalog and weakens the
+  default. That makes Wardwright look like a provider catalog and weakens the
   synthetic model abstraction.
 
 ### Topology A: Synthetic Platform In Front
 
 ```text
 client / agent
-  -> Ingary
+  -> Wardwright
   -> LiteLLM / Helicone / OpenRouter / internal gateway
   -> model provider
 ```
@@ -504,7 +504,7 @@ Model namespace recommendation:
 ```text
 client / agent
   -> LiteLLM / Helicone / enterprise gateway
-  -> Ingary
+  -> Wardwright
   -> model provider or local runtime
 ```
 
@@ -540,7 +540,7 @@ Model namespace recommendation:
 
 - The front gateway should register the synthetic platform as one
   OpenAI-compatible backend/provider.
-- Prefer a prefixed namespace such as `ingary/coding-balanced` or
+- Prefer a prefixed namespace such as `wardwright/coding-balanced` or
   `synthetic/coding-balanced` when the front gateway's model namespace is
   shared with other providers.
 - A flat model name such as `coding-balanced` is acceptable when the operator
@@ -577,7 +577,7 @@ Tradeoffs:
 
 ```text
 client / agent
-  -> Ingary
+  -> Wardwright
   -> model provider / local runtime
 ```
 
@@ -605,7 +605,7 @@ opinionated:
 - Enterprise recommendation: support running behind the organization's required
   gateway, but require metadata forwarding for useful caller traceability.
 - Namespace recommendation: expose synthetic models as the public unit. Use a
-  prefix such as `ingary/` only when another gateway owns a larger shared model
+  prefix such as `wardwright/` only when another gateway owns a larger shared model
   namespace.
 - Embedded recommendation: use the Rust API for Calciforge and other close
   integrations until the standalone gateway and UI are mature.
@@ -787,7 +787,7 @@ apply backpressure to unrelated runtimes.
 
 ### Policy Demonstration Hypotheses
 
-Ingary should not be positioned as primarily a security product. Security is one
+Wardwright should not be positioned as primarily a security product. Security is one
 useful demonstration category, especially because failure cost is easy to
 understand, but the broader thesis is that agentic workflows need a separate
 point of control, experimentation, and visibility around otherwise hard-to-
@@ -804,14 +804,14 @@ Candidate demos:
    - Domain: support/refund agent, browser agent, coding agent.
    - Failure: repeated calls to the same tool with equivalent arguments or
      equivalent result hashes.
-   - Ingary action: alert operator, inject a "change tactic" reminder, switch to
+   - Wardwright action: alert operator, inject a "change tactic" reminder, switch to
      a stronger model, or stop with a receipt explaining repeated state.
    - Test signal: same tool/result pair seen N times within a run.
 
 2. **Ambiguous-success governor**
    - Domain: booking, billing, task execution, CI repair.
    - Failure: agent treats partial or empty success as complete.
-   - Ingary action: require structured evidence fields before final answer;
+   - Wardwright action: require structured evidence fields before final answer;
      alert if final answer lacks required observations.
    - Test signal: final answer says done while required receipt fields or tool
      evidence are absent.
@@ -819,7 +819,7 @@ Candidate demos:
 3. **Structured-output repair governor**
    - Domain: extraction, CRM update, ticket triage, workflow automation.
    - Failure: malformed JSON/XML/protobuf-JSON or semantically invalid fields.
-   - Ingary action: buffer output, validate, retry with schema-specific repair
+   - Wardwright action: buffer output, validate, retry with schema-specific repair
      prompt, block after max attempts, record validation errors.
    - Test signal: invalid output never reaches consumer in enforced mode.
 
@@ -827,7 +827,7 @@ Candidate demos:
    - Domain: medical intake, legal intake, financial customer support, internal
      approvals.
    - Failure: confident answer despite missing evidence or low confidence.
-   - Ingary action: page/handoff to human, downgrade to draft answer, or ask for
+   - Wardwright action: page/handoff to human, downgrade to draft answer, or ask for
      missing fields.
    - Test signal: answer contains uncertainty markers, missing required facts,
      or contradictory extracted fields.
@@ -835,14 +835,14 @@ Candidate demos:
 5. **Cost and context budget governor**
    - Domain: coding agents, research agents, long-running analysis jobs.
    - Failure: context saturation, repeated retries, or runaway token spend.
-   - Ingary action: summarize-and-continue, switch model, require operator
+   - Wardwright action: summarize-and-continue, switch model, require operator
      approval, or stop before budget explosion.
    - Test signal: token/tool-call thresholds crossed with no new evidence.
 
 6. **Prompt-management experiment governor**
    - Domain: constrained customer-support or extraction workflows.
    - Failure: one prompt variant works for common cases but fails tail cases.
-   - Ingary action: versioned preamble/postscript, canary prompt variants,
+   - Wardwright action: versioned preamble/postscript, canary prompt variants,
      receipt-level comparison by user/agent/session segment.
    - Test signal: policy receipts show prompt variant, route, structured
      validation result, and downstream outcome.
@@ -851,7 +851,7 @@ Candidate demos:
    - Domain: coding agents, data agents, internal tools.
    - Failure: prompt injection, credential leakage, hidden prompt extraction,
      unsafe tool instructions.
-   - Ingary action: block, rewrite, route to human review, or annotate receipt.
+   - Wardwright action: block, rewrite, route to human review, or annotate receipt.
    - Test signal: known injection/leak markers are caught on input and output.
 
 Human alerting should be a first-class policy action:
@@ -902,7 +902,7 @@ It should not expose:
 
 ### Code-First Visualization Spike
 
-Starlark policy may still be product-grade if Ingary treats visualization as an
+Starlark policy may still be product-grade if Wardwright treats visualization as an
 AST plus trace problem rather than a static-proof problem. Typical policies are
 expected to be small, so a simple visual projection can carry a lot of value:
 
@@ -1001,7 +1001,7 @@ Example:
 
 ## Data Model And Storage
 
-Storage is a product decision, not a replaceable implementation detail. Ingary's
+Storage is a product decision, not a replaceable implementation detail. Wardwright's
 main durable objects are versioned control-plane state and high-volume receipt
 events. Those two workloads have different shapes and should be modeled
 explicitly rather than hidden behind a generic document store.
@@ -1054,7 +1054,7 @@ The matrix should initially look like this:
 | Go | required | candidate | candidate | optional | optional | optional | optional |
 | Elixir | required | candidate | candidate | optional | optional | optional | optional |
 
-The risk is over-abstraction. If the contract hides too much, Ingary loses the
+The risk is over-abstraction. If the contract hides too much, Wardwright loses the
 ability to design good indexes, migrations, and retention jobs. The contract
 therefore defines observable behavior and logical entities; each implementation
 can choose a schema that fits its database engine.
@@ -1483,7 +1483,7 @@ Hub
 | Suggested fix: make block-on-second-violation the on_retry_violation action.   |
 +--------------------------------------------------------------------------------+
 | Draft artifact                                      | Plain-language summary   |
-| kind: ingary.governance.policy                      | Holds 4096 bytes of the  |
+| kind: wardwright.governance.policy                      | Holds 4096 bytes of the  |
 | rules:                                              | stream, watches for      |
 |   - id: no-deprecated-client                        | OldClient(, aborts       |
 |     phase: response.streaming                       | before release, retries  |
@@ -1595,7 +1595,7 @@ Hub
 +--------------------------------------------------------------------------------+
 | Selected: coding-balanced                                                       |
 | Provider roles: small_local_coder, long_context_coder                           |
-| Tested with: Ingary clean Rust, LiteLLM downstream, local Ollama                |
+| Tested with: Wardwright clean Rust, LiteLLM downstream, local Ollama                |
 | Import creates draft only. Map provider roles before simulation or activation.  |
 | [View manifest] [Map providers] [Import as draft] [Run eval pack]              |
 +--------------------------------------------------------------------------------+
@@ -1637,8 +1637,8 @@ Initial prototype pass:
 | Rust clean backend | Axum/Tokio/Serde mock gateway | Strong fit for a reusable core library, Calciforge embedding, streaming safety, and single-binary distribution. More implementation ceremony than Go/Elixir. |
 | Go clean backend | Standard-library `net/http` mock gateway | Strong fit for a boring deployable gateway with small operational footprint. Less compelling for deep policy/stream abstractions than Rust or Elixir. |
 | Elixir clean backend | Plug/Cowboy mock gateway with supervised in-memory receipts | Strong fit for stream governance, backpressure, supervision, provider lifecycles, and graceful degradation. Distribution and Calciforge embedding are weaker than Rust/Go. |
-| LiteLLM foundation spike | Config and namespace evaluation | Do not fork as the first foundation. Use as a downstream provider gateway and optionally as a front gateway that exposes `ingary/*` models. |
-| TensorZero foundation spike | Config and adapter-contract evaluation | Do not fork as the first foundation. Use as an optional downstream/eval/observability engine while Ingary owns synthetic model semantics and stream governance. |
+| LiteLLM foundation spike | Config and namespace evaluation | Do not fork as the first foundation. Use as a downstream provider gateway and optionally as a front gateway that exposes `wardwright/*` models. |
+| TensorZero foundation spike | Config and adapter-contract evaluation | Do not fork as the first foundation. Use as an optional downstream/eval/observability engine while Wardwright owns synthetic model semantics and stream governance. |
 | React frontend prototype | Vite/React/TypeScript mock UI | Good enough to validate catalog, simulator, receipts, caller provenance, provider list, and route graph assumptions against the OpenAPI contract. |
 
 Current backend bias:
@@ -1652,12 +1652,12 @@ Current backend bias:
   minimal runtime assumptions.
 - Do not start by forking LiteLLM or TensorZero. Integrate with them and borrow
   architectural lessons, but keep the synthetic model contract, route receipts,
-  caller provenance, shareable artifacts, and stream governance as Ingary-owned
+  caller provenance, shareable artifacts, and stream governance as Wardwright-owned
   semantics.
 
 ### MVP 1: Headless Core
 
-- `ingary-core` with config parsing, validation, route graph planning, receipts.
+- `wardwright-core` with config parsing, validation, route graph planning, receipts.
 - `dispatcher`, `cascade`, `alias`, and `concrete_model`.
 - Token estimator trait with char/byte estimators.
 - Simulation API.
@@ -1704,7 +1704,7 @@ Exclude initially:
 
 Options to decide at that time:
 
-- Embed `ingary-core` and keep Calciforge's HTTP serving path.
+- Embed `wardwright-core` and keep Calciforge's HTTP serving path.
 - Point Calciforge's provider route to the standalone product.
 - Hybrid: Calciforge embeds planner but delegates receipt UI to standalone
   control plane.
@@ -1713,38 +1713,38 @@ The right answer depends on operational maturity, packaging, and whether the
 new product's gateway is already more robust than Calciforge's internal path.
 
 Near-term recommendation: integrate through Calciforge's existing
-OpenAI-compatible provider-adapter boundary first. Calciforge can treat Ingary
+OpenAI-compatible provider-adapter boundary first. Calciforge can treat Wardwright
 as a downstream OpenAI-compatible backend while Calciforge remains the outer
 agent/security gateway:
 
 ```text
 agent / channel
   -> Calciforge
-  -> Calciforge provider adapter pointed at Ingary /v1
-  -> Ingary synthetic model
-  -> Ingary downstream provider adapter or mock/local model
+  -> Calciforge provider adapter pointed at Wardwright /v1
+  -> Wardwright synthetic model
+  -> Wardwright downstream provider adapter or mock/local model
 ```
 
-This gives real Calciforge traffic to Ingary without ripping out Calciforge's
+This gives real Calciforge traffic to Wardwright without ripping out Calciforge's
 current synthetic model code immediately. It also keeps rollback simple: disable
-the Ingary provider route and return to Calciforge's existing model path.
+the Wardwright provider route and return to Calciforge's existing model path.
 
 Requirements for that bridge:
 
-- Register Ingary as one OpenAI-compatible provider/backend in Calciforge.
+- Register Wardwright as one OpenAI-compatible provider/backend in Calciforge.
 - Send public model names such as `coding-balanced` or
-  `ingary/coding-balanced` to Ingary unchanged.
+  `wardwright/coding-balanced` to Wardwright unchanged.
 - Forward caller traceability headers: tenant, application, consuming agent,
   consuming user, session, run, and client request ID where Calciforge knows
   them.
-- Surface Ingary receipt IDs in Calciforge logs/receipts so a Calciforge run can
-  be correlated with an Ingary route receipt.
+- Surface Wardwright receipt IDs in Calciforge logs/receipts so a Calciforge run can
+  be correlated with an Wardwright route receipt.
 - Avoid duplicating retries/fallbacks in both layers for the same failure class
   until receipt semantics are explicit.
 
-Later, once Ingary has durable storage, stream governance, and real provider
+Later, once Wardwright has durable storage, stream governance, and real provider
 adapters, Calciforge can delete its internal synthetic model implementation and
-either keep calling Ingary over HTTP or embed the Rust/core library if that
+either keep calling Wardwright over HTTP or embed the Rust/core library if that
 becomes the lower-friction path.
 
 ## Requirements
@@ -1927,7 +1927,7 @@ becomes the lower-friction path.
 
 ## Hosted Service And Marketplace Option
 
-Self-hosting should remain the core open-source promise, but a hosted Ingary
+Self-hosting should remain the core open-source promise, but a hosted Wardwright
 service could become a credible sustainability path if the product proves useful
 for sophisticated agent builders.
 

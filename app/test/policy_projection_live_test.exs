@@ -1,12 +1,12 @@
-defmodule ElixirIngary.PolicyProjectionLiveTest do
+defmodule Wardwright.PolicyProjectionLiveTest do
   use ExUnit.Case, async: false
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
 
-  @endpoint ElixirIngaryWeb.Endpoint
+  @endpoint WardwrightWeb.Endpoint
 
   setup_all do
-    original_config = Application.get_env(:elixir_ingary, ElixirIngaryWeb.Endpoint, [])
+    original_config = Application.get_env(:wardwright, WardwrightWeb.Endpoint, [])
 
     endpoint_config =
       Keyword.merge(original_config,
@@ -15,27 +15,27 @@ defmodule ElixirIngary.PolicyProjectionLiveTest do
         secret_key_base: Base.encode64(:crypto.strong_rand_bytes(64))
       )
 
-    Application.put_env(:elixir_ingary, ElixirIngaryWeb.Endpoint, endpoint_config)
-    start_supervised!(ElixirIngaryWeb.Endpoint)
+    Application.put_env(:wardwright, WardwrightWeb.Endpoint, endpoint_config)
+    start_supervised!(WardwrightWeb.Endpoint)
 
     on_exit(fn ->
-      Application.put_env(:elixir_ingary, ElixirIngaryWeb.Endpoint, original_config)
+      Application.put_env(:wardwright, WardwrightWeb.Endpoint, original_config)
     end)
 
     :ok
   end
 
   setup do
-    ElixirIngary.reset_config()
-    ElixirIngary.ReceiptStore.clear()
-    ElixirIngary.PolicyCache.reset()
+    Wardwright.reset_config()
+    Wardwright.ReceiptStore.clear()
+    Wardwright.PolicyCache.reset()
     :ok
   end
 
   test "policy projection exposes stable review fields and confidence classes" do
-    projection = ElixirIngary.PolicyProjection.projection("route-privacy")
+    projection = Wardwright.PolicyProjection.projection("route-privacy")
 
-    assert projection["projection_schema"] == "ingary.policy_projection.v1"
+    assert projection["projection_schema"] == "wardwright.policy_projection.v1"
     assert projection["engine"]["language"] == "starlark"
     assert projection["artifact"]["artifact_hash"] =~ "sha256:"
 
@@ -46,10 +46,10 @@ defmodule ElixirIngary.PolicyProjectionLiveTest do
   end
 
   test "simulation traces link execution evidence back to projection nodes" do
-    projection = ElixirIngary.PolicyProjection.projection("tts-retry")
+    projection = Wardwright.PolicyProjection.projection("tts-retry")
     node_ids = projection["phases"] |> Enum.flat_map(& &1["nodes"]) |> MapSet.new(& &1["id"])
 
-    [simulation | _] = ElixirIngary.PolicyProjection.simulations("tts-retry")
+    [simulation | _] = Wardwright.PolicyProjection.simulations("tts-retry")
 
     assert simulation["artifact_hash"] == projection["artifact"]["artifact_hash"]
     assert simulation["verdict"] in ["passed", "failed", "inconclusive"]
@@ -91,7 +91,7 @@ defmodule ElixirIngary.PolicyProjectionLiveTest do
     refute html =~ "route.selected"
 
     assert {:ok, %{"type" => "route.selected"}} =
-             ElixirIngary.Runtime.record_session_event(
+             Wardwright.Runtime.record_session_event(
                "coding-balanced",
                "2026-05-13.mock",
                "liveview-session",

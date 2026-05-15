@@ -198,7 +198,7 @@ def simulate_alerting_request(base_url: str, *, content: str, timeout: float) ->
         base_url,
         "POST",
         "/v1/synthetic/simulate",
-        {"request": chat_request("ingary/bakeoff-alerts", content)},
+        {"request": chat_request("wardwright/bakeoff-alerts", content)},
         timeout=timeout,
     )
     assert resp.status == 200, f"simulate failed status={resp.status} body={resp.body!r}"
@@ -266,7 +266,7 @@ def test_alert_backend_fail_closed_queue_full_blocks_request(base_url: str, back
         base_url,
         "POST",
         "/v1/chat/completions",
-        chat_request("ingary/bakeoff-alerts", "This needs operator review before release."),
+        chat_request("wardwright/bakeoff-alerts", "This needs operator review before release."),
         timeout=backend_timeout,
     )
 

@@ -4,7 +4,7 @@ Wardwright is an experimental synthetic model platform extracted from Calciforge
 model-gateway work.
 
 The core idea: clients call stable model names such as `coding-balanced` or
-`ingary/coding-balanced`, while Wardwright owns the route graph behind that name:
+`wardwright/coding-balanced`, while Wardwright owns the route graph behind that name:
 provider selection, context-window fit checks, fallback policy, stream
 governance, caller traceability, and receipts explaining every decision.
 
@@ -21,8 +21,8 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
 - `app` - active Elixir/Phoenix LiveView application.
-- `docs/rfcs/ingary-extraction.md` - product and architecture draft.
-- `docs/` - public docs site for `ingary.org`.
+- `docs/rfcs/wardwright-extraction.md` - product and architecture draft.
+- `docs/` - public docs site for `wardwright.org`.
 
 ## Shared Contract Probe
 
@@ -46,7 +46,7 @@ The probe checks the common OpenAI-compatible and Wardwright-specific surface:
 - `GET /admin/storage`
 - `GET /admin/runtime`
 - `GET /admin/synthetic-models`
-- flat and `ingary/` model namespace variants
+- flat and `wardwright/` model namespace variants
 - caller provenance and receipt fields
 - basic latency percentiles
 
@@ -71,7 +71,7 @@ python3 tests/storage_contract.py --store all --cases 50
 Run the active app:
 
 ```bash
-(cd app && INGARY_BIND=127.0.0.1:8791 mise exec -- mix run --no-halt)
+(cd app && WARDWRIGHT_BIND=127.0.0.1:8791 mise exec -- mix run --no-halt)
 ```
 
 The app exposes both the OpenAI-compatible HTTP surface and the LiveView policy

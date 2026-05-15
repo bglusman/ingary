@@ -29,7 +29,7 @@ vite.config.d.ts
 !.env.example
 .gitleaks.local.toml
 fnox.toml
-.ingary.local/
+.wardwright.local/
 
 # Python
 __pycache__/
@@ -37,3 +37,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .hypothesis/
+
+# Legacy local artifacts from the pre-rename project name.
+.ingary.local/

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Executable storage/sink contract fixture for Ingary prototypes.
+"""Executable storage/sink contract fixture for Wardwright prototypes.
 
 This is a reference harness, not the production storage layer. It makes the
 storage-provider contract concrete against simple memory and JSON-file stores so
@@ -558,7 +558,7 @@ def main() -> int:
 
     if args.store == "all":
         run_contract("memory", None, args.cases, args.seed)
-        with tempfile.TemporaryDirectory(prefix="ingary-storage-contract-") as tempdir:
+        with tempfile.TemporaryDirectory(prefix="wardwright-storage-contract-") as tempdir:
             run_contract("json-file", Path(tempdir) / "store.json", args.cases, args.seed)
     else:
         run_contract(args.store, args.path, args.cases, args.seed)

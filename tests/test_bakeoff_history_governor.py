@@ -215,7 +215,7 @@ def simulate_history_policy(base_url: str, *, timeout: float) -> dict[str, Any]:
         base_url,
         "POST",
         "/v1/synthetic/simulate",
-        {"request": chat_request("ingary/bakeoff-history", "Check recent tool behavior.")},
+        {"request": chat_request("wardwright/bakeoff-history", "Check recent tool behavior.")},
         timeout=timeout,
     )
     assert resp.status == 200, f"simulate failed status={resp.status} body={resp.body!r}"
@@ -316,7 +316,7 @@ def test_history_backend_normal_requests_feed_session_history_policy(
         "POST",
         "/v1/chat/completions",
         chat_request(
-            "ingary/bakeoff-history-requests",
+            "wardwright/bakeoff-history-requests",
             f"First normal request with {marker}.",
         ),
         timeout=backend_timeout,
@@ -330,7 +330,7 @@ def test_history_backend_normal_requests_feed_session_history_policy(
         "POST",
         "/v1/chat/completions",
         chat_request(
-            "ingary/bakeoff-history-requests",
+            "wardwright/bakeoff-history-requests",
             f"Second normal request with {marker}.",
         ),
         timeout=backend_timeout,

@@ -1,4 +1,4 @@
-defmodule ElixirIngary.PolicyProjection do
+defmodule Wardwright.PolicyProjection do
   @moduledoc false
 
   @patterns [
@@ -31,11 +31,11 @@ defmodule ElixirIngary.PolicyProjection do
     Enum.find(@patterns, &(&1["id"] == pattern_id)) || hd(@patterns)
   end
 
-  def projection(pattern_id, config \\ ElixirIngary.current_config()) do
+  def projection(pattern_id, config \\ Wardwright.current_config()) do
     pattern = pattern(pattern_id)
 
     %{
-      "projection_schema" => "ingary.policy_projection.v1",
+      "projection_schema" => "wardwright.policy_projection.v1",
       "artifact" => artifact(pattern, config),
       "engine" => engine(pattern["id"]),
       "phases" => phases(pattern["id"], config),
@@ -46,7 +46,7 @@ defmodule ElixirIngary.PolicyProjection do
     }
   end
 
-  def simulations(pattern_id, config \\ ElixirIngary.current_config()) do
+  def simulations(pattern_id, config \\ Wardwright.current_config()) do
     artifact_hash = artifact(pattern(pattern_id), config)["artifact_hash"]
 
     pattern_id
@@ -440,7 +440,7 @@ defmodule ElixirIngary.PolicyProjection do
   defp simulation_cases("ambiguous-success") do
     [
       %{
-        "simulation_schema" => "ingary.policy_simulation.v1",
+        "simulation_schema" => "wardwright.policy_simulation.v1",
         "scenario_id" => "missing-artifact",
         "title" => "Completion claim missing artifact",
         "engine_id" => "hybrid-output-review",
@@ -487,7 +487,7 @@ defmodule ElixirIngary.PolicyProjection do
   defp simulation_cases("route-privacy") do
     [
       %{
-        "simulation_schema" => "ingary.policy_simulation.v1",
+        "simulation_schema" => "wardwright.policy_simulation.v1",
         "scenario_id" => "cloud-denied",
         "title" => "Private context blocks cloud fallback",
         "engine_id" => "starlark-route-gate",
@@ -530,7 +530,7 @@ defmodule ElixirIngary.PolicyProjection do
   defp simulation_cases(_pattern_id) do
     [
       %{
-        "simulation_schema" => "ingary.policy_simulation.v1",
+        "simulation_schema" => "wardwright.policy_simulation.v1",
         "scenario_id" => "split-trigger",
         "title" => "Split trigger before release",
         "engine_id" => "structured-stream-primitives",
@@ -578,7 +578,7 @@ defmodule ElixirIngary.PolicyProjection do
         ],
         "receipt_preview" => %{
           "receipt_id" => "simulated-policy-receipt",
-          "synthetic_model" => ElixirIngary.synthetic_model(),
+          "synthetic_model" => Wardwright.synthetic_model(),
           "policy_version" => "draft.ttsr.001",
           "stream" => %{
             "rule_matched" => "no-old-client",

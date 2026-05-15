@@ -26,7 +26,7 @@ Starlark policy against this input shape:
 ```json
 {
   "request": {
-    "model": "ingary/coding-balanced",
+    "model": "wardwright/coding-balanced",
     "estimated_tokens": 1200,
     "metadata": {"tenant": "example", "session": "s1"}
   },

@@ -1,9 +1,9 @@
-defmodule ElixirIngary.Runtime.ModelRuntime do
+defmodule Wardwright.Runtime.ModelRuntime do
   @moduledoc false
 
   use GenServer
 
-  alias ElixirIngary.Runtime.Events
+  alias Wardwright.Runtime.Events
 
   def start_link(opts) do
     model_id = Keyword.fetch!(opts, :model_id)
@@ -26,7 +26,7 @@ defmodule ElixirIngary.Runtime.ModelRuntime do
   end
 
   def via(model_id, version),
-    do: {:via, Registry, {ElixirIngary.Runtime.Registry, {:model, model_id, version}}}
+    do: {:via, Registry, {Wardwright.Runtime.Registry, {:model, model_id, version}}}
 
   def status(pid), do: GenServer.call(pid, :status)
 

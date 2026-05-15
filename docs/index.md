@@ -16,7 +16,7 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
     <a class="button" href="vision.html">Read the Vision</a>
     <a class="button secondary" href="use-cases.html">Use Cases</a>
     <a class="button secondary" href="feature-spikes.html">Feature Spikes</a>
-    <a class="button secondary" href="https://github.com/bglusman/ingary">GitHub</a>
+    <a class="button secondary" href="https://github.com/bglusman/wardwright">GitHub</a>
   </div>
 </section>
 
@@ -91,7 +91,7 @@ Near-term work:
 
 ## Name
 
-Wardwright is the tentative product name. The old working name, Ingary, was
+Wardwright is the tentative product name. The old working name, Wardwright, was
 easy to confuse and hard to remember. Code identifiers, protocol examples, and
-the repository name may still use `ingary` until there is a deliberate
+the repository name may still use `wardwright` until there is a deliberate
 compatibility migration.

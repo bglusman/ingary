@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""HTTP contract and fuzz probe for Ingary backend prototypes.
+"""HTTP contract and fuzz probe for Wardwright backend prototypes.
 
 This is intentionally dependency-free so every prototype can run it before we
 choose a language or framework. It is not a replacement for generated OpenAPI
@@ -24,12 +24,12 @@ from typing import Any
 
 DEFAULT_HEADERS = {
     "Content-Type": "application/json",
-    "X-Ingary-Tenant-Id": "contract-tenant",
-    "X-Ingary-Application-Id": "contract-probe",
-    "X-Ingary-Agent-Id": "contract-agent",
-    "X-Ingary-User-Id": "contract-user",
-    "X-Ingary-Session-Id": "contract-session",
-    "X-Ingary-Run-Id": "contract-run",
+    "X-Wardwright-Tenant-Id": "contract-tenant",
+    "X-Wardwright-Application-Id": "contract-probe",
+    "X-Wardwright-Agent-Id": "contract-agent",
+    "X-Wardwright-User-Id": "contract-user",
+    "X-Wardwright-Session-Id": "contract-session",
+    "X-Wardwright-Run-Id": "contract-run",
     "X-Client-Request-Id": "contract-request",
 }
 
@@ -160,8 +160,8 @@ def assert_model_list(result: ProbeResult) -> None:
     expect(isinstance(data, list) and data, "/v1/models data must be non-empty list")
     ids = {item.get("id") for item in data if isinstance(item, dict)}
     expect(
-        "coding-balanced" in ids or "ingary/coding-balanced" in ids,
-        "/v1/models must expose coding-balanced or ingary/coding-balanced",
+        "coding-balanced" in ids or "wardwright/coding-balanced" in ids,
+        "/v1/models must expose coding-balanced or wardwright/coding-balanced",
     )
 
 
@@ -182,12 +182,12 @@ def assert_chat_response(result: ProbeResult, requested_model: str) -> str:
     expect("id" in body, "chat response must include id")
     expect(body.get("model"), "chat response must include model")
     expect(isinstance(body.get("choices"), list), "chat response choices must be a list")
-    receipt_id = result.headers.get("x-ingary-receipt-id")
-    expect(receipt_id, "chat response must include X-Ingary-Receipt-Id")
-    selected = result.headers.get("x-ingary-selected-model")
-    expect(selected, "chat response must include X-Ingary-Selected-Model")
+    receipt_id = result.headers.get("x-wardwright-receipt-id")
+    expect(receipt_id, "chat response must include X-Wardwright-Receipt-Id")
+    selected = result.headers.get("x-wardwright-selected-model")
+    expect(selected, "chat response must include X-Wardwright-Selected-Model")
     expect(
-        requested_model in ("coding-balanced", "ingary/coding-balanced"),
+        requested_model in ("coding-balanced", "wardwright/coding-balanced"),
         "probe only expects known model namespace variants",
     )
     return receipt_id or ""
@@ -197,7 +197,7 @@ def assert_receipt(result: ProbeResult, receipt_id: str) -> None:
     expect(result.status == 200, f"receipt {receipt_id} status {result.status}")
     body = result.body
     expect(body.get("receipt_id") == receipt_id, "receipt_id mismatch")
-    expect(body.get("synthetic_model") in ("coding-balanced", "ingary/coding-balanced"), "bad synthetic_model")
+    expect(body.get("synthetic_model") in ("coding-balanced", "wardwright/coding-balanced"), "bad synthetic_model")
     caller = body.get("caller")
     expect(isinstance(caller, dict), "receipt must include caller object")
     agent = caller.get("consuming_agent_id")
@@ -291,7 +291,7 @@ def run_probe(base_url: str, fuzz_runs: int, seed: int) -> int:
 
     receipt_ids: list[str] = []
     for i in range(fuzz_runs):
-        model = "coding-balanced" if i % 2 == 0 else "ingary/coding-balanced"
+        model = "coding-balanced" if i % 2 == 0 else "wardwright/coding-balanced"
         text = random_text(rng, prompt_chars_for_case(rng, i))
         body = chat_body(model, text)
         try:

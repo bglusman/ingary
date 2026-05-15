@@ -44,7 +44,7 @@ should be required before policy crosses an external trust boundary.
 
 ## Dune Spike Findings
 
-The initial Elixir spike adds `ElixirIngary.PolicySandbox.Dune`, a thin adapter
+The initial Elixir spike adds `Wardwright.PolicySandbox.Dune`, a thin adapter
 that normalizes Dune success and failure structs into policy-engine result maps.
 This is intentionally small so callers can fail closed without binding the rest
 of Wardwright to Dune's API.

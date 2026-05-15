@@ -1,19 +1,19 @@
-defmodule ElixirIngary.Runtime do
+defmodule Wardwright.Runtime do
   @moduledoc false
 
-  alias ElixirIngary.Runtime.{ModelRuntime, SessionRuntime}
+  alias Wardwright.Runtime.{ModelRuntime, SessionRuntime}
 
   @anonymous_session "anonymous"
 
   def ensure_model(model_id, version) do
-    case Registry.lookup(ElixirIngary.Runtime.Registry, {:model, model_id, version}) do
+    case Registry.lookup(Wardwright.Runtime.Registry, {:model, model_id, version}) do
       [{pid, _}] ->
         {:ok, pid}
 
       [] ->
         spec = {ModelRuntime, model_id: model_id, version: version}
 
-        case DynamicSupervisor.start_child(ElixirIngary.Runtime.ModelSupervisor, spec) do
+        case DynamicSupervisor.start_child(Wardwright.Runtime.ModelSupervisor, spec) do
           {:ok, pid} ->
             {:ok, pid}
 
@@ -34,7 +34,7 @@ defmodule ElixirIngary.Runtime do
 
     with {:ok, _model_pid} <- ensure_model(model_id, version) do
       case Registry.lookup(
-             ElixirIngary.Runtime.Registry,
+             Wardwright.Runtime.Registry,
              {:session, model_id, version, session_id}
            ) do
         [{pid, _}] ->
@@ -43,7 +43,7 @@ defmodule ElixirIngary.Runtime do
         [] ->
           spec = {SessionRuntime, model_id: model_id, version: version, session_id: session_id}
 
-          case DynamicSupervisor.start_child(ElixirIngary.Runtime.SessionSupervisor, spec) do
+          case DynamicSupervisor.start_child(Wardwright.Runtime.SessionSupervisor, spec) do
             {:ok, pid} ->
               {:ok, pid}
 
@@ -69,14 +69,14 @@ defmodule ElixirIngary.Runtime do
   def status do
     %{
       "models" =>
-        ElixirIngary.Runtime.Registry
+        Wardwright.Runtime.Registry
         |> Registry.select([
           {{{:"$1", :"$2", :"$3"}, :"$4", :_}, [{:==, :"$1", :model}], [{{:"$2", :"$3", :"$4"}}]}
         ])
         |> Enum.map(fn {_model_id, _version, pid} -> ModelRuntime.status(pid) end)
         |> Enum.sort_by(&{&1["model_id"], &1["version"]}),
       "sessions" =>
-        ElixirIngary.Runtime.Registry
+        Wardwright.Runtime.Registry
         |> Registry.select([
           {{{:"$1", :"$2", :"$3", :"$4"}, :"$5", :_}, [{:==, :"$1", :session}],
            [{{:"$2", :"$3", :"$4", :"$5"}}]}

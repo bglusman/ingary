@@ -1,4 +1,4 @@
-defmodule ElixirIngary.ReceiptStore do
+defmodule Wardwright.ReceiptStore do
   @moduledoc false
 
   use Agent
@@ -15,7 +15,7 @@ defmodule ElixirIngary.ReceiptStore do
       put_in(state, [:receipts, receipt["receipt_id"]], receipt)
     end)
 
-    ElixirIngary.Runtime.Events.publish(ElixirIngary.Runtime.Events.topic(:receipts), %{
+    Wardwright.Runtime.Events.publish(Wardwright.Runtime.Events.topic(:receipts), %{
       "type" => "receipt.stored",
       "receipt_id" => receipt["receipt_id"],
       "synthetic_model" => receipt["synthetic_model"],
@@ -101,7 +101,7 @@ defmodule ElixirIngary.ReceiptStore do
 
     Enum.all?(filters, fn
       {"model", value} ->
-        with {:ok, model} <- ElixirIngary.normalize_model(value) do
+        with {:ok, model} <- Wardwright.normalize_model(value) do
           summary["synthetic_model"] == model
         else
           _ -> false

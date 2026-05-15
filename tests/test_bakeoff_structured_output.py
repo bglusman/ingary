@@ -211,7 +211,7 @@ def test_structured_backend_repairs_invalid_output_then_succeeds(base_url: str, 
         base_url,
         "POST",
         "/v1/chat/completions",
-        chat_request("ingary/bakeoff-structured-output", "Return a governed JSON answer."),
+        chat_request("wardwright/bakeoff-structured-output", "Return a governed JSON answer."),
         timeout=backend_timeout,
     )
 
@@ -236,7 +236,7 @@ def test_structured_backend_stops_after_global_guard_budget(base_url: str, backe
         base_url,
         "POST",
         "/v1/chat/completions",
-        chat_request("ingary/bakeoff-structured-output", "Return a governed JSON answer."),
+        chat_request("wardwright/bakeoff-structured-output", "Return a governed JSON answer."),
         timeout=backend_timeout,
     )
 

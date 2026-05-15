@@ -13,14 +13,14 @@ pytestmark = pytest.mark.live_llm
 
 
 def live_llm_config() -> tuple[str, str, dict[str, str]]:
-    if os.environ.get("INGARY_LIVE_LLM") != "1":
-        pytest.skip("set INGARY_LIVE_LLM=1 to run live LLM smoke tests")
-    model = os.environ.get("INGARY_LIVE_LLM_MODEL")
+    if os.environ.get("WARDWRIGHT_LIVE_LLM") != "1":
+        pytest.skip("set WARDWRIGHT_LIVE_LLM=1 to run live LLM smoke tests")
+    model = os.environ.get("WARDWRIGHT_LIVE_LLM_MODEL")
     if not model:
-        pytest.skip("set INGARY_LIVE_LLM_MODEL to run live LLM smoke tests")
-    base_url = os.environ.get("INGARY_LIVE_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
+        pytest.skip("set WARDWRIGHT_LIVE_LLM_MODEL to run live LLM smoke tests")
+    base_url = os.environ.get("WARDWRIGHT_LIVE_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
     headers = {"Content-Type": "application/json"}
-    api_key = os.environ.get("INGARY_LIVE_LLM_API_KEY")
+    api_key = os.environ.get("WARDWRIGHT_LIVE_LLM_API_KEY")
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return base_url.rstrip("/"), model, headers

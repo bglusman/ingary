@@ -344,8 +344,8 @@ Initial local probe:
 ```sh
 python3 scripts/bakeoff_harness.py \
   tests/fixtures/bakeoff_instrumentation/toy_static_actions.json \
-  --output /tmp/ingary-bakeoff-instrumentation.json \
-  --artifact-dir /tmp/ingary-bakeoff-instrumentation-artifacts
+  --output /tmp/wardwright-bakeoff-instrumentation.json \
+  --artifact-dir /tmp/wardwright-bakeoff-instrumentation-artifacts
 ```
 
 This harness intentionally supports approximate token counting without a
@@ -372,8 +372,8 @@ Real-model Codex probe:
 ```sh
 python3 scripts/bakeoff_harness.py \
   tests/fixtures/bakeoff_instrumentation/codex_real_model_no_tool.json \
-  --output /tmp/ingary-codex-real-model-probe.json \
-  --artifact-dir /tmp/ingary-codex-real-model-artifacts \
+  --output /tmp/wardwright-codex-real-model-probe.json \
+  --artifact-dir /tmp/wardwright-codex-real-model-artifacts \
   --timeout 120
 ```
 

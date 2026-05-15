@@ -1,13 +1,13 @@
-defmodule ElixirIngaryWeb.Endpoint do
+defmodule WardwrightWeb.Endpoint do
   @moduledoc false
 
-  use Phoenix.Endpoint, otp_app: :elixir_ingary
+  use Phoenix.Endpoint, otp_app: :wardwright
 
   socket("/live", Phoenix.LiveView.Socket)
 
   plug(Plug.Static,
     at: "/",
-    from: :elixir_ingary,
+    from: :wardwright,
     gzip: false,
     only: ~w(assets favicon.ico robots.txt)
   )
@@ -19,9 +19,9 @@ defmodule ElixirIngaryWeb.Endpoint do
 
   plug(Plug.Session,
     store: :cookie,
-    key: "_ingary_key",
+    key: "_wardwright_key",
     signing_salt: "policy projection"
   )
 
-  plug(ElixirIngaryWeb.Router)
+  plug(WardwrightWeb.Router)
 end

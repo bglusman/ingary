@@ -1,7 +1,7 @@
-defmodule ElixirIngary.PolicySandbox.DuneTest do
+defmodule Wardwright.PolicySandbox.DuneTest do
   use ExUnit.Case, async: true
 
-  alias ElixirIngary.PolicySandbox.Dune, as: DuneSandbox
+  alias Wardwright.PolicySandbox.Dune, as: DuneSandbox
 
   test "evaluates a deterministic policy-shaped result" do
     result =

@@ -24,7 +24,7 @@ depends = ["check:app", "check:contracts"]
 
 [tasks."run:app"]
 description = "Run app on 127.0.0.1:8791"
-env = { INGARY_BIND = "127.0.0.1:8791", INGARY_ALLOW_TEST_CREDENTIALS = "1" }
+env = { WARDWRIGHT_BIND = "127.0.0.1:8791", WARDWRIGHT_ALLOW_TEST_CREDENTIALS = "1" }
 run = "cd app && mix run --no-halt"
 
 [tasks."probe:app"]
@@ -33,4 +33,4 @@ run = "python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-r
 
 [tasks."config:app:local"]
 description = "Load ignored local provider targets into the app"
-run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.ingary.local/provider-targets.json"
+run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.wardwright.local/provider-targets.json"

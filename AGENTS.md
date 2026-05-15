@@ -35,8 +35,8 @@ In short:
 ## Project Vocabulary
 
 - **Wardwright** — the tentative product name.
-- **Ingary** — the historical working name; some repo, protocol, namespace, and
-  code identifiers still use `ingary` until a deliberate compatibility
+- **Wardwright** — the historical working name; some repo, protocol, namespace, and
+  code identifiers still use `wardwright` until a deliberate compatibility
   migration.
 - **Synthetic model** — stable public model contract backed by a route graph.
 - **Route graph** — dispatcher/cascade/alloy/guard/concrete model graph.

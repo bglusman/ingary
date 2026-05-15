@@ -11,12 +11,12 @@ from typing import Any
 
 DEFAULT_HEADERS = {
     "Content-Type": "application/json",
-    "X-Ingary-Tenant-Id": "bakeoff-tenant",
-    "X-Ingary-Application-Id": "bakeoff-suite",
-    "X-Ingary-Agent-Id": "bakeoff-agent",
-    "X-Ingary-User-Id": "bakeoff-user",
-    "X-Ingary-Session-Id": "bakeoff-session",
-    "X-Ingary-Run-Id": "bakeoff-run",
+    "X-Wardwright-Tenant-Id": "bakeoff-tenant",
+    "X-Wardwright-Application-Id": "bakeoff-suite",
+    "X-Wardwright-Agent-Id": "bakeoff-agent",
+    "X-Wardwright-User-Id": "bakeoff-user",
+    "X-Wardwright-Session-Id": "bakeoff-session",
+    "X-Wardwright-Run-Id": "bakeoff-run",
 }
 
 
@@ -92,6 +92,6 @@ def fetch_receipt(base_url: str, receipt_id: str, *, timeout: float = 10) -> dic
 
 
 def response_receipt(base_url: str, resp: HttpResponse, *, timeout: float = 10) -> dict[str, Any]:
-    receipt_id = resp.headers.get("x-ingary-receipt-id")
-    assert receipt_id, f"response missing X-Ingary-Receipt-Id header: headers={resp.headers!r}"
+    receipt_id = resp.headers.get("x-wardwright-receipt-id")
+    assert receipt_id, f"response missing X-Wardwright-Receipt-Id header: headers={resp.headers!r}"
     return fetch_receipt(base_url, receipt_id, timeout=timeout)

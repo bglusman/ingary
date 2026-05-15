@@ -1,5 +1,5 @@
 {
-  "schema": "ingary.bakeoff.visible_structured_output.v1",
+  "schema": "wardwright.bakeoff.visible_structured_output.v1",
   "schemas": {
     "answer_v1": {
       "type": "object",

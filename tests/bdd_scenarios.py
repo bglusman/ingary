@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BDD-style executable scenarios for Ingary backend prototypes.
+"""BDD-style executable scenarios for Wardwright backend prototypes.
 
 These tests are intentionally plain Python and print Given/When/Then steps so
 they double as lightweight behavioral documentation.
@@ -20,12 +20,12 @@ from typing import Any, Callable
 
 HEADERS = {
     "Content-Type": "application/json",
-    "X-Ingary-Tenant-Id": "bdd-tenant",
-    "X-Ingary-Application-Id": "bdd-suite",
-    "X-Ingary-Agent-Id": "bdd-agent",
-    "X-Ingary-User-Id": "bdd-user",
-    "X-Ingary-Session-Id": "bdd-session",
-    "X-Ingary-Run-Id": "bdd-run",
+    "X-Wardwright-Tenant-Id": "bdd-tenant",
+    "X-Wardwright-Application-Id": "bdd-suite",
+    "X-Wardwright-Agent-Id": "bdd-agent",
+    "X-Wardwright-User-Id": "bdd-user",
+    "X-Wardwright-Session-Id": "bdd-session",
+    "X-Wardwright-Run-Id": "bdd-run",
 }
 
 
@@ -96,30 +96,30 @@ def reset_default_config_if_supported(base_url: str) -> None:
 
 def scenario_lists_public_synthetic_models(base_url: str) -> None:
     print("Scenario: listing public synthetic models")
-    step("Given an Ingary backend with the demo synthetic model configured")
+    step("Given an Wardwright backend with the demo synthetic model configured")
     step("When a client lists /v1/models")
     resp = request_json(base_url, "GET", "/v1/models")
     step("Then the response is OpenAI-compatible and contains coding-balanced")
     expect(resp.status == 200, f"expected 200, got {resp.status}")
     expect(resp.body.get("object") == "list", "model list object must be list")
     ids = {item.get("id") for item in resp.body.get("data", [])}
-    expect("coding-balanced" in ids or "ingary/coding-balanced" in ids, "coding-balanced missing")
+    expect("coding-balanced" in ids or "wardwright/coding-balanced" in ids, "coding-balanced missing")
 
 
 def scenario_routes_chat_and_records_receipt(base_url: str) -> None:
     print("Scenario: routing a chat request and recording a receipt")
     step("Given a caller sends consuming agent and user headers")
-    step("When the caller requests ingary/coding-balanced")
+    step("When the caller requests wardwright/coding-balanced")
     chat = request_json(
         base_url,
         "POST",
         "/v1/chat/completions",
-        chat_request("ingary/coding-balanced", "Write a small function."),
+        chat_request("wardwright/coding-balanced", "Write a small function."),
     )
-    step("Then Ingary returns a chat completion with receipt headers")
+    step("Then Wardwright returns a chat completion with receipt headers")
     expect(chat.status == 200, f"expected 200, got {chat.status}: {chat.body}")
-    receipt_id = chat.headers.get("x-ingary-receipt-id")
-    selected = chat.headers.get("x-ingary-selected-model")
+    receipt_id = chat.headers.get("x-wardwright-receipt-id")
+    selected = chat.headers.get("x-wardwright-selected-model")
     expect(bool(receipt_id), "missing receipt id header")
     expect(bool(selected), "missing selected model header")
 
@@ -142,7 +142,7 @@ def scenario_simulates_without_provider_call(base_url: str) -> None:
         "/v1/synthetic/simulate",
         {"request": chat_request("coding-balanced", "Preview this request before activation.")},
     )
-    step("Then Ingary returns a simulated receipt")
+    step("Then Wardwright returns a simulated receipt")
     expect(resp.status == 200, f"expected 200, got {resp.status}: {resp.body}")
     receipt = resp.body.get("receipt")
     expect(isinstance(receipt, dict), "simulate response must include receipt")
@@ -152,15 +152,15 @@ def scenario_simulates_without_provider_call(base_url: str) -> None:
 
 def scenario_rejects_unknown_model(base_url: str) -> None:
     print("Scenario: rejecting unknown synthetic model names")
-    step("Given a caller asks for a model outside Ingary's public namespace")
+    step("Given a caller asks for a model outside Wardwright's public namespace")
     step("When they call /v1/chat/completions")
     resp = request_json(
         base_url,
         "POST",
         "/v1/chat/completions",
-        chat_request("not-ingary/not-real", "Hello"),
+        chat_request("not-wardwright/not-real", "Hello"),
     )
-    step("Then Ingary fails closed with a client error")
+    step("Then Wardwright fails closed with a client error")
     expect(resp.status == 400, f"expected 400, got {resp.status}: {resp.body}")
 
 
@@ -186,12 +186,12 @@ def scenario_dynamic_definition_routes_by_context(base_url: str) -> None:
         base_url,
         "POST",
         "/v1/chat/completions",
-        chat_request("ingary/bdd-generated", "x" * 200),
+        chat_request("wardwright/bdd-generated", "x" * 200),
     )
-    step("Then Ingary selects the larger target and records skipped small target")
+    step("Then Wardwright selects the larger target and records skipped small target")
     expect(chat.status == 200, f"expected 200, got {chat.status}: {chat.body}")
-    expect(chat.headers.get("x-ingary-selected-model") == "large/model", "large target was not selected")
-    receipt = request_json(base_url, "GET", f"/v1/receipts/{chat.headers['x-ingary-receipt-id']}")
+    expect(chat.headers.get("x-wardwright-selected-model") == "large/model", "large target was not selected")
+    receipt = request_json(base_url, "GET", f"/v1/receipts/{chat.headers['x-wardwright-receipt-id']}")
     skipped = receipt.body.get("decision", {}).get("skipped", [])
     expect(skipped and skipped[0].get("target") == "small/model", "small target skip not recorded")
 
@@ -225,7 +225,7 @@ def scenario_request_policy_alerts_operator(base_url: str) -> None:
         base_url,
         "POST",
         "/v1/synthetic/simulate",
-        {"request": chat_request("ingary/bdd-policy", "Looks done but missing artifact for the customer export.")},
+        {"request": chat_request("wardwright/bdd-policy", "Looks done but missing artifact for the customer export.")},
     )
     step("Then the receipt records a policy action and alert event")
     expect(resp.status == 200, f"expected 200, got {resp.status}: {resp.body}")

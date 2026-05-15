@@ -354,7 +354,7 @@ def main() -> int:
         "git_untracked_after": git_after["untracked_count"],
     }
     result = {
-        "schema": "ingary.bakeoff_harness.v0",
+        "schema": "wardwright.bakeoff_harness.v0",
         "run_id": plan.get("run_id"),
         "feature": plan.get("feature"),
         "backend": plan.get("backend"),

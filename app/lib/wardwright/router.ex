@@ -1,4 +1,4 @@
-defmodule ElixirIngary.Router do
+defmodule Wardwright.Router do
   @moduledoc false
 
   use Plug.Router
@@ -21,28 +21,28 @@ defmodule ElixirIngary.Router do
   end
 
   get "/v1/models" do
-    synthetic_model = ElixirIngary.synthetic_model_record()["id"]
+    synthetic_model = Wardwright.synthetic_model_record()["id"]
 
     json(conn, 200, %{
       "object" => "list",
       "data" => [
-        %{"id" => synthetic_model, "object" => "model", "owned_by" => "ingary"},
+        %{"id" => synthetic_model, "object" => "model", "owned_by" => "wardwright"},
         %{
-          "id" => "ingary/#{synthetic_model}",
+          "id" => "wardwright/#{synthetic_model}",
           "object" => "model",
-          "owned_by" => "ingary"
+          "owned_by" => "wardwright"
         }
       ]
     })
   end
 
   get "/v1/synthetic/models" do
-    json(conn, 200, %{"data" => [ElixirIngary.synthetic_model_record()]})
+    json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
   end
 
   post "/v1/chat/completions" do
     with {:ok, request} <- require_json_object(conn.body_params),
-         {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
+         {:ok, model} <- Wardwright.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
@@ -66,7 +66,7 @@ defmodule ElixirIngary.Router do
             mock: true
           }
         else
-          ElixirIngary.complete_selected_model(decision.selected_model, request)
+          Wardwright.complete_selected_model(decision.selected_model, request)
         end
 
       receipt =
@@ -74,7 +74,7 @@ defmodule ElixirIngary.Router do
         |> build_receipt(model, caller, request, decision, provider.called_provider, policy)
         |> apply_provider_outcome(provider)
 
-      ElixirIngary.ReceiptStore.insert(receipt)
+      Wardwright.ReceiptStore.insert(receipt)
 
       record_runtime_event(model, caller, "receipt.finalized", %{
         "receipt_id" => receipt["receipt_id"],
@@ -85,8 +85,8 @@ defmodule ElixirIngary.Router do
 
       conn =
         conn
-        |> put_resp_header("x-ingary-receipt-id", receipt["receipt_id"])
-        |> put_resp_header("x-ingary-selected-model", decision.selected_model)
+        |> put_resp_header("x-wardwright-receipt-id", receipt["receipt_id"])
+        |> put_resp_header("x-wardwright-selected-model", decision.selected_model)
 
       if Map.get(request, "stream") == true do
         stream_chat(conn, request, decision)
@@ -102,7 +102,7 @@ defmodule ElixirIngary.Router do
     with {:ok, body} <- require_json_object(conn.body_params),
          {:ok, request} <- require_json_object(Map.get(body, "request")),
          request = override_model(request, Map.get(body, "model")),
-         {:ok, model} <- ElixirIngary.normalize_model(Map.get(request, "model")),
+         {:ok, model} <- Wardwright.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
@@ -116,7 +116,7 @@ defmodule ElixirIngary.Router do
       })
 
       receipt = build_receipt("simulated", model, caller, request, decision, false, policy)
-      ElixirIngary.ReceiptStore.insert(receipt)
+      Wardwright.ReceiptStore.insert(receipt)
 
       record_runtime_event(model, caller, "receipt.finalized", %{
         "receipt_id" => receipt["receipt_id"],
@@ -156,27 +156,27 @@ defmodule ElixirIngary.Router do
       |> Map.new()
 
     limit = parse_limit(Map.get(conn.query_params, "limit"))
-    receipts = ElixirIngary.ReceiptStore.list(filters, limit)
+    receipts = Wardwright.ReceiptStore.list(filters, limit)
     json(conn, 200, %{"data" => receipts})
   end
 
   get "/v1/receipts/:receipt_id" do
-    case ElixirIngary.ReceiptStore.get(receipt_id) do
+    case Wardwright.ReceiptStore.get(receipt_id) do
       nil -> error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
       receipt -> json(conn, 200, receipt)
     end
   end
 
   get "/admin/storage" do
-    json(conn, 200, ElixirIngary.ReceiptStore.health())
+    json(conn, 200, Wardwright.ReceiptStore.health())
   end
 
   get "/admin/runtime" do
-    json(conn, 200, ElixirIngary.Runtime.status())
+    json(conn, 200, Wardwright.Runtime.status())
   end
 
   post "/v1/policy-cache/events" do
-    with {:ok, event} <- ElixirIngary.PolicyCache.add(conn.body_params) do
+    with {:ok, event} <- Wardwright.PolicyCache.add(conn.body_params) do
       json(conn, 201, %{"event" => event})
     else
       {:error, message} ->
@@ -192,21 +192,21 @@ defmodule ElixirIngary.Router do
     }
 
     limit = parse_limit(Map.get(conn.query_params, "limit"))
-    json(conn, 200, %{"data" => ElixirIngary.PolicyCache.recent(filter, limit)})
+    json(conn, 200, %{"data" => Wardwright.PolicyCache.recent(filter, limit)})
   end
 
   get "/admin/providers" do
-    json(conn, 200, %{"data" => ElixirIngary.providers()})
+    json(conn, 200, %{"data" => Wardwright.providers()})
   end
 
   get "/admin/synthetic-models" do
-    json(conn, 200, %{"data" => [ElixirIngary.synthetic_model_record()]})
+    json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
   end
 
   post "/__test/config" do
     with {:ok, config} <- require_json_object(conn.body_params),
-         {:ok, config} <- ElixirIngary.put_config(config) do
-      ElixirIngary.ReceiptStore.clear()
+         {:ok, config} <- Wardwright.put_config(config) do
+      Wardwright.ReceiptStore.clear()
 
       json(conn, 200, %{
         "status" => "ok",
@@ -230,13 +230,16 @@ defmodule ElixirIngary.Router do
   defp override_model(request, model), do: Map.put(request, "model", model)
 
   defp apply_prompt_transforms(request) do
-    transforms = ElixirIngary.current_config()["prompt_transforms"] || %{}
+    transforms = Wardwright.current_config()["prompt_transforms"] || %{}
     messages = Map.get(request, "messages", [])
 
     messages =
       case transforms["preamble"] |> metadata_string() |> blank_to_nil() do
-        nil -> messages
-        text -> [%{"role" => "system", "name" => "ingary_preamble", "content" => text} | messages]
+        nil ->
+          messages
+
+        text ->
+          [%{"role" => "system", "name" => "wardwright_preamble", "content" => text} | messages]
       end
 
     messages =
@@ -245,7 +248,8 @@ defmodule ElixirIngary.Router do
           messages
 
         text ->
-          messages ++ [%{"role" => "system", "name" => "ingary_postscript", "content" => text}]
+          messages ++
+            [%{"role" => "system", "name" => "wardwright_postscript", "content" => text}]
       end
 
     Map.put(request, "messages", messages)
@@ -255,7 +259,7 @@ defmodule ElixirIngary.Router do
     text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
 
     Enum.reduce(
-      ElixirIngary.current_config()["governance"] || [],
+      Wardwright.current_config()["governance"] || [],
       {request, empty_policy()},
       fn rule, {request, policy} ->
         kind = Map.get(rule, "kind", "")
@@ -304,7 +308,7 @@ defmodule ElixirIngary.Router do
 
                 message_record = %{
                   "role" => "system",
-                  "name" => "ingary_policy_reminder",
+                  "name" => "wardwright_policy_reminder",
                   "content" => reminder
                 }
 
@@ -359,7 +363,7 @@ defmodule ElixirIngary.Router do
       "scope" => cache_scope_from_caller(caller, Map.get(rule, "cache_scope", ""))
     }
 
-    count = ElixirIngary.PolicyCache.count(filter)
+    count = Wardwright.PolicyCache.count(filter)
 
     if count < threshold do
       {request, policy}
@@ -429,35 +433,35 @@ defmodule ElixirIngary.Router do
   defp require_messages(_), do: {:error, "messages must not be empty"}
 
   defp route_decision(request) do
-    estimate = ElixirIngary.estimate_prompt_tokens(Map.get(request, "messages", []))
-    ElixirIngary.select_route(estimate)
+    estimate = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
+    Wardwright.select_route(estimate)
   end
 
   defp caller_context(conn, metadata) when is_map(metadata) do
     %{}
     |> put_sourced(
       "tenant_id",
-      header_or_metadata(conn, metadata, "x-ingary-tenant-id", "tenant_id")
+      header_or_metadata(conn, metadata, "x-wardwright-tenant-id", "tenant_id")
     )
     |> put_sourced(
       "application_id",
-      header_or_metadata(conn, metadata, "x-ingary-application-id", "application_id")
+      header_or_metadata(conn, metadata, "x-wardwright-application-id", "application_id")
     )
     |> put_sourced(
       "consuming_agent_id",
-      header_or_metadata(conn, metadata, "x-ingary-agent-id", "consuming_agent_id") ||
-        header_or_metadata(conn, metadata, "x-ingary-agent-id", "agent_id")
+      header_or_metadata(conn, metadata, "x-wardwright-agent-id", "consuming_agent_id") ||
+        header_or_metadata(conn, metadata, "x-wardwright-agent-id", "agent_id")
     )
     |> put_sourced(
       "consuming_user_id",
-      header_or_metadata(conn, metadata, "x-ingary-user-id", "consuming_user_id") ||
-        header_or_metadata(conn, metadata, "x-ingary-user-id", "user_id")
+      header_or_metadata(conn, metadata, "x-wardwright-user-id", "consuming_user_id") ||
+        header_or_metadata(conn, metadata, "x-wardwright-user-id", "user_id")
     )
     |> put_sourced(
       "session_id",
-      header_or_metadata(conn, metadata, "x-ingary-session-id", "session_id")
+      header_or_metadata(conn, metadata, "x-wardwright-session-id", "session_id")
     )
-    |> put_sourced("run_id", header_or_metadata(conn, metadata, "x-ingary-run-id", "run_id"))
+    |> put_sourced("run_id", header_or_metadata(conn, metadata, "x-wardwright-run-id", "run_id"))
     |> put_sourced(
       "client_request_id",
       header_or_metadata(conn, metadata, "x-client-request-id", "client_request_id")
@@ -470,9 +474,9 @@ defmodule ElixirIngary.Router do
   defp session_id(caller), do: get_in(caller, ["session_id", "value"])
 
   defp record_runtime_event(model, caller, type, fields) do
-    version = ElixirIngary.current_config()["version"]
+    version = Wardwright.current_config()["version"]
 
-    case ElixirIngary.Runtime.record_session_event(
+    case Wardwright.Runtime.record_session_event(
            model,
            version,
            session_id(caller),
@@ -580,7 +584,7 @@ defmodule ElixirIngary.Router do
       "created_at" => created_at,
       "run_id" => get_in(caller, ["run_id", "value"]),
       "synthetic_model" => model,
-      "synthetic_version" => ElixirIngary.current_config()["version"],
+      "synthetic_version" => Wardwright.current_config()["version"],
       "simulation" => status == "simulated",
       "caller" => caller,
       "request" => %{
@@ -589,8 +593,8 @@ defmodule ElixirIngary.Router do
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
         "stream" => Map.get(request, "stream", false),
         "message_count" => length(Map.get(request, "messages", [])),
-        "prompt_transforms" => ElixirIngary.current_config()["prompt_transforms"],
-        "structured_output" => ElixirIngary.current_config()["structured_output"]
+        "prompt_transforms" => Wardwright.current_config()["prompt_transforms"],
+        "structured_output" => Wardwright.current_config()["structured_output"]
       },
       "decision" => %{
         "strategy" => "estimated_prompt_length",
@@ -600,7 +604,7 @@ defmodule ElixirIngary.Router do
         "skipped" => decision.skipped,
         "reason" => decision.reason,
         "rule" => "select the smallest configured context window that fits the estimated prompt",
-        "governance" => ElixirIngary.current_config()["governance"],
+        "governance" => Wardwright.current_config()["governance"],
         "policy_actions" => policy["actions"]
       },
       "attempts" => [
@@ -652,7 +656,7 @@ defmodule ElixirIngary.Router do
 
     content =
       provider_content ||
-        "Mock Ingary response routed to #{decision.selected_model}. Estimated prompt tokens: #{decision.estimated_prompt_tokens}."
+        "Mock Wardwright response routed to #{decision.selected_model}. Estimated prompt tokens: #{decision.estimated_prompt_tokens}."
 
     %{
       "id" => "chatcmpl_" <> receipt["receipt_id"],
@@ -674,7 +678,7 @@ defmodule ElixirIngary.Router do
         "completion_tokens" => completion_tokens,
         "total_tokens" => decision.estimated_prompt_tokens + completion_tokens
       },
-      "ingary" => %{
+      "wardwright" => %{
         "receipt_id" => receipt["receipt_id"],
         "selected_model" => decision.selected_model
       }
@@ -689,7 +693,7 @@ defmodule ElixirIngary.Router do
       |> send_chunked(200)
 
     chunks = [
-      "Mock Ingary stream ",
+      "Mock Wardwright stream ",
       "routed to #{decision.selected_model} ",
       "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
     ]
@@ -724,11 +728,11 @@ defmodule ElixirIngary.Router do
     |> put_resp_header("access-control-allow-methods", "GET, POST, OPTIONS")
     |> put_resp_header(
       "access-control-allow-headers",
-      "Content-Type, X-Ingary-Tenant-Id, X-Ingary-Application-Id, X-Ingary-Agent-Id, X-Ingary-User-Id, X-Ingary-Session-Id, X-Ingary-Run-Id, X-Client-Request-Id"
+      "Content-Type, X-Wardwright-Tenant-Id, X-Wardwright-Application-Id, X-Wardwright-Agent-Id, X-Wardwright-User-Id, X-Wardwright-Session-Id, X-Wardwright-Run-Id, X-Client-Request-Id"
     )
     |> put_resp_header(
       "access-control-expose-headers",
-      "X-Ingary-Receipt-Id, X-Ingary-Selected-Model"
+      "X-Wardwright-Receipt-Id, X-Wardwright-Selected-Model"
     )
   end
 

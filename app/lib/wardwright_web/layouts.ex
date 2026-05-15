@@ -1,4 +1,4 @@
-defmodule ElixirIngaryWeb.Layouts do
+defmodule WardwrightWeb.Layouts do
   @moduledoc false
 
   use Phoenix.Component
@@ -10,9 +10,9 @@ defmodule ElixirIngaryWeb.Layouts do
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Ingary Policy Workbench</title>
+        <title>Wardwright Policy Workbench</title>
         <style>
-          <%= ElixirIngaryWeb.PolicyProjectionLive.styles() %>
+          <%= WardwrightWeb.PolicyProjectionLive.styles() %>
         </style>
       </head>
       <body>

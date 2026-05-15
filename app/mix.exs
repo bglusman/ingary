@@ -1,9 +1,9 @@
-defmodule ElixirIngary.MixProject do
+defmodule Wardwright.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :elixir_ingary,
+      app: :wardwright,
       version: "0.1.0",
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
@@ -15,7 +15,7 @@ defmodule ElixirIngary.MixProject do
   def application do
     [
       extra_applications: [:logger, :crypto, :inets, :ssl],
-      mod: {ElixirIngary.Application, []}
+      mod: {Wardwright.Application, []}
     ]
   end
 

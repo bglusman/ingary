@@ -1,4 +1,4 @@
-defmodule ElixirIngaryWeb.Router do
+defmodule WardwrightWeb.Router do
   @moduledoc false
 
   use Phoenix.Router, helpers: false
@@ -8,7 +8,7 @@ defmodule ElixirIngaryWeb.Router do
     plug(:accepts, ["html"])
     plug(:fetch_session)
     plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {ElixirIngaryWeb.Layouts, :root})
+    plug(:put_root_layout, html: {WardwrightWeb.Layouts, :root})
     plug(:protect_from_forgery)
     plug(:put_secure_browser_headers)
   end
@@ -17,7 +17,7 @@ defmodule ElixirIngaryWeb.Router do
     plug(:accepts, ["json"])
   end
 
-  scope "/", ElixirIngaryWeb do
+  scope "/", WardwrightWeb do
     pipe_through(:browser)
 
     live("/", PolicyProjectionLive, :index)
@@ -28,6 +28,6 @@ defmodule ElixirIngaryWeb.Router do
   scope "/" do
     pipe_through(:api)
 
-    forward("/", ElixirIngary.Router)
+    forward("/", Wardwright.Router)
   end
 end

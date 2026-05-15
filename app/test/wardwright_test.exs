@@ -1,15 +1,15 @@
-defmodule ElixirIngaryTest do
+defmodule WardwrightTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
   import Plug.Conn
   import Plug.Test
 
-  @opts ElixirIngary.Router.init([])
+  @opts Wardwright.Router.init([])
 
   setup do
-    ElixirIngary.reset_config()
-    ElixirIngary.ReceiptStore.clear()
-    ElixirIngary.PolicyCache.reset()
+    Wardwright.reset_config()
+    Wardwright.ReceiptStore.clear()
+    Wardwright.PolicyCache.reset()
     :ok
   end
 
@@ -18,12 +18,12 @@ defmodule ElixirIngaryTest do
             capacity <- integer(1..20),
             timestamps <- list_of(integer(0..50), max_length: 80)
           ) do
-      ElixirIngary.PolicyCache.configure(%{"max_entries" => capacity, "recent_limit" => capacity})
+      Wardwright.PolicyCache.configure(%{"max_entries" => capacity, "recent_limit" => capacity})
 
       inserted =
         Enum.map(timestamps, fn timestamp ->
           {:ok, event} =
-            ElixirIngary.PolicyCache.add(%{
+            Wardwright.PolicyCache.add(%{
               "kind" => "tool_call",
               "key" => "shell:ls",
               "scope" => %{"session_id" => "session-a"},
@@ -41,7 +41,7 @@ defmodule ElixirIngaryTest do
         |> MapSet.new()
 
       recent =
-        ElixirIngary.PolicyCache.recent(
+        Wardwright.PolicyCache.recent(
           %{
             "kind" => "tool_call",
             "key" => "shell:ls",
@@ -91,7 +91,7 @@ defmodule ElixirIngaryTest do
         :post,
         "/v1/synthetic/simulate",
         %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
-        [{"x-ingary-session-id", "session-a"}]
+        [{"x-wardwright-session-id", "session-a"}]
       )
 
     assert miss.status == 200
@@ -108,7 +108,7 @@ defmodule ElixirIngaryTest do
         :post,
         "/v1/synthetic/simulate",
         %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
-        [{"x-ingary-session-id", "session-a"}]
+        [{"x-wardwright-session-id", "session-a"}]
       )
 
     body = Jason.decode!(hit.resp_body)
@@ -122,25 +122,25 @@ defmodule ElixirIngaryTest do
     conn = call(:get, "/v1/models")
     assert conn.status == 200
     body = Jason.decode!(conn.resp_body)
-    assert Enum.map(body["data"], & &1["id"]) == ["coding-balanced", "ingary/coding-balanced"]
+    assert Enum.map(body["data"], & &1["id"]) == ["coding-balanced", "wardwright/coding-balanced"]
   end
 
   test "chat completion records caller headers and selected model" do
     request = %{
-      model: "ingary/coding-balanced",
+      model: "wardwright/coding-balanced",
       messages: [%{role: "user", content: "hello"}],
       metadata: %{consuming_agent_id: "body-agent"}
     }
 
     conn =
       :post
-      |> call("/v1/chat/completions", request, [{"x-ingary-agent-id", "header-agent"}])
+      |> call("/v1/chat/completions", request, [{"x-wardwright-agent-id", "header-agent"}])
 
     assert conn.status == 200
-    assert get_resp_header(conn, "x-ingary-selected-model") == ["local/qwen-coder"]
-    [receipt_id] = get_resp_header(conn, "x-ingary-receipt-id")
+    assert get_resp_header(conn, "x-wardwright-selected-model") == ["local/qwen-coder"]
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
 
-    receipt = ElixirIngary.ReceiptStore.get(receipt_id)
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
 
     assert get_in(receipt, ["caller", "consuming_agent_id"]) == %{
              "value" => "header-agent",
@@ -169,7 +169,7 @@ defmodule ElixirIngaryTest do
 
     request = %{
       request: %{
-        model: "ingary/unit-model",
+        model: "wardwright/unit-model",
         messages: [%{role: "user", content: "Looks done; return JSON for the caller"}]
       }
     }
@@ -225,7 +225,7 @@ defmodule ElixirIngaryTest do
   end
 
   test "test config rejects invalid route graph shapes" do
-    prefixed = unit_policy_config() |> Map.put("synthetic_model", "ingary/unit-model")
+    prefixed = unit_policy_config() |> Map.put("synthetic_model", "wardwright/unit-model")
     conn = call(:post, "/__test/config", prefixed)
     assert conn.status == 400
 
@@ -245,7 +245,7 @@ defmodule ElixirIngaryTest do
   end
 
   test "receipt store exposes storage health metadata" do
-    assert ElixirIngary.ReceiptStore.health() == %{
+    assert Wardwright.ReceiptStore.health() == %{
              "kind" => "memory",
              "contract_version" => "storage-contract-v0",
              "migration_version" => 1,
@@ -264,11 +264,11 @@ defmodule ElixirIngaryTest do
   end
 
   test "provider metadata reports credential source without secret reference names" do
-    System.put_env("INGARY_ALLOW_TEST_CREDENTIALS", "1")
-    on_exit(fn -> System.delete_env("INGARY_ALLOW_TEST_CREDENTIALS") end)
+    System.put_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS", "1")
+    on_exit(fn -> System.delete_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS") end)
 
     {:ok, _config} =
-      ElixirIngary.put_config(%{
+      Wardwright.put_config(%{
         "synthetic_model" => "coding-balanced",
         "version" => "2026-05-13.mock",
         "targets" => [
@@ -277,12 +277,12 @@ defmodule ElixirIngaryTest do
             "context_window" => 128_000,
             "provider_kind" => "openai-compatible",
             "provider_base_url" => "https://example.com/v1",
-            "credential_env" => "INGARY_TEST_PROVIDER_KEY"
+            "credential_env" => "WARDWRIGHT_TEST_PROVIDER_KEY"
           }
         ]
       })
 
-    assert [provider] = ElixirIngary.providers()
+    assert [provider] = Wardwright.providers()
     assert provider["credential_source"] == "env"
     refute Map.has_key?(provider, "credential_env")
     refute Map.has_key?(provider, "credential")
@@ -305,17 +305,17 @@ defmodule ElixirIngaryTest do
     newer_low_id = receipt_fixture("rcpt_a", 1_800_000_001, "agent-a")
     newer_high_id = receipt_fixture("rcpt_z", 1_800_000_001, "agent-z")
 
-    ElixirIngary.ReceiptStore.insert(older)
-    ElixirIngary.ReceiptStore.insert(newer_low_id)
-    ElixirIngary.ReceiptStore.insert(newer_high_id)
+    Wardwright.ReceiptStore.insert(older)
+    Wardwright.ReceiptStore.insert(newer_low_id)
+    Wardwright.ReceiptStore.insert(newer_high_id)
 
-    assert Enum.map(ElixirIngary.ReceiptStore.list(%{}, 10), & &1["receipt_id"]) == [
+    assert Enum.map(Wardwright.ReceiptStore.list(%{}, 10), & &1["receipt_id"]) == [
              "rcpt_z",
              "rcpt_a",
              "rcpt_b"
            ]
 
-    assert ElixirIngary.ReceiptStore.list(%{}, 1) == [
+    assert Wardwright.ReceiptStore.list(%{}, 1) == [
              %{
                "receipt_id" => "rcpt_z",
                "created_at" => 1_800_000_001,
@@ -349,8 +349,8 @@ defmodule ElixirIngaryTest do
     live = receipt_fixture("rcpt_live", 1_800_000_000, "agent-a")
     simulated = receipt_fixture("rcpt_sim", 1_800_000_001, "agent-b", status: "simulated")
 
-    ElixirIngary.ReceiptStore.insert(live)
-    ElixirIngary.ReceiptStore.insert(simulated)
+    Wardwright.ReceiptStore.insert(live)
+    Wardwright.ReceiptStore.insert(simulated)
 
     filters = %{
       "tenant_id" => "tenant-a",
@@ -366,7 +366,7 @@ defmodule ElixirIngaryTest do
       "created_at_max" => "1800000001"
     }
 
-    assert Enum.map(ElixirIngary.ReceiptStore.list(filters, 10), & &1["receipt_id"]) == [
+    assert Enum.map(Wardwright.ReceiptStore.list(filters, 10), & &1["receipt_id"]) == [
              "rcpt_sim"
            ]
   end
@@ -380,7 +380,7 @@ defmodule ElixirIngaryTest do
     |> then(fn conn ->
       Enum.reduce(headers, conn, fn {key, value}, acc -> put_req_header(acc, key, value) end)
     end)
-    |> ElixirIngary.Router.call(@opts)
+    |> Wardwright.Router.call(@opts)
   end
 
   defp unit_policy_config do

@@ -1,6 +1,6 @@
-defmodule ElixirIngary do
+defmodule Wardwright do
   @moduledoc """
-  Minimal Ingary synthetic-model mock.
+  Minimal Wardwright synthetic-model mock.
 
   The prototype is intentionally small: one public synthetic model, mock route
   selection by estimated prompt length, and in-memory receipts.
@@ -44,7 +44,7 @@ defmodule ElixirIngary do
 
   def reset_config do
     :persistent_term.put({__MODULE__, :config}, default_config())
-    ElixirIngary.PolicyCache.configure(default_config()["policy_cache"])
+    Wardwright.PolicyCache.configure(default_config()["policy_cache"])
   end
 
   def put_config(config) when is_map(config) do
@@ -52,7 +52,7 @@ defmodule ElixirIngary do
 
     with :ok <- validate_config(config) do
       :persistent_term.put({__MODULE__, :config}, config)
-      ElixirIngary.PolicyCache.configure(config["policy_cache"])
+      Wardwright.PolicyCache.configure(config["policy_cache"])
       {:ok, config}
     end
   end
@@ -65,7 +65,7 @@ defmodule ElixirIngary do
 
     case model do
       ^synthetic_model -> {:ok, synthetic_model}
-      "ingary/" <> ^synthetic_model -> {:ok, synthetic_model}
+      "wardwright/" <> ^synthetic_model -> {:ok, synthetic_model}
       "" -> {:error, "model is required"}
       other -> {:error, "unknown synthetic model #{inspect(other)}"}
     end
@@ -211,7 +211,7 @@ defmodule ElixirIngary do
         "id" => provider,
         "kind" => kind,
         "base_url" => base_url,
-        "credential_owner" => "ingary",
+        "credential_owner" => "wardwright",
         "credential_source" => credential_source(target),
         "health" => "healthy"
       }
@@ -336,10 +336,11 @@ defmodule ElixirIngary do
         MapSet.member?(seen, target["model"]) ->
           {:halt, {:error, "duplicate target #{target["model"]}"}}
 
-        credential_reference?(target) and System.get_env("INGARY_ALLOW_TEST_CREDENTIALS") != "1" ->
+        credential_reference?(target) and
+            System.get_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS") != "1" ->
           {:halt,
            {:error,
-            "credential references in __test/config require INGARY_ALLOW_TEST_CREDENTIALS=1"}}
+            "credential references in __test/config require WARDWRIGHT_ALLOW_TEST_CREDENTIALS=1"}}
 
         true ->
           {:cont, MapSet.put(seen, target["model"])}

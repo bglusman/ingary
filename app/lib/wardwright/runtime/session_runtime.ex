@@ -1,9 +1,9 @@
-defmodule ElixirIngary.Runtime.SessionRuntime do
+defmodule Wardwright.Runtime.SessionRuntime do
   @moduledoc false
 
   use GenServer
 
-  alias ElixirIngary.Runtime.Events
+  alias Wardwright.Runtime.Events
 
   def start_link(opts) do
     model_id = Keyword.fetch!(opts, :model_id)
@@ -30,7 +30,7 @@ defmodule ElixirIngary.Runtime.SessionRuntime do
   end
 
   def via(model_id, version, session_id) do
-    {:via, Registry, {ElixirIngary.Runtime.Registry, {:session, model_id, version, session_id}}}
+    {:via, Registry, {Wardwright.Runtime.Registry, {:session, model_id, version, session_id}}}
   end
 
   def record(pid, type, fields \\ %{}) when is_pid(pid) and is_binary(type) and is_map(fields) do

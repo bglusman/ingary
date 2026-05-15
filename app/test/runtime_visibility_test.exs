@@ -1,17 +1,17 @@
-defmodule ElixirIngary.RuntimeVisibilityTest do
+defmodule Wardwright.RuntimeVisibilityTest do
   use ExUnit.Case, async: false
   import Plug.Conn
   import Plug.Test
 
-  alias ElixirIngary.Runtime
-  alias ElixirIngary.Runtime.Events
+  alias Wardwright.Runtime
+  alias Wardwright.Runtime.Events
 
-  @opts ElixirIngary.Router.init([])
+  @opts Wardwright.Router.init([])
 
   setup do
-    ElixirIngary.reset_config()
-    ElixirIngary.ReceiptStore.clear()
-    ElixirIngary.PolicyCache.reset()
+    Wardwright.reset_config()
+    Wardwright.ReceiptStore.clear()
+    Wardwright.PolicyCache.reset()
     :ok
   end
 
@@ -27,7 +27,7 @@ defmodule ElixirIngary.RuntimeVisibilityTest do
     assert {:ok, pid_a} = Runtime.ensure_session(model, version, session_a)
     assert {:ok, pid_b} = Runtime.ensure_session(model, version, session_b)
 
-    assert_receive {:ingary_runtime_event, ^topic_a,
+    assert_receive {:wardwright_runtime_event, ^topic_a,
                     %{"type" => "session.started", "sequence" => 1}}
 
     assert {:ok, %{"type" => "route.selected", "sequence" => 2}} =
@@ -35,7 +35,7 @@ defmodule ElixirIngary.RuntimeVisibilityTest do
                "selected_model" => "mock/a"
              })
 
-    assert_receive {:ingary_runtime_event, ^topic_a,
+    assert_receive {:wardwright_runtime_event, ^topic_a,
                     %{"type" => "route.selected", "sequence" => 2, "selected_model" => "mock/a"}}
 
     ref = Process.monitor(pid_a)
@@ -45,7 +45,7 @@ defmodule ElixirIngary.RuntimeVisibilityTest do
     assert Process.alive?(pid_b)
 
     assert %{"event_count" => 1, "session_id" => ^session_b} =
-             ElixirIngary.Runtime.SessionRuntime.status(pid_b)
+             Wardwright.Runtime.SessionRuntime.status(pid_b)
   end
 
   test "chat requests publish session and receipt visibility and expose runtime status" do
@@ -59,33 +59,33 @@ defmodule ElixirIngary.RuntimeVisibilityTest do
       |> call(
         "/v1/chat/completions",
         %{model: "coding-balanced", messages: [%{role: "user", content: "hello"}]},
-        [{"x-ingary-session-id", "runtime-session"}]
+        [{"x-wardwright-session-id", "runtime-session"}]
       )
 
     assert conn.status == 200
 
-    assert_receive {:ingary_runtime_event, ^model_topic,
+    assert_receive {:wardwright_runtime_event, ^model_topic,
                     %{
                       "type" => "session.started",
                       "session_id" => "runtime-session",
                       "sequence" => 1
                     }}
 
-    assert_receive {:ingary_runtime_event, ^model_topic,
+    assert_receive {:wardwright_runtime_event, ^model_topic,
                     %{
                       "type" => "route.selected",
                       "session_id" => "runtime-session",
                       "sequence" => 2
                     }}
 
-    assert_receive {:ingary_runtime_event, ^receipt_topic,
+    assert_receive {:wardwright_runtime_event, ^receipt_topic,
                     %{
                       "type" => "receipt.stored",
                       "session_id" => "runtime-session",
                       "status" => "completed"
                     }}
 
-    assert_receive {:ingary_runtime_event, ^model_topic,
+    assert_receive {:wardwright_runtime_event, ^model_topic,
                     %{
                       "type" => "receipt.finalized",
                       "session_id" => "runtime-session",
@@ -135,6 +135,6 @@ defmodule ElixirIngary.RuntimeVisibilityTest do
     |> then(fn conn ->
       Enum.reduce(headers, conn, fn {key, value}, acc -> put_req_header(acc, key, value) end)
     end)
-    |> ElixirIngary.Router.call(@opts)
+    |> Wardwright.Router.call(@opts)
   end
 end

@@ -1,15 +1,15 @@
 import Config
 
-config :elixir_ingary, serve_http: true
+config :wardwright, serve_http: true
 
-config :elixir_ingary, ElixirIngaryWeb.Endpoint,
+config :wardwright, WardwrightWeb.Endpoint,
   adapter: Phoenix.Endpoint.Cowboy2Adapter,
   render_errors: [
-    formats: [html: ElixirIngaryWeb.ErrorHTML, json: ElixirIngaryWeb.ErrorJSON],
+    formats: [html: WardwrightWeb.ErrorHTML, json: WardwrightWeb.ErrorJSON],
     layout: false
   ],
-  pubsub_server: ElixirIngary.PubSub,
-  live_view: [signing_salt: "ingary-policy-projection-v1"]
+  pubsub_server: Wardwright.PubSub,
+  live_view: [signing_salt: "wardwright-policy-projection-v1"]
 
 env_config = "#{config_env()}.exs"
 
