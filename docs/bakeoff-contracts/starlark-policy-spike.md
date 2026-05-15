@@ -1,3 +1,8 @@
+---
+title: Starlark Policy Engine Spike Contract
+description: Historical visible contract for Starlark policy-engine bakeoff spikes.
+---
+
 # Starlark Policy Engine Spike Contract
 
 This visible contract defines a short architecture spike for programmable

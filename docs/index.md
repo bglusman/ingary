@@ -1,14 +1,14 @@
 ---
 layout: default
-title: Ingary
+title: Wardwright
 description: Synthetic model contracts, governance, and receipts for agentic workflows.
 ---
 
 <section class="hero">
   <p class="eyebrow">Synthetic model platform</p>
-  <h1>Ingary</h1>
+  <h1>Wardwright</h1>
   <p class="lede">
-    Ingary is a control plane for agent-facing model behavior. Agents call a
+    Wardwright is a control plane for agent-facing model behavior. Agents call a
     stable model name; operators define the route graph, policy, caller
     traceability, prompt transforms, alert hooks, and receipts behind that name.
   </p>
@@ -21,21 +21,21 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
 </section>
 
 <div class="notice">
-  <strong>Status:</strong> Ingary is early and docs-driven. This site describes
+  <strong>Status:</strong> Wardwright is early and docs-driven. This site describes
   the product shape we are building toward, while the repository contains
   the active BEAM implementation, shared contracts, and tests used to validate
   policy behavior. See the [Backend Selection Decision](backend-selection-decision.html)
   for the pruning rationale.
 </div>
 
-## What Ingary Adds
+## What Wardwright Adds
 
 LLM agents often fail in ways that are easy to miss: repeated tool loops,
 partial success treated as completion, malformed structured output, runaway
 context growth, unclear model/provider selection, and weak visibility into who
 or what triggered a run.
 
-Ingary adds a narrow control point between agent code and concrete model
+Wardwright adds a narrow control point between agent code and concrete model
 providers. It is not primarily a security product. Security policies are one
 useful family of examples, but the larger goal is controlled experimentation
 and runtime visibility for constrained agentic workflows.
@@ -58,8 +58,8 @@ and runtime visibility for constrained agentic workflows.
   </div>
   <div class="card">
     <h3>OpenAI-Compatible</h3>
-    <p>Existing clients can call Ingary through ordinary chat-completion APIs
-    while Ingary owns the behavior behind the model name.</p>
+    <p>Existing clients can call Wardwright through ordinary chat-completion APIs
+    while Wardwright owns the behavior behind the model name.</p>
   </div>
 </div>
 
@@ -77,7 +77,9 @@ Near-term work:
 
 1. Implement real built-in governors for request, route, stream, and output phases.
 2. Add alert sinks and policy receipt events.
-3. Add durable SQLite storage for model definitions and receipts.
+3. Add file-backed durable storage for model definitions and receipts, with
+   Mnesia/SQL providers gated on concrete query, replication, or concurrency
+   needs.
 4. Make the LiveView policy projection and simulation workbench consume real
    compiled policy artifacts.
 5. Use Dune-backed BEAM snippets for trusted local programmable policy only
@@ -87,8 +89,7 @@ Near-term work:
 
 ## Name
 
-Ingary is a small literary nod to the country in Diana Wynne Jones's
-<cite>Howl's Moving Castle</cite>. Calciforge began with Calcifer-adjacent
-language, and Ingary keeps that origin visible while giving this project its
-own cleaner identity. There is no affiliation with the book, film, author, or
-studio.
+Wardwright is the tentative product name. The old working name, Ingary, was
+easy to confuse and hard to remember. Code identifiers, protocol examples, and
+the repository name may still use `ingary` until there is a deliberate
+compatibility migration.

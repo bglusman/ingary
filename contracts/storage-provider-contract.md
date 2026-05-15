@@ -1,9 +1,9 @@
-# Ingary Storage Provider Contract
+# Wardwright Storage Provider Contract
 
 Status: draft
 
 This contract defines the behavior a storage implementation must provide to be
-usable by an Ingary backend. It is intentionally independent of language,
+usable by a Wardwright backend. It is intentionally independent of runtime,
 database engine, and physical schema.
 
 The contract is not an ORM API. It is a logical persistence boundary for
@@ -13,19 +13,25 @@ control-plane state, receipt/event history, retention, and UI query behavior.
 
 A storage provider can satisfy the contract in more than one form:
 
-- **Native library adapter** compiled into a backend, such as Rust using SQLite
-  directly.
-- **Managed runtime adapter** inside a backend, such as Elixir using Ecto with
-  Postgres.
+- **In-process runtime store** for hot request-path state, such as supervised
+  BEAM processes and ETS tables. This shape is fast and operationally simple,
+  but it is not durable by itself.
+- **File-backed durable provider** for local installs, using append-only receipt
+  events plus deterministic snapshots/checkpoints.
+- **BEAM-native durable provider** for deployments where Mnesia's transactions,
+  replication, and runtime integration are a better fit than an external
+  database.
+- **Database provider** for deployments that need richer SQL query, migration,
+  external tooling, or operational features, such as SQLite or Postgres.
 - **Sidecar adapter** over localhost HTTP/gRPC/Unix socket for experiments that
-  should be reusable across languages without FFI.
+  should be reusable without binding the active app to one storage engine.
 - **Remote service adapter** for hosted deployments, if auth, latency, and
   failure behavior are explicit.
 
-The sidecar shape is the cleanest way to make one storage implementation usable
-from every backend language during prototyping. Native adapters are still
-valuable for the eventual production path where operational simplicity or
-latency matters more than cross-language reuse.
+The active app is BEAM-first, so ETS/process state is expected on the hot path.
+Durability should be proven first through the smallest provider that can satisfy
+this contract. A database is valuable when it buys behavior the product needs;
+it should not be assumed just because data exists.
 
 The contract should therefore be testable through a small black-box fixture
 suite. Language-native adapters can expose the fixture operations through a test
@@ -34,7 +40,7 @@ binary or test-only HTTP endpoint; sidecar adapters can expose them directly.
 ## Receipts, Events, Logs, And Storage
 
 Receipts overlap with logs, but they should not be reduced to ordinary logs.
-Ingary needs both concepts:
+Wardwright needs both concepts:
 
 - **Receipts** are product records: queryable, versioned, retention-aware,
   privacy-aware, and tied to synthetic model behavior.
@@ -50,7 +56,7 @@ The storage contract owns the durable receipt and control-plane record. A log or
 telemetry adapter can receive the same events, but it does not replace the
 system of record unless it also satisfies the storage-provider contract.
 
-This gives Ingary two related adapter surfaces:
+This gives Wardwright two related adapter surfaces:
 
 - **Storage providers**: answer product queries, enforce retention, store
   model versions, and preserve receipt history.
@@ -58,6 +64,8 @@ This gives Ingary two related adapter surfaces:
   Kafka-compatible queues, hosted observability tools, or audit pipelines.
 - **Search sinks**: index receipt summaries, event metadata, and optional
   redacted content for operator search.
+- **Analytics/database sinks**: receive larger derived datasets for warehouse,
+  BI, audit, customer reporting, or offline evaluation use cases.
 
 The receipt writer should be modeled as an append path that can fan out to both:
 
@@ -100,13 +108,17 @@ Candidate infrastructure roles:
   materialized store that satisfies this contract.
 - **OpenTelemetry/log files/hosted observability**: operational diagnostics and
   metrics. They are useful outputs, not the source of truth.
+- **Mnesia/SQLite/Postgres/DuckDB/warehouse exports**: possible durable providers or
+  derived analytics sinks depending on deployment shape. The distinction must
+  be explicit because a database can be the source of truth, a projection, or a
+  reporting target.
 
 ## Goals
 
-- Let Rust, Go, Elixir, and future backends test against the same storage
-  behavior.
-- Let SQLite, Postgres, and future stores evolve behind a stable logical
-  contract.
+- Let the active BEAM app and future storage engines test against the same
+  storage behavior.
+- Let ETS, file-backed providers, Mnesia, SQLite, Postgres, and future stores
+  evolve behind a stable logical contract.
 - Keep database-specific schema design available where it helps durability,
   indexing, concurrency, or analytics.
 - Make storage behavior measurable with the same BDD and property harness style
@@ -118,7 +130,8 @@ Candidate infrastructure roles:
 
 Storage providers must expose:
 
-- provider kind, for example `memory`, `sqlite`, `postgres`, `duckdb`
+- provider kind, for example `ets`, `file`, `mnesia`, `sqlite`, `postgres`,
+  `duckdb`
 - schema/storage contract version
 - migration version
 - read/write health
@@ -127,6 +140,7 @@ Storage providers must expose:
 Capability flags should include:
 
 - `durable`
+- `runtime_hot_store`
 - `transactional`
 - `concurrent_writers`
 - `json_queries`
@@ -216,8 +230,8 @@ being considered a primary store.
 
 Every storage provider implementation should pass these tests:
 
-- empty database initializes to the expected migration version
-- previous migration upgrades without losing records
+- empty durable store initializes to the expected storage version
+- previous durable format or migration upgrades without losing records
 - receipt insert and fetch round-trip preserves all contract fields
 - receipt list ordering is stable when timestamps tie
 - caller filters return the same receipts as an in-memory oracle
@@ -248,29 +262,36 @@ Every configured sink should pass these tests:
 - replay from durable receipt events rebuilds the sink to the same observable
   state as live fanout
 
-## Matrix Strategy
+## Provider Strategy
 
-The prototype matrix should treat backend language and storage implementation as
-orthogonal axes:
+The current prototype should treat authoritative state and high-volume sinks as
+separate axes:
 
-| Backend | Memory | SQLite | Postgres | Search sink | Event stream | Redis adjunct | DuckDB export |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Rust | required | required | candidate | optional | optional | optional | optional |
-| Go | required | candidate | candidate | optional | optional | optional | optional |
-| Elixir | required | candidate | candidate | optional | optional | optional | optional |
+| Surface | ETS/process state | File-backed store | Mnesia/SQL store | Search sink | Event stream | Database/warehouse sink |
+|---|---:|---:|---:|---:|---:|---:|
+| Request-path model/session state | required | optional snapshot | candidate | no | optional events | no |
+| Receipt and policy history | candidate cache | first durable target | candidate | derived | derived | derived |
+| Operator search | no | rebuild source | candidate source | candidate | optional feed | optional |
+| Analytics/evaluation | no | export source | candidate | optional | candidate feed | candidate |
 
-`Memory` remains useful for contract tests and development, but it must be
-marked non-durable. SQLite is the first durable implementation to prove local
-and embedded behavior. Postgres is the implementation that proves team/server
-behavior.
+ETS remains useful for runtime state, contract tests, and development, but it
+must be marked non-durable unless paired with a durable provider. A file-backed
+append log plus snapshots is the likely first durable implementation because it
+keeps local installs simple and makes replay behavior easy to test. Mnesia,
+SQLite, and Postgres should remain behind the same contract and become primary
+candidates when they clearly improve BEAM-native durability, concurrency,
+querying, migrations, hosted operations, or external reporting.
 
 The first useful storage prototype is a shared logical fixture suite that can
 run against:
 
-1. an in-process memory store
-2. a SQLite database file
-3. a Postgres test database or container
+1. an in-process ETS/runtime store, explicitly non-durable
+2. a file-backed append-log/snapshot provider
+3. optional Mnesia/SQLite/Postgres providers when the product has a concrete
+   durability, query, or deployment reason to test
 
-Only after those pass should Redis, DuckDB, search engines, and event streams be
-evaluated, because they are adjuncts or derived surfaces rather than primary
-stores for the first product shape.
+Redis, DuckDB, search engines, event streams, and warehouse/database sinks can be
+evaluated earlier when the feature is explicitly about fanout, analytics,
+search, or backpressure. They should still be treated as adjuncts or derived
+surfaces unless the selected implementation also satisfies the authoritative
+storage-provider contract.

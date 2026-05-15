@@ -1,13 +1,13 @@
 ---
 layout: default
-title: Ingary Vision
-description: The product vision and current architecture direction for Ingary.
+title: Wardwright Vision
+description: The product vision and current architecture direction for Wardwright.
 ---
 
-# Ingary Vision
+# Wardwright Vision
 
-Ingary is a synthetic model platform for agentic systems. A caller asks for a
-stable model name, such as `coding-balanced` or `ingary/json-extractor`; Ingary
+Wardwright is a synthetic model platform for agentic systems. A caller asks for a
+stable model name, such as `coding-balanced` or `ingary/json-extractor`; Wardwright
 decides what that name means today, records why, and exposes the result through
 an OpenAI-compatible interface.
 
@@ -20,7 +20,7 @@ an OpenAI-compatible interface.
 
 ## Product Shape
 
-In the finished product, Ingary should let an operator define synthetic models
+In the finished product, Wardwright should let an operator define synthetic models
 as shareable artifacts:
 
 - public model name and namespace behavior
@@ -45,7 +45,7 @@ assistant workflows, summaries, simulation, and visualization rather than by
 weakening the underlying governance model.
 
 Near-term product priority is correctness plus policy authoring quality. That
-means Ingary should optimize for:
+means Wardwright should optimize for:
 
 - deterministic enforcement semantics across request, route, stream, and final
   output phases
@@ -71,7 +71,7 @@ artifacts are the primary workflow. Direct snippets are appropriate when they
 map closely to a rule or runtime hook, but arbitrary programmable policy should
 be evaluated as an advanced authoring mode, not assumed to be the default.
 
-The major open product question is the primary policy authoring model. Ingary
+The major open product question is the primary policy authoring model. Wardwright
 should run comparable spikes for structured policy primitives and code-first
 Starlark policy. Both spikes must use the same realistic policy scenarios so
 the decision is based on authoring clarity, simulation quality, review safety,
@@ -81,9 +81,9 @@ and debugging speed rather than raw expressiveness.
 
 <div class="flow">
   <div class="flow-step"><strong>1. Caller</strong> sends a normal OpenAI-style chat completion request.</div>
-  <div class="flow-step"><strong>2. Ingary</strong> resolves the synthetic model name and captures caller provenance.</div>
+  <div class="flow-step"><strong>2. Wardwright</strong> resolves the synthetic model name and captures caller provenance.</div>
   <div class="flow-step"><strong>3. Policy</strong> can transform the prompt, pick a route, validate stream events, retry, alert, or stop.</div>
-  <div class="flow-step"><strong>4. Provider</strong> receives only the concrete request Ingary has chosen to send.</div>
+  <div class="flow-step"><strong>4. Provider</strong> receives only the concrete request Wardwright has chosen to send.</div>
   <div class="flow-step"><strong>5. Receipt</strong> records the route, policy actions, timing, usage, and final outcome.</div>
 </div>
 
@@ -106,15 +106,15 @@ identity.
 
 ## Integration Strategy
 
-Ingary should work in two deployment shapes:
+Wardwright should work in two deployment shapes:
 
-- **Ingary as the caller entry point:** agents call Ingary; Ingary can use
+- **Wardwright as the caller entry point:** agents call Wardwright; Wardwright can use
   LiteLLM, Helicone, OpenRouter, Ollama, or direct provider adapters downstream.
-- **Ingary behind another gateway:** a gateway exposes `ingary/*` model names;
-  Ingary owns those model definitions and calls concrete providers downstream.
+- **Wardwright behind another gateway:** a gateway exposes `ingary/*` model names;
+  Wardwright owns those model definitions and calls concrete providers downstream.
 
-The preferred public namespace is flat when Ingary owns the whole model catalog
-and prefixed, such as `ingary/coding-balanced`, when Ingary is one provider
+The preferred public namespace is flat when Wardwright owns the whole model catalog
+and prefixed, such as `ingary/coding-balanced`, when Wardwright is one provider
 inside a larger gateway.
 
 ## Implementation Direction
@@ -128,13 +128,15 @@ decision logic where typed data and exhaustive pattern matching can prevent
 policy bugs. The Go and Rust backends remain in git history as evidence, but
 they are no longer carried in the live tree. Systems such as LiteLLM,
 TensorZero, and Helicone remain useful integration targets and sources of
-product ideas, but Ingary should not begin life as a long-running fork of any of
+product ideas, but Wardwright should not begin life as a long-running fork of any of
 them.
 
 The first durable implementation should prioritize:
 
 1. a small, clear OpenAI-compatible gateway surface
-2. real receipt storage and queryability
+2. ETS-backed runtime state plus file-backed durable receipt storage and
+   queryability, with Mnesia or SQL stores introduced when they buy concrete
+   replication, query, concurrency, or deployment behavior
 3. policy hooks for request, route, stream, and output phases
 4. a policy-engine contract with explicit state scopes and two execution tiers:
    Dune-backed BEAM snippets for trusted local policy, and WASM/sidecar/hosted

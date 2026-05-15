@@ -1,14 +1,14 @@
-# Ingary
+# Wardwright
 
-Ingary is an experimental synthetic model platform extracted from Calciforge's
+Wardwright is an experimental synthetic model platform extracted from Calciforge's
 model-gateway work.
 
 The core idea: clients call stable model names such as `coding-balanced` or
-`ingary/coding-balanced`, while Ingary owns the route graph behind that name:
+`ingary/coding-balanced`, while Wardwright owns the route graph behind that name:
 provider selection, context-window fit checks, fallback policy, stream
 governance, caller traceability, and receipts explaining every decision.
 
-This repository used to keep multiple backend prototypes alive while Ingary
+This repository used to keep multiple backend prototypes alive while Wardwright
 selected a production foundation through shared contracts and measurable
 behavior. The active implementation direction is now BEAM-first: Elixir owns
 runtime plumbing and LiveView, while Gleam is the preferred home for
@@ -20,22 +20,21 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
-- `app` - active Elixir/LiveView backend prototype.
-- `frontend/web` - Vite/React UI prototype.
+- `app` - active Elixir/Phoenix LiveView application.
 - `docs/rfcs/ingary-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `ingary.org`.
 
 ## Shared Contract Probe
 
-Run a backend on `127.0.0.1:8787`, then:
+Run the app on `127.0.0.1:8791`, then:
 
 ```bash
 python3 tests/contract_probe.py \
-  --base-url http://127.0.0.1:8787 \
+  --base-url http://127.0.0.1:8791 \
   --fuzz-runs 50
 ```
 
-The probe checks the common OpenAI-compatible and Ingary-specific surface:
+The probe checks the common OpenAI-compatible and Wardwright-specific surface:
 
 - `GET /v1/models`
 - `GET /v1/synthetic/models`
@@ -68,42 +67,42 @@ python3 tests/storage_contract.py --store all --cases 50
 
 ## Local Development
 
-Run the active backend and UI:
+Run the active app:
 
 ```bash
-# Elixir
-(cd app && INGARY_BIND=127.0.0.1:8791 mix run --no-halt)
-
-# Frontend
-(cd frontend/web && npm run dev -- --host 127.0.0.1)
+(cd app && INGARY_BIND=127.0.0.1:8791 mise exec -- mix run --no-halt)
 ```
 
-The backend also exposes the LiveView policy projection workbench at
-`/policies`.
+The app exposes both the OpenAI-compatible HTTP surface and the LiveView policy
+projection workbench at `/policies`.
 
 ## Storage Direction
 
-Ingary should treat storage as part of the product contract:
+Wardwright should treat storage as part of the product contract:
 
-- SQLite is the default local and embedded store.
-- Postgres is the intended team/server deployment store.
+- ETS and supervised processes are the expected hot runtime state for route
+  health, model/session workers, short-lived policy state, and fast receipt
+  updates.
+- The first durable provider should likely be file-backed: append-only receipt
+  events plus deterministic snapshots/checkpoints. That keeps local installs
+  simple while the data model is still moving.
+- Mnesia, SQLite, and Postgres remain candidate storage providers, but they
+  should be justified by concrete needs such as BEAM-native replication,
+  multi-writer coordination, ad hoc query surfaces, hosted/team deployments,
+  migrations, or external reporting.
 - Redis is optional ephemeral infrastructure only.
-- DuckDB is a likely analytics/export companion, not the live request-path
-  system of record.
+- DuckDB, warehouses, and database sinks are likely analytics/export companions,
+  not automatically the live request-path system of record.
 - Elasticsearch/OpenSearch-style systems are likely derived search indexes.
-- Kafka/Redpanda/Iggy-style systems are likely event streams for fanout,
+- Kafka/Redpanda/Iggy/NATS-style systems are likely event streams for fanout,
   replay, async indexing, and audit pipelines.
 
-The durable schema should keep frequently filtered receipt dimensions in
-structured indexed columns and reserve JSON for versioned payloads and
-provider-specific details. See `docs/rfcs/ingary-extraction.md` for the current
-data-model plan and `contracts/storage-provider-contract.md` for the behavioral
-contract storage implementations should satisfy.
-
-Receipts, logs, search indexes, and event streams are related but separate
-surfaces: storage providers are the queryable system of record, while event/log
-sinks and search indexes receive redacted derived copies for observability,
-exploration, replay, and audit pipelines.
+The durable provider should keep frequently filtered receipt dimensions in a
+structured shape and reserve opaque payloads for versioned details. The sink
+surface should be able to move much larger derived data volumes than the local
+authoritative store, with explicit redaction, replay, backpressure, and failure
+semantics. See `contracts/storage-provider-contract.md` for the behavioral
+contract storage providers and sinks should satisfy.
 
 ## License
 

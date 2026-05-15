@@ -1,12 +1,12 @@
 ---
 layout: default
-title: Ingary Policy Engine MVP
-description: Initial target use cases, data scopes, and policy execution phases for Ingary.
+title: Wardwright Policy Engine MVP
+description: Initial target use cases, data scopes, and policy execution phases for Wardwright.
 ---
 
 # Policy Engine MVP
 
-Ingary's policy system should be designed from concrete agent failures, not
+Wardwright's policy system should be designed from concrete agent failures, not
 from a general-purpose scripting fantasy. The first product question is:
 
 > What is the smallest policy model that can prevent, repair, reroute, or make
@@ -108,7 +108,7 @@ stream_policy:
 ```
 
 The consumer receives data only after it has passed the holdback horizon. If a
-rule fires before release, Ingary can drop, rewrite, retry, or escalate without
+rule fires before release, Wardwright can drop, rewrite, retry, or escalate without
 letting the violating output reach the consumer.
 
 MVP guardrails:
@@ -141,7 +141,7 @@ guardrail systems:
   require `stream=false`, which is a useful negative example: operators often
   have to choose between low latency and enforcement.
 
-Ingary should adapt the best parts of those systems while making the promise
+Wardwright should adapt the best parts of those systems while making the promise
 more explicit:
 
 - `pass_through`: lowest latency; policies observe and can alert, but cannot
@@ -161,7 +161,7 @@ action fired.
 ## State Scopes
 
 Some policies need history, but not all history belongs in every policy call.
-Policy definitions should declare state requirements so Ingary can avoid
+Policy definitions should declare state requirements so Wardwright can avoid
 unnecessary tracking.
 
 | Scope | Examples | MVP? |
@@ -176,7 +176,7 @@ unnecessary tracking.
 
 MVP state should be limited to `attempt`, `run`, and `session`. Those scopes
 support loop detection, retry limits, TTSR, structured repair, and ambiguous
-success without turning Ingary into a full observability warehouse.
+success without turning Wardwright into a full observability warehouse.
 
 ## State API Shape
 
@@ -227,13 +227,13 @@ eventually need broader caller windows.
 
 There are three possible designs:
 
-1. Expose the general Ingary read API to policy code.
+1. Expose the general Wardwright read API to policy code.
 2. Expose a bounded policy facts API backed by receipts, counters, and indexes.
-3. Expose an Ingary-API-shaped query facade backed only by configured policy
+3. Expose a Wardwright-API-shaped query facade backed only by configured policy
    caches and ring buffers.
 
 The third approach is probably the best ergonomic compromise. Policy authors
-can use query shapes that resemble the ordinary Ingary read API, but the policy
+can use query shapes that resemble the ordinary Wardwright read API, but the policy
 runtime only serves data that the synthetic model explicitly declared as part of
 its hot working set.
 
@@ -248,11 +248,11 @@ flexible, but it creates hot-path problems:
 - harder simulation, replay, and test reproducibility
 
 Instead, model definitions should declare the facts or recent-record caches
-they need. Ingary can then decide what to track, how to index it, and how to
+they need. Wardwright can then decide what to track, how to index it, and how to
 expose it to the policy engine.
 
 Policies that enforce behavior need a stronger cache contract than policies
-that merely annotate receipts. Ingary should distinguish two classes:
+that merely annotate receipts. Wardwright should distinguish two classes:
 
 - **deterministic policy working sets**: used for `block`, `reroute`, `retry`,
   `require_human_approval`, rate-limit, and other enforcement actions.
@@ -349,7 +349,7 @@ The policy input receives only the declared facts and recent-record handles:
 
 Advanced policy engines may get a constrained query primitive, but it should be
 served from these declared caches/ring buffers and bound by scope, result limit,
-time window, and fields. The call can look like a normal Ingary query without
+time window, and fields. The call can look like a normal Wardwright query without
 being backed by unbounded historical storage.
 
 For example:
@@ -366,10 +366,10 @@ ctx.receipts.list(
 That is different from giving Starlark arbitrary access to `/v1/receipts`.
 The query is deterministic, scoped, authorized, served from a bounded cache, and
 visible in the synthetic model's overhead estimate. If a policy asks for data
-outside the configured cache, Ingary should return an explicit "not available"
+outside the configured cache, Wardwright should return an explicit "not available"
 policy fact rather than silently scanning durable history.
 
-For observability-only caches, Ingary may later allow approximate or
+For observability-only caches, Wardwright may later allow approximate or
 best-effort eviction. Those caches must be labeled as such and should not be
 available to actions that change model behavior.
 
@@ -394,7 +394,7 @@ in pass-through mode.
 `alert` and `require_human_approval` must not be treated as synonyms:
 
 - `alert` records an event and sends an asynchronous notification sink. It can
-  run after the result is returned and should never imply that Ingary waited for
+  run after the result is returned and should never imply that Wardwright waited for
   a human response.
 - `require_human_approval` pauses or defers the request, persists resumable
   state, waits for approve/edit/reject, and needs timeout and idempotency rules.
@@ -421,7 +421,7 @@ policy language direct storage or network access.
 
 ## Rule Composition And Arbitration
 
-Governance rules should not be one unordered bag of effects. Ingary should
+Governance rules should not be one unordered bag of effects. Wardwright should
 separate rule evaluation from action arbitration:
 
 1. **Detectors** inspect phase inputs and emit proposed actions. Literal,
@@ -472,7 +472,7 @@ priority, or conflict resolution, the user should see that before activation.
 
 ## AI-Assisted Authoring
 
-Ingary should include a policy-authoring assistant that uses an operator-
+Wardwright should include a policy-authoring assistant that uses an operator-
 selected backing model to help draft, explain, review, and refine governance
 rules. This assistant is not the runtime policy engine. It proposes artifacts;
 the compiler, validator, simulator, and human review path remain authoritative.
@@ -504,7 +504,7 @@ users should work through the assistant, graph, simulator, and review UI.
 ## Simulation And Generated Tests As UX
 
 Simulation should be a first-class policy authoring surface, not only a CI test.
-For each draft rule, Ingary should generate examples and counterexamples that
+For each draft rule, Wardwright should generate examples and counterexamples that
 make the policy's promise visible.
 
 For TTSR rules, generated cases should include:
@@ -536,7 +536,7 @@ Programmable policy does not automatically make simulation harder. It makes
 pre-execution explanation harder unless the host exposes a constrained policy
 API and enough trace data to connect source code to runtime behavior.
 
-Ingary should evaluate two authoring MVPs in parallel:
+Wardwright should evaluate two authoring MVPs in parallel:
 
 1. **Structured primitives first**: policy authors compose built-in detectors,
    counters, stream guards, route switches, and arbiters. The UI can visualize
@@ -550,7 +550,7 @@ The Starlark-first UI should project code into a policy-shaped graph:
 
 - functions and entrypoints
 - branches and conditions
-- calls to the Ingary policy host API
+- calls to the Wardwright policy host API
 - cache reads, route mutations, stream actions, final-output actions
 - declared or inferred effects such as `reads_cache`, `switches_model`,
   `retries_stream`, and `blocks_output`

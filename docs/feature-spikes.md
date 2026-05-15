@@ -1,12 +1,12 @@
 ---
 layout: default
-title: Ingary Feature Spikes
+title: Wardwright Feature Spikes
 description: Research-backed feature directions for policy examples and tests.
 ---
 
 # Feature Spikes
 
-This page is a working backlog for self-directed Ingary experiments. The goal
+This page is a working backlog for self-directed Wardwright experiments. The goal
 is not to chase every gateway feature. The goal is to find constrained agentic
 workflows where a synthetic model policy layer can measurably reduce failures,
 cost, latency, or diagnosis time.
@@ -22,13 +22,13 @@ regression tests.
 
 LangGraph's human-in-the-loop docs draw a useful boundary: true human approval
 requires interrupting execution, persisting graph state, and resuming with an
-explicit decision. Ingary's MVP alerting is much smaller: record a receipt
+explicit decision. Wardwright's MVP alerting is much smaller: record a receipt
 event and notify an operator without pausing the request.
 
 oh-my-pi's Time Traveling Streamed Rules are the closest public analogue to
-Ingary's stream-policy idea: regex-triggered output stream rules that activate
+Wardwright's stream-policy idea: regex-triggered output stream rules that activate
 only when the model starts producing relevant content, abort the stream, inject
-a reminder, and retry once per session. Ingary can generalize that into
+a reminder, and retry once per session. Wardwright can generalize that into
 backend-neutral synthetic model policy with explicit receipt semantics and
 bounded release latency.
 
@@ -45,7 +45,7 @@ bounded release latency.
 | Tool-loop detector | Retry loops are expensive and diagnosable from session facts. | Session rolling counter keyed by tool/args/result hashes. | Needs agent/tool metadata standardization. | Fewer repeated equivalent calls in generated traces. |
 | Async alert sinks | Makes policy value visible before full approval workflow exists. | Receipt event plus webhook/Telegram/Slack sink adapter. | Sink failure/backpressure semantics. | Policy trip reliably creates auditable delivery record. |
 | Approval gate | Valuable for irreversible operations, but not just a notification. | Pending request state, approve/edit/reject, timeout. | Requires durable state and client UX contract. | Resumable approval tests pass without duplicate side effects. |
-| Prompt variant receipts | Makes Ingary useful as a prompt experiment boundary. | Versioned preamble/postscript transforms recorded in receipts. | Can become Helicone-style product sprawl. | Operators can compare outcomes by transform version. |
+| Prompt variant receipts | Makes Wardwright useful as a prompt experiment boundary. | Versioned preamble/postscript transforms recorded in receipts. | Can become Helicone-style product sprawl. | Operators can compare outcomes by transform version. |
 | Budget/context governor | Route decisions are central to synthetic models. | Run/session counters and context-threshold route actions. | Budget facts need deterministic cache semantics. | Generated threshold tests produce stable route/degrade/alert choices. |
 | Trace-to-regression importer | Converts production failures into examples and tests. | Receipt fixture import to BDD scenario generator. | Needs stable receipt schema and redaction. | A labeled incident becomes a failing test before fix. |
 

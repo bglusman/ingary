@@ -1,3 +1,8 @@
+---
+title: Structured-Output Governor Contract
+description: Historical visible contract for the structured-output bakeoff.
+---
+
 # Structured-Output Governor Contract
 
 This is the visible implementation contract for the structured-output bakeoff.

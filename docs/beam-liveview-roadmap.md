@@ -1,12 +1,12 @@
 ---
 layout: default
 title: BEAM and LiveView Roadmap
-description: Tentative architecture direction for Ingary's Elixir, Gleam, and LiveView implementation.
+description: Tentative architecture direction for Wardwright's Elixir, Gleam, and LiveView implementation.
 ---
 
 # BEAM and LiveView Roadmap
 
-The current working assumption is that Ingary's primary implementation should
+The current working assumption is that Wardwright's primary implementation should
 move toward a BEAM architecture:
 
 - **Elixir** owns runtime plumbing: HTTP, LiveView, supervision, registries,
@@ -80,7 +80,7 @@ or cross-model saturation.
 
 ## LiveView Direction
 
-The existing TypeScript prototype was useful for shape discovery, but the next
+The removed TypeScript prototype was useful for shape discovery, but the next
 operator UI should be built in LiveView unless a workflow proves it needs a
 client-heavy canvas app.
 
@@ -122,7 +122,7 @@ The first goal is a dense operational workbench, not a marketing dashboard.
 1. **Projection Contract Merge**
    Review and merge the policy projection FE/BE contract work. The contract
    should describe projection nodes, confidence, effects, conflicts, simulation
-   traces, and receipt previews without assuming React or LiveView.
+   traces, and receipt previews without assuming a client runtime.
 
 2. **LiveView Projection Workbench**
    Keep the current LiveView projection prototype focused on three modes:

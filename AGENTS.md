@@ -1,21 +1,18 @@
-# AGENTS.md — Ingary
+# AGENTS.md — Wardwright
 
 Workspace-wide instructions for AI coding agents operating on this public repo.
 
 ## What This Repo Is
 
-Ingary is an experimental synthetic model platform extracted from Calciforge's
+Wardwright is an experimental synthetic model platform extracted from Calciforge's
 model-gateway work. Clients call stable OpenAI-compatible model names while
-Ingary owns route graphs, policy/governance, provider selection, caller
+Wardwright owns route graphs, policy/governance, provider selection, caller
 traceability, simulation, and receipts.
 
-The repo intentionally contains multiple prototypes while we decide on a
-foundation:
+The repo previously contained multiple backend and frontend prototypes. The
+active tree is now BEAM-first:
 
-- `backends/go-ingary`
-- `backends/rust-ingary`
-- `backends/elixir-ingary`
-- `frontend/web`
+- `app`
 - `contracts`
 - `tests`
 - `docs`
@@ -37,7 +34,10 @@ In short:
 
 ## Project Vocabulary
 
-- **Ingary** — the product/repo.
+- **Wardwright** — the tentative product name.
+- **Ingary** — the historical working name; some repo, protocol, namespace, and
+  code identifiers still use `ingary` until a deliberate compatibility
+  migration.
 - **Synthetic model** — stable public model contract backed by a route graph.
 - **Route graph** — dispatcher/cascade/alloy/guard/concrete model graph.
 - **Receipt** — structured record explaining route decisions, policy actions,
@@ -49,29 +49,17 @@ In short:
 ## Build / Test
 
 ```bash
-# Go prototype
-(cd backends/go-ingary && go test ./...)
-
-# Rust prototype
-(cd backends/rust-ingary && cargo fmt --check && cargo test)
-
-# Elixir prototype
-(cd backends/elixir-ingary && mix format --check-formatted && mix test)
-
-# Frontend
-(cd frontend/web && npm ci && npm run build)
+# App
+(cd app && mise exec -- mix format --check-formatted && mise exec -- mix test)
 
 # Shared Python contracts
 python3 -m py_compile tests/*.py
 python3 tests/storage_contract.py --store all --cases 50
 ```
 
-When backend servers are running, shared HTTP probes should pass against all
-active prototypes:
+When the app server is running, the shared HTTP probe should pass:
 
 ```bash
-python3 tests/contract_probe.py --base-url http://127.0.0.1:8787 --fuzz-runs 10
-python3 tests/contract_probe.py --base-url http://127.0.0.1:8797 --fuzz-runs 10
 python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-runs 10
 ```
 
@@ -79,9 +67,10 @@ python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-runs 10
 
 - Keep the OpenAI-compatible serving surface stable unless the contract changes
   intentionally in `contracts/openapi.yaml`.
-- Keep receipt summary shape consistent across all backends. In particular,
+- Keep receipt summary shape consistent with the contract. In particular,
   `/v1/receipts` rows must include nested `caller` provenance.
-- Keep generated/dynamic model tests portable across Go, Rust, and Elixir.
+- Keep generated/dynamic model tests portable across implementations when a
+  second implementation is intentionally added.
 - Treat storage as a product contract, not an implementation detail. Update
   `contracts/storage-provider-contract.md` when changing durable behavior.
 - Treat policy language as an engine choice behind a shared ABI. Starlark is the

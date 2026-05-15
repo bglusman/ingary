@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Full local pre-push checks for Ingary.
+# Full local pre-push checks for Wardwright.
 
 set -euo pipefail
 
@@ -18,10 +18,7 @@ pass() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
 echo "── App ──────────────────────────────────────────────"
-(cd app && mix format --check-formatted && mix test) && pass "app format/test" || fail "app format/test"
-
-echo "── Frontend ─────────────────────────────────────────"
-(cd frontend/web && npm run build) && pass "frontend build" || fail "frontend build"
+(cd app && mise exec -- mix format --check-formatted && mise exec -- mix test) && pass "app format/test" || fail "app format/test"
 
 echo "── Python contracts ─────────────────────────────────"
 python3 -m py_compile tests/*.py && pass "python compile" || fail "python compile"

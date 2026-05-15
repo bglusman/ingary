@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Governance Authoring
-description: AI-assisted, visual, simulation-first governance authoring for Ingary.
+description: AI-assisted, visual, simulation-first governance authoring for Wardwright.
 ---
 
 # Governance Authoring

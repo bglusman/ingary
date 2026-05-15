@@ -1,14 +1,18 @@
 ---
 title: Backend Selection Decision
-description: Decision record for removing the Go and Rust backend prototypes and focusing Ingary on the BEAM.
+description: Decision record for removing the Go and Rust backend prototypes and focusing Wardwright on the BEAM.
 ---
 
 # Backend Selection Decision
 
-Ingary initially kept Go, Rust, and Elixir backend prototypes in the live tree
+Wardwright initially kept Go, Rust, and Elixir backend prototypes in the live tree
 to compare implementation cost, correctness, testability, and runtime fit
 against the same contracts. That comparison has now served its purpose. The live
 implementation should focus on **Elixir plus Gleam on the BEAM**.
+
+The project was called Ingary during the bakeoff. Wardwright is the tentative
+product name going forward. Repository, domain, API namespace, and Elixir module
+renames are intentionally deferred to a separate compatibility migration.
 
 ## Decision
 
@@ -45,7 +49,7 @@ Policy execution should be split by trust tier:
   behind an explicit capability-based host ABI and provenance metadata.
 
 This avoids overselling Dune as a hostile-code security boundary while still
-letting Ingary use BEAM-native ergonomics for local policy iteration.
+letting Wardwright use BEAM-native ergonomics for local policy iteration.
 
 ## Reversal Criteria
 

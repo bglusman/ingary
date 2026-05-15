@@ -1,6 +1,6 @@
-# Ingary App
+# Wardwright App
 
-Elixir/LiveView implementation of the Ingary synthetic model platform contract.
+Elixir/LiveView implementation of the Wardwright synthetic model platform contract.
 It currently serves mock model responses and local policy evaluation surfaces;
 real provider credentials and outbound model calls are not wired here yet.
 

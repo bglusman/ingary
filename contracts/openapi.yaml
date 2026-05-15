@@ -1,6 +1,6 @@
 openapi: 3.1.0
 info:
-  title: Ingary Synthetic Model Platform API
+  title: Wardwright Synthetic Model Platform API
   version: 0.1.0-draft
   description: |
     Draft contract for backend and frontend prototypes. The serving surface is

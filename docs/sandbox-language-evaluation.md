@@ -5,7 +5,7 @@ description: Evaluation plan and early findings for Dune, Starlark, and other po
 
 # Sandbox Language Evaluation
 
-Ingary should evaluate policy languages along two separate axes:
+Wardwright should evaluate policy languages along two separate axes:
 
 1. **Authoring quality**: whether AI and technical policy authors can produce,
    repair, explain, and review correct policies.
@@ -30,7 +30,7 @@ editor.
 
 ## Execution Tiers
 
-Ingary should not force one sandbox language to satisfy every trust model.
+Wardwright should not force one sandbox language to satisfy every trust model.
 Policy execution should be split by provenance:
 
 | Tier | Engines | Intended use | Boundary |
@@ -47,7 +47,7 @@ should be required before policy crosses an external trust boundary.
 The initial Elixir spike adds `ElixirIngary.PolicySandbox.Dune`, a thin adapter
 that normalizes Dune success and failure structs into policy-engine result maps.
 This is intentionally small so callers can fail closed without binding the rest
-of Ingary to Dune's API.
+of Wardwright to Dune's API.
 
 Executable tests currently verify:
 
@@ -60,7 +60,7 @@ Executable tests currently verify:
 
 One useful observation: recursive module-style code hit the memory cap before
 the reduction cap in an early test. This is acceptable fail-closed behavior, but
-it means Ingary should treat timeout, reductions, and memory as complementary
+it means Wardwright should treat timeout, reductions, and memory as complementary
 controls rather than assuming one budget is authoritative.
 
 ## Evaluation Matrix
@@ -89,7 +89,7 @@ Dune should advance only if it remains strong on all of these:
 - common policies are easier for AI to author and repair than Starlark
 - projection from Dune AST plus runtime traces is honest enough for review
 - timeout, reduction, and memory failures are typed and receipt-friendly
-- default allowlist blocks host escape attempts relevant to Ingary
+- default allowlist blocks host escape attempts relevant to Wardwright
 - BEAM model/session supervisors stay responsive under hostile policy workloads
 
 Even if Dune passes, it should initially be treated as a local/trusted advanced

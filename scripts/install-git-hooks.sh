@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Idempotent installer for Ingary git hooks.
+# Idempotent installer for Wardwright git hooks.
 
 set -euo pipefail
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mechanical pre-commit gate for Ingary.
+# Mechanical pre-commit gate for Wardwright.
 
 set -euo pipefail
 
@@ -19,14 +19,8 @@ staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
 
 if echo "$staged_files" | grep -qE '^app/'; then
   note "app format/test..."
-  (cd app && mix format --check-formatted && mix test) || fail "App checks failed"
+  (cd app && mise exec -- mix format --check-formatted && mise exec -- mix test) || fail "App checks failed"
   ok "App checks clean"
-fi
-
-if echo "$staged_files" | grep -qE '^frontend/web/'; then
-  note "frontend build..."
-  (cd frontend/web && npm run build) || fail "Frontend build failed"
-  ok "Frontend build clean"
 fi
 
 if echo "$staged_files" | grep -qE '^tests/|^contracts/'; then

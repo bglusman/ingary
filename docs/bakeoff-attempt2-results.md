@@ -1,3 +1,8 @@
+---
+title: Bakeoff Attempt 2 Results
+description: Historical results from the second backend bakeoff attempt.
+---
+
 # Bakeoff Attempt 2 Results
 
 Attempt 2 used branch `codex/run-all-structured-bakeoff-tests` commit `cd875e1`

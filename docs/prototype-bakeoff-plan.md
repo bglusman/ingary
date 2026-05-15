@@ -1,12 +1,12 @@
 ---
 layout: default
 title: Prototype Bakeoff Plan
-description: Experiment plan for choosing Ingary's primary backend prototype using comparable feature implementations.
+description: Experiment plan for choosing Wardwright's primary backend prototype using comparable feature implementations.
 ---
 
 # Prototype Bakeoff Plan
 
-Ingary currently keeps Go, Rust, Elixir, and a proposed Gleam-on-BEAM variant
+Wardwright currently keeps Go, Rust, Elixir, and a proposed Gleam-on-BEAM variant
 alive so the first durable implementation can be chosen from evidence instead of
 preference. The bakeoff
 turns that intention into a controlled experiment: three non-trivial governance
@@ -14,7 +14,7 @@ features, implemented independently in each prototype, scored with a
 rubric defined before implementation begins.
 
 The goal is not to prove that one language is universally better. The goal is
-to identify which prototype gives Ingary the best combination of correctness,
+to identify which prototype gives Wardwright the best combination of correctness,
 authoring semantics, runtime behavior, testability, maintenance quality, and
 delivery cost for the product we are actually building.
 
@@ -62,7 +62,7 @@ follow-up after the bakeoff chooses or narrows the primary implementation.
 
 This is not just "validate JSON." Providers increasingly support structured
 outputs, but they expose different schema subsets, strictness levels, streaming
-constraints, refusal behavior, and cache/compile latency. Ingary's
+constraints, refusal behavior, and cache/compile latency. Wardwright's
 differentiator is provider-portable output governance.
 
 Required behavior:
@@ -420,7 +420,7 @@ Initial calibration results:
   opencode's default provider path and failed with missing opencode API
   credentials; do not treat that mode as representative
 - opencode is only interesting for bakeoff execution if it can be configured to
-  call the same GPT-5.5/OpenAI-compatible model path or an Ingary proxy that
+  call the same GPT-5.5/OpenAI-compatible model path or a Wardwright proxy that
   itself forwards to that model while preserving per-run telemetry
 
 ## Scoring Rubric
@@ -508,7 +508,7 @@ Before the first bakeoff, fill this table from live code:
 
 ## BEAM Runtime Isolation Requirement
 
-The Elixir and Gleam-on-BEAM variants should explicitly model Ingary runtime
+The Elixir and Gleam-on-BEAM variants should explicitly model Wardwright runtime
 isolation. The target process hierarchy is:
 
 - application supervisor

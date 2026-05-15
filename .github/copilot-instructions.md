@@ -1,12 +1,12 @@
-# Copilot Review Instructions For Ingary
+# Copilot Review Instructions For Wardwright
 
 Review conservatively. If uncertain, do not comment. Prefer one precise finding
 over several speculative ones.
 
 ## Product Context
 
-Ingary is a synthetic model platform. Clients call stable model names while
-Ingary owns route graphs, policy/governance, provider selection, caller
+Wardwright is a synthetic model platform. Clients call stable model names while
+Wardwright owns route graphs, policy/governance, provider selection, caller
 traceability, simulation, and receipts.
 
 ## Highest-Value Review Areas
@@ -14,8 +14,8 @@ traceability, simulation, and receipts.
 1. **Contract drift**
    - Backend responses must match `contracts/openapi.yaml`.
    - Receipt summaries must include nested `caller` provenance.
-   - Go/Rust/Elixir prototype behavior should remain comparable where the
-     shared contract says it is comparable.
+   - App behavior should remain aligned with the shared contract and fixture
+     suite.
 
 2. **Policy/governance correctness**
    - Policy decisions must be deterministic and bounded.

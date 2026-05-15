@@ -1,6 +1,6 @@
 # Policy Projection Contract
 
-Ingary policy engines may use structured primitives, Starlark, WASM, hybrid
+Wardwright policy engines may use structured primitives, Starlark, WASM, hybrid
 composition, or future pluggable runtimes. The UI must not depend on those
 implementation details. It should depend on stable projections emitted by the
 policy compiler or engine adapter.
@@ -30,7 +30,7 @@ Each engine reports:
   - source span availability
 
 The descriptor is not permission to render arbitrary custom UI. It tells
-Ingary which review surfaces can be honest and which must show opacity.
+Wardwright which review surfaces can be honest and which must show opacity.
 
 ## Plan Projection
 
@@ -57,7 +57,7 @@ entrypoints, arbiters, or opaque regions. Each node reports:
 - optional source span
 
 The UI should make confidence visible. Opaque projections are acceptable, but
-they must not be displayed as if Ingary understands their internals.
+they must not be displayed as if Wardwright understands their internals.
 
 ## Simulation Run
 
@@ -78,5 +78,5 @@ review confidence.
 
 Policy engines may emit projection metadata and declarative render hints in the
 future. They should not provide executable frontend components for the core
-review path. Ingary owns the visual grammar so review, activation, audit, and
+review path. Wardwright owns the visual grammar so review, activation, audit, and
 diff workflows remain consistent across engines.
