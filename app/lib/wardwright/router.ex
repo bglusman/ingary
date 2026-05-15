@@ -197,6 +197,15 @@ defmodule Wardwright.Router do
     end
   end
 
+  get "/admin/policy-alerts" do
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Wardwright.Policy.AlertDelivery.status())
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
+  end
+
   post "/v1/policy-cache/events" do
     with :ok <- require_protected_access(conn),
          {:ok, event} <- Wardwright.PolicyCache.add(conn.body_params) do
