@@ -2954,6 +2954,85 @@ defmodule WardwrightTest do
            end)
   end
 
+  test "stream retry reroutes before release when reminder exceeds first selected context" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "tiny-stream/model",
+          "context_window" => 8,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"]
+          ]
+        },
+        %{
+          "model" => "large-stream/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            [],
+            ["use NewClient(", "arg) now"]
+          ]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "reroute-reminder-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => String.duplicate("Use NewClient instead. ", 4),
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "small"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert get_resp_header(conn, "x-wardwright-selected-model") == ["large-stream/model"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    assert get_in(receipt, ["attempts", Access.at(0), "model"]) == "large-stream/model"
+    assert get_in(receipt, ["final", "selected_model"]) == "large-stream/model"
+
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["status"] == "completed"
+    assert stream_policy["retry_count"] == 1
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "selected_model" => "tiny-stream/model",
+               "released_to_consumer" => false
+             },
+             %{
+               "status" => "completed",
+               "selected_model" => "large-stream/model",
+               "released_to_consumer" => true
+             }
+           ] = stream_policy["attempts"]
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "attempt.retry_rerouted" and
+               event["from_selected_model"] == "tiny-stream/model" and
+               event["selected_model"] == "large-stream/model" and
+               event["estimated_prompt_tokens"] > 8
+           end)
+  end
+
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
     assert %{"engine" => "wasm", "action" => "block", "status" => "error"} =
              Wardwright.Policy.Engine.evaluate(%{"engine" => "wasm"}, %{})

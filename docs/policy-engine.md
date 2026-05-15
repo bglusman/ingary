@@ -256,10 +256,16 @@ as the terminal stream event, and records
 `attempt.retry_skipped_after_release` in the receipt instead of pretending a
 full restart is still possible.
 
+When retry is still possible but the reminder-augmented request no longer fits
+the originally selected target, Wardwright re-runs the route planner with the
+same route constraints before failing closed. If a larger eligible target is
+available, the retry attempt uses that target and records
+`attempt.retry_rerouted`; otherwise the attempt fails closed with
+`stream_policy_retry_context_exceeded`.
+
 Remaining stream-runtime work includes raw provider-event/frame offsets when
-transport-level evidence matters, provider-specific pools, and reroute/degrade
-semantics when retry is requested before release but the retried request no
-longer fits the originally selected target.
+transport-level evidence matters, provider-specific pools, circuit breaking,
+and richer health/degraded-state reporting.
 
 ## State Scopes
 
