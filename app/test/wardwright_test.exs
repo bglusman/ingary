@@ -1816,6 +1816,9 @@ defmodule WardwrightTest do
   test "stream policy retry_with_reminder restarts generation before release" do
     config =
       unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "large/model", "context_window" => 256}
+      ])
       |> Map.put("stream_rules", [
         %{
           "id" => "deprecated-client-retry",
@@ -2485,6 +2488,9 @@ defmodule WardwrightTest do
   test "stream policy retry budget exhaustion keeps violating bytes unreleased" do
     config =
       unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "large/model", "context_window" => 256}
+      ])
       |> Map.put("stream_rules", [
         %{
           "id" => "deprecated-client-budget",
@@ -2598,6 +2604,72 @@ defmodule WardwrightTest do
                "released_to_consumer" => false
              }
            ] = get_in(receipt, ["final", "stream_policy", "attempts"])
+  end
+
+  test "stream retry fails closed when reminder injection exceeds the selected context window" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "tiny-stream/model",
+          "context_window" => 8,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"],
+            ["use NewClient(", "arg) now"]
+          ]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "oversized-reminder-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => String.duplicate("Use NewClient instead. ", 20),
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "small"}]
+      })
+
+    assert conn.status == 422
+    assert get_resp_header(conn, "content-type") == ["application/json; charset=utf-8"]
+    refute conn.resp_body =~ "data:"
+    refute conn.resp_body =~ "NewClient("
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_retry_context_exceeded"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "stream_policy_retry_context_exceeded"
+    assert stream_policy["retry_count"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "provider_status" => "cancelled",
+               "released_to_consumer" => false
+             }
+           ] = stream_policy["attempts"]
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "attempt.retry_context_exceeded" and
+               event["selected_model"] == "tiny-stream/model" and
+               event["context_window"] == 8 and
+               event["estimated_prompt_tokens"] > 8
+           end)
   end
 
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
