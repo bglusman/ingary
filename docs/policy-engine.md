@@ -232,6 +232,14 @@ the held suffix. This gives the router a deterministic policy boundary for a
 runtime implementation that sends SSE while continuing to enforce the holdback
 window.
 
+Stream-policy trigger events include byte-offset evidence over the normalized
+policy stream and current policy window: the triggering chunk range, policy
+window range, matched span, match kind, and whether the match happened inside
+the current chunk or across the buffered window. These offsets are receipt
+evidence for policy decisions, not raw HTTP transport frame positions; after a
+rewrite, later offsets are measured against the rewritten policy stream that
+subsequent rules actually evaluated.
+
 The HTTP route now uses that boundary for live streaming. Provider transports
 emit normalized chunks into the router as they arrive. Bounded-horizon policies
 can release safe prefixes, keep the recent match window held, and cancel the
@@ -240,9 +248,26 @@ the client receives a terminal Wardwright SSE event and the receipt records the
 policy status. If no bytes have been sent, Wardwright can still fail closed with
 JSON.
 
-Remaining stream-runtime work includes richer raw provider-event offsets in
-receipts, provider-specific pools, and a clearer operator-facing model for
-retries after any bytes have reached the client.
+Retry actions only restart provider generation while the response is still
+unreleased. If a bounded-horizon policy has already sent safe bytes to the SSE
+client and a later rule asks for `retry` or `retry_with_reminder`, Wardwright
+cancels the provider attempt, emits `stream_policy_retry_skipped_after_release`
+as the terminal stream event, and records
+`attempt.retry_skipped_after_release` in the receipt instead of pretending a
+full restart is still possible.
+
+When retry is still possible but the reminder-augmented request no longer fits
+the originally selected target, Wardwright re-runs the route planner with the
+same route constraints before failing closed. If a larger eligible target is
+available, the retry attempt uses that target and records
+`attempt.retry_rerouted`. Receipts also project those events into
+`final.route_transitions` so review tools can show route movement without
+parsing the lower-level stream event log. If no larger eligible target is
+available, the attempt fails closed with `stream_policy_retry_context_exceeded`.
+
+Remaining stream-runtime work includes raw provider-event/frame offsets when
+transport-level evidence matters, provider-specific pools, circuit breaking,
+and richer health/degraded-state reporting.
 
 ## State Scopes
 

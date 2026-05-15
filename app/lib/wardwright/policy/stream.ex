@@ -1,8 +1,6 @@
 defmodule Wardwright.Policy.Stream do
   @moduledoc false
 
-  alias Wardwright.Policy.Regex, as: PolicyRegex
-
   def evaluate(chunks, rules, opts \\ [])
 
   def evaluate(chunks, rules, opts) when is_list(chunks) and is_list(rules) do
@@ -36,17 +34,28 @@ defmodule Wardwright.Policy.Stream do
     now_ms = now_ms(opts)
     before_chunks = result.chunks
     chunk_index = Map.get(result, :next_chunk_index, 0)
+    stream_window_start_byte = Map.get(result, :stream_buffer_start_byte, 0)
+    chunk_start_byte = stream_window_start_byte + byte_size(result.stream_buffer)
+    chunk_end_byte = chunk_start_byte + byte_size(chunk)
+    stream_window_end_byte = chunk_end_byte
     stream_window = result.stream_buffer <> chunk
+
+    offset_context = %{
+      chunk_start_byte: chunk_start_byte,
+      chunk_end_byte: chunk_end_byte,
+      stream_window_start_byte: stream_window_start_byte,
+      stream_window_end_byte: stream_window_end_byte
+    }
 
     {control, result} =
       case latency_exceeded_result(result, chunk, stream_window, chunk_index, now_ms) do
         nil ->
-          case matching_rule(chunk, stream_window, result.rules) do
+          case matching_rule(chunk, stream_window, result.rules, offset_context) do
             nil ->
               {:cont, append_unmatched_chunk(result, chunk, stream_window, now_ms)}
 
-            {rule, match_scope} ->
-              apply_rule(result, chunk, stream_window, chunk_index, rule, match_scope, now_ms)
+            {rule, match_info} ->
+              apply_rule(result, chunk, stream_window, chunk_index, rule, match_info, now_ms)
           end
 
         result ->
@@ -90,6 +99,7 @@ defmodule Wardwright.Policy.Stream do
       action: nil,
       events: [],
       stream_buffer: "",
+      stream_buffer_start_byte: 0,
       horizon_bytes: Keyword.get(opts, :horizon_bytes) || stream_horizon_bytes(rules),
       released_to_consumer: true,
       attempt_index: Keyword.get(opts, :attempt_index, 0),
@@ -105,24 +115,31 @@ defmodule Wardwright.Policy.Stream do
     }
   end
 
-  defp matching_rule(chunk, stream_window, rules) do
-    Enum.find(rules, fn rule ->
+  defp matching_rule(chunk, stream_window, rules, offset_context) do
+    Enum.find_value(rules, fn rule ->
       action = Map.get(rule, "action", "pass")
 
-      action != "pass" and
-        (contains_match?(chunk, Map.get(rule, "contains") || Map.get(rule, "pattern")) or
-           regex_match?(chunk, Map.get(rule, "regex")) or
-           buffered_stream_window_match?(action, stream_window, rule))
+      if action == "pass" do
+        nil
+      else
+        match_info =
+          match_info(chunk, rule, "chunk", offset_context.chunk_start_byte, offset_context) ||
+            buffered_stream_window_match_info(
+              action,
+              stream_window,
+              rule,
+              offset_context.stream_window_start_byte,
+              offset_context
+            )
+
+        if match_info, do: {rule, match_info}
+      end
     end)
-    |> case do
-      nil -> nil
-      rule -> {rule, match_scope(chunk, stream_window, rule)}
-    end
   end
 
-  defp apply_rule(result, chunk, stream_window, index, rule, match_scope, now_ms) do
+  defp apply_rule(result, chunk, stream_window, index, rule, match_info, now_ms) do
     action = Map.get(rule, "action", "annotate")
-    event = event(rule, action, index, match_scope)
+    event = event(rule, action, index, match_info)
 
     result =
       result
@@ -132,7 +149,7 @@ defmodule Wardwright.Policy.Stream do
 
     case action do
       action when action in ["rewrite", "rewrite_chunk"] ->
-        if match_scope == "stream_window" do
+        if match_info.match_scope == "stream_window" do
           {:cont, rewrite_stream_window(result, chunk, stream_window, rule, now_ms)}
         else
           {:cont, append_rewritten_chunk(result, chunk, rewrite_chunk(chunk, rule), now_ms)}
@@ -168,6 +185,7 @@ defmodule Wardwright.Policy.Stream do
 
     result
     |> Map.put(:stream_buffer, held_window)
+    |> advance_stream_buffer_start(released_chunk)
     |> maybe_append_released_chunk(released_chunk)
     |> add_generated_bytes(generated_chunk)
     |> add_released_bytes(released_chunk)
@@ -273,6 +291,7 @@ defmodule Wardwright.Policy.Stream do
 
     result
     |> Map.put(:stream_buffer, held_window)
+    |> advance_stream_buffer_start(released_prefix)
     |> maybe_append_released_chunk(released_prefix)
     |> add_generated_bytes(generated_chunk)
     |> add_released_bytes(released_prefix)
@@ -303,6 +322,7 @@ defmodule Wardwright.Policy.Stream do
   defp put_rewritten_stream_window_chunk(result, released_chunk) do
     result
     |> Map.put(:stream_buffer, "")
+    |> advance_stream_buffer_start(released_chunk)
     |> Map.update!(:chunks, &(&1 ++ [released_chunk]))
   end
 
@@ -314,6 +334,14 @@ defmodule Wardwright.Policy.Stream do
 
   defp maybe_append_released_chunk(result, released_chunk),
     do: Map.update!(result, :chunks, &(&1 ++ [released_chunk]))
+
+  defp advance_stream_buffer_start(result, ""), do: result
+
+  defp advance_stream_buffer_start(result, released_chunk) do
+    Map.update(result, :stream_buffer_start_byte, byte_size(released_chunk), fn start_byte ->
+      start_byte + byte_size(released_chunk)
+    end)
+  end
 
   defp released_since(before_chunks, after_chunks) do
     Enum.drop(after_chunks, length(before_chunks))
@@ -385,6 +413,7 @@ defmodule Wardwright.Policy.Stream do
     |> update_hold_age(now_ms)
     |> maybe_append_released_chunk(result.stream_buffer)
     |> add_released_bytes(result.stream_buffer)
+    |> advance_stream_buffer_start(result.stream_buffer)
     |> Map.put(:stream_buffer, "")
     |> Map.put(:held_bytes, 0)
     |> update_hold_tracking(now_ms)
@@ -392,13 +421,20 @@ defmodule Wardwright.Policy.Stream do
 
   defp finalize_result(result, _now_ms), do: result
 
-  defp event(rule, action, index, match_scope) do
+  defp event(rule, action, index, match_info) do
     %{
       "type" => "stream_policy.triggered",
       "rule_id" => Map.get(rule, "id", "stream-rule"),
       "action" => action,
       "chunk_index" => index,
-      "match_scope" => match_scope,
+      "match_scope" => match_info.match_scope,
+      "match_kind" => match_info.match_kind,
+      "chunk_start_byte" => match_info.chunk_start_byte,
+      "chunk_end_byte" => match_info.chunk_end_byte,
+      "stream_window_start_byte" => match_info.stream_window_start_byte,
+      "stream_window_end_byte" => match_info.stream_window_end_byte,
+      "match_start_byte" => match_info.match_start_byte,
+      "match_end_byte" => match_info.match_end_byte,
       "reminder" => Map.get(rule, "reminder"),
       "max_retries" => integer_value(Map.get(rule, "max_retries"))
     }
@@ -427,13 +463,58 @@ defmodule Wardwright.Policy.Stream do
     end
   end
 
-  defp contains_match?(_chunk, value) when value in [nil, ""], do: false
-  defp contains_match?(chunk, value), do: String.contains?(chunk, to_string(value))
+  defp match_info(text, rule, scope, base_byte, offset_context) do
+    match_info =
+      literal_match_info(
+        text,
+        Map.get(rule, "contains") || Map.get(rule, "pattern"),
+        scope,
+        base_byte
+      ) ||
+        regex_match_info(text, Map.get(rule, "regex"), scope, base_byte)
 
-  defp regex_match?(_chunk, value) when value in [nil, ""], do: false
-  defp regex_match?(chunk, value), do: PolicyRegex.match?(chunk, value)
+    case match_info do
+      nil -> nil
+      match_info -> Map.merge(offset_context, match_info)
+    end
+  end
 
-  defp buffered_stream_window_match?(action, stream_window, rule)
+  defp literal_match_info(_text, value, _scope, _base_byte) when value in [nil, ""], do: nil
+
+  defp literal_match_info(text, value, scope, base_byte) do
+    pattern = to_string(value)
+
+    case :binary.match(text, pattern) do
+      {relative_start, length} ->
+        %{
+          match_scope: scope,
+          match_kind: "literal",
+          match_start_byte: base_byte + relative_start,
+          match_end_byte: base_byte + relative_start + length
+        }
+
+      :nomatch ->
+        nil
+    end
+  end
+
+  defp regex_match_info(_text, value, _scope, _base_byte) when value in [nil, ""], do: nil
+
+  defp regex_match_info(text, value, scope, base_byte) do
+    with {:ok, regex} <- Regex.compile(to_string(value)),
+         [{relative_start, length} | _captures] <- Regex.run(regex, text, return: :index) do
+      %{
+        match_scope: scope,
+        match_kind: "regex",
+        match_start_byte: base_byte + relative_start,
+        match_end_byte: base_byte + relative_start + length
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp buffered_stream_window_match_info(action, stream_window, rule, base_byte, offset_context)
        when action in [
               "block",
               "block_final",
@@ -442,25 +523,17 @@ defmodule Wardwright.Policy.Stream do
               "rewrite",
               "rewrite_chunk"
             ] do
-    contains_match?(stream_window, Map.get(rule, "contains") || Map.get(rule, "pattern")) or
-      regex_match?(stream_window, Map.get(rule, "regex"))
+    match_info(stream_window, rule, "stream_window", base_byte, offset_context)
   end
 
-  defp buffered_stream_window_match?(_action, _stream_window, _rule), do: false
-
-  defp match_scope(chunk, stream_window, rule) do
-    if contains_match?(chunk, Map.get(rule, "contains") || Map.get(rule, "pattern")) or
-         regex_match?(chunk, Map.get(rule, "regex")),
-       do: "chunk",
-       else: stream_window_scope(stream_window, rule)
-  end
-
-  defp stream_window_scope(stream_window, rule) do
-    if contains_match?(stream_window, Map.get(rule, "contains") || Map.get(rule, "pattern")) or
-         regex_match?(stream_window, Map.get(rule, "regex")),
-       do: "stream_window",
-       else: "chunk"
-  end
+  defp buffered_stream_window_match_info(
+         _action,
+         _stream_window,
+         _rule,
+         _base_byte,
+         _offset_context
+       ),
+       do: nil
 
   defp rewritten_bytes(generated_chunk, released_chunk) do
     if generated_chunk == released_chunk, do: 0, else: byte_size(generated_chunk)

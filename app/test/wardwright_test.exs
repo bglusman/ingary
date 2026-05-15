@@ -1627,6 +1627,115 @@ defmodule WardwrightTest do
            ] = result.events
   end
 
+  test "stream policy trigger events include literal match offsets across split chunks" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["abc Old", "Client("],
+        [
+          %{
+            "id" => "offset-split-literal",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+
+    assert [
+             %{
+               "type" => "stream_policy.triggered",
+               "rule_id" => "offset-split-literal",
+               "action" => "block",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window",
+               "match_kind" => "literal",
+               "chunk_start_byte" => 7,
+               "chunk_end_byte" => 14,
+               "stream_window_start_byte" => 0,
+               "stream_window_end_byte" => 14,
+               "match_start_byte" => 4,
+               "match_end_byte" => 14
+             }
+           ] = result.events
+  end
+
+  test "stream policy trigger events include regex match offsets across split chunks" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["abc Old", "Client("],
+        [
+          %{
+            "id" => "offset-split-regex",
+            "regex" => "OldClient\\(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+
+    assert [
+             %{
+               "type" => "stream_policy.triggered",
+               "rule_id" => "offset-split-regex",
+               "action" => "block",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window",
+               "match_kind" => "regex",
+               "chunk_start_byte" => 7,
+               "chunk_end_byte" => 14,
+               "stream_window_start_byte" => 0,
+               "stream_window_end_byte" => 14,
+               "match_start_byte" => 4,
+               "match_end_byte" => 14
+             }
+           ] = result.events
+  end
+
+  test "stream policy offsets stay coherent after earlier rewrites change byte length" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["ABC", "TAIL"],
+        [
+          %{
+            "id" => "length-changing-rewrite",
+            "contains" => "ABC",
+            "action" => "rewrite_chunk",
+            "replacement" => "LONGER-REPLACEMENT"
+          },
+          %{
+            "id" => "post-rewrite-window",
+            "contains" => "REPLACEMENTTAIL",
+            "action" => "block"
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+
+    assert [
+             %{
+               "rule_id" => "length-changing-rewrite",
+               "match_scope" => "chunk",
+               "match_start_byte" => 0,
+               "match_end_byte" => 3
+             },
+             %{
+               "rule_id" => "post-rewrite-window",
+               "match_scope" => "stream_window",
+               "chunk_start_byte" => 18,
+               "chunk_end_byte" => 22,
+               "stream_window_start_byte" => 0,
+               "stream_window_end_byte" => 22,
+               "match_start_byte" => 7,
+               "match_end_byte" => 22
+             }
+           ] = result.events
+  end
+
   test "stream policy bounded horizon releases remaining held bytes on completion" do
     result =
       Wardwright.Policy.Stream.evaluate(
@@ -2085,6 +2194,75 @@ defmodule WardwrightTest do
            ] = stream_policy["attempts"]
 
     assert released_bytes > 0
+  end
+
+  test "bounded stream runtime skips retry once safe bytes have already reached SSE client" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["safe prefix that can release ", "Old", "Client(arg) now"]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "bounded-runtime-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1,
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "safe prefix"
+    assert conn.resp_body =~ "stream_policy_retry_skipped_after_release"
+    refute conn.resp_body =~ "Old"
+    refute conn.resp_body =~ "Client("
+    refute conn.resp_body =~ "NewClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "stream_policy_retry_skipped_after_release"
+    assert stream_policy["retry_count"] == 0
+    assert stream_policy["max_retries"] == 1
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] > 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "provider_status" => "cancelled",
+               "released_bytes" => released_bytes
+             }
+           ] = stream_policy["attempts"]
+
+    assert released_bytes > 0
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "attempt.retry_skipped_after_release" and
+               event["reason"] == "response_already_started" and
+               event["rule_id"] == "bounded-runtime-retry" and
+               event["released_bytes"] > 0
+           end)
   end
 
   test "bounded stream runtime terminates SSE when provider fails after safe release" do
@@ -2772,6 +2950,99 @@ defmodule WardwrightTest do
              event["type"] == "attempt.retry_context_exceeded" and
                event["selected_model"] == "tiny-stream/model" and
                event["context_window"] == 8 and
+               event["estimated_prompt_tokens"] > 8
+           end)
+  end
+
+  test "stream retry reroutes before release when reminder exceeds first selected context" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "tiny-stream/model",
+          "context_window" => 8,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            ["use OldClient(", "arg) now"]
+          ]
+        },
+        %{
+          "model" => "large-stream/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_attempt_chunks" => [
+            [],
+            ["use NewClient(", "arg) now"]
+          ]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "reroute-reminder-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => String.duplicate("Use NewClient instead. ", 4),
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "small"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert get_resp_header(conn, "x-wardwright-selected-model") == ["large-stream/model"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    assert get_in(receipt, ["attempts", Access.at(0), "model"]) == "large-stream/model"
+    assert get_in(receipt, ["final", "selected_model"]) == "large-stream/model"
+
+    assert [
+             %{
+               "phase" => "stream_retry",
+               "reason" => "retry_prompt_exceeded_selected_context",
+               "from_model" => "tiny-stream/model",
+               "to_model" => "large-stream/model",
+               "from_context_window" => 8,
+               "to_context_window" => 256,
+               "estimated_prompt_tokens" => estimated_prompt_tokens
+             }
+           ] = get_in(receipt, ["final", "route_transitions"])
+
+    assert estimated_prompt_tokens > 8
+
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
+
+    assert stream_policy["status"] == "completed"
+    assert stream_policy["retry_count"] == 1
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "selected_model" => "tiny-stream/model",
+               "released_to_consumer" => false
+             },
+             %{
+               "status" => "completed",
+               "selected_model" => "large-stream/model",
+               "released_to_consumer" => true
+             }
+           ] = stream_policy["attempts"]
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "attempt.retry_rerouted" and
+               event["from_selected_model"] == "tiny-stream/model" and
+               event["selected_model"] == "large-stream/model" and
                event["estimated_prompt_tokens"] > 8
            end)
   end
