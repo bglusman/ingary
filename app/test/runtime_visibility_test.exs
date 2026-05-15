@@ -230,6 +230,119 @@ defmodule Wardwright.RuntimeVisibilityTest do
            } = Enum.find(status["providers"], &(&1["model"] == "direct/provider-health"))
   end
 
+  test "provider runtime exposes active provider attempts until they finish" do
+    parent = self()
+
+    target = %{
+      "model" => "direct/slow-provider",
+      "provider_kind" => "canned_sequence",
+      "provider_timeout_ms" => 1_000
+    }
+
+    task =
+      Task.async(fn ->
+        Wardwright.ProviderRuntime.complete(target, %{}, fn ->
+          send(parent, :provider_entered)
+          Process.sleep(200)
+          {:ok, "slow response"}
+        end)
+      end)
+
+    assert_receive :provider_entered
+
+    active =
+      wait_for(fn ->
+        status =
+          :get
+          |> call("/admin/runtime")
+          |> then(&Jason.decode!(&1.resp_body))
+
+        Enum.find(
+          status["provider_attempts"],
+          &(&1["model"] == "direct/slow-provider" and &1["status"] == "started")
+        )
+      end)
+
+    assert %{
+             "attempt_id" => attempt_id,
+             "provider_id" => "direct",
+             "model" => "direct/slow-provider",
+             "stream" => false,
+             "chunk_count" => 0
+           } = active
+
+    assert {:ok, "slow response"} = Task.await(task)
+
+    assert :cleared =
+             wait_for(fn ->
+               status =
+                 :get
+                 |> call("/admin/runtime")
+                 |> then(&Jason.decode!(&1.resp_body))
+
+               active? =
+                 Enum.any?(
+                   status["provider_attempts"],
+                   &(&1["attempt_id"] == attempt_id)
+                 )
+
+               if active?, do: nil, else: :cleared
+             end)
+  end
+
+  test "provider runtime marks active streams after provider chunks arrive" do
+    parent = self()
+
+    target = %{
+      "model" => "direct/slow-stream",
+      "provider_kind" => "canned_sequence",
+      "provider_timeout_ms" => 1_000
+    }
+
+    task =
+      Task.async(fn ->
+        Wardwright.ProviderRuntime.stream_each(
+          target,
+          %{},
+          fn emit ->
+            emit.("first chunk")
+            Process.sleep(200)
+            {:ok, :done}
+          end,
+          [],
+          fn chunk, acc ->
+            send(parent, {:chunk_seen, chunk})
+            Process.sleep(200)
+            {:cont, [chunk | acc]}
+          end
+        )
+      end)
+
+    assert_receive {:chunk_seen, "first chunk"}
+
+    active =
+      wait_for(fn ->
+        status =
+          :get
+          |> call("/admin/runtime")
+          |> then(&Jason.decode!(&1.resp_body))
+
+        Enum.find(
+          status["provider_attempts"],
+          &(&1["model"] == "direct/slow-stream" and &1["status"] == "streaming")
+        )
+      end)
+
+    assert %{
+             "provider_id" => "direct",
+             "model" => "direct/slow-stream",
+             "stream" => true,
+             "chunk_count" => 1
+           } = active
+
+    assert {{:ok, :done}, ["first chunk"]} = Task.await(task)
+  end
+
   defp wait_for(fun, attempts \\ 20)
 
   defp wait_for(fun, attempts) when attempts > 0 do

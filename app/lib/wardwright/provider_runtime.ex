@@ -7,7 +7,11 @@ defmodule Wardwright.ProviderRuntime do
 
   @default_timeout_ms 180_000
   @attempt_count :attempt_count
+  @attempt_id_key "attempt_id"
+  @attempt_status :status
   @cancelled_count :cancelled_count
+  @chunk_count :chunk_count
+  @chunk_count_key "chunk_count"
   @completed_count :completed_count
   @configured "configured"
   @consecutive_failures :consecutive_failures
@@ -17,6 +21,8 @@ defmodule Wardwright.ProviderRuntime do
   @error_count_key "error_count"
   @health_key "health"
   @kind_key "kind"
+  @last_event_at :last_event_at
+  @last_event_at_key "last_event_at"
   @last_attempt_at :last_attempt_at
   @last_attempt_at_key "last_attempt_at"
   @last_latency_ms :last_latency_ms
@@ -26,17 +32,20 @@ defmodule Wardwright.ProviderRuntime do
   @latency_ms_key "latency_ms"
   @model_key "model"
   @provider_id_key "provider_id"
+  @provider_attempts_key "provider_attempts"
   @provider_kind_key "provider_kind"
   @providers_key "providers"
   @provider_timeout_ms_key "provider_timeout_ms"
   @status_key "status"
   @stream_key "stream"
+  @started_at :started_at
+  @started_at_key "started_at"
   @targets_key "targets"
   @timeout_ms_key "timeout_ms"
   @type_key "type"
 
   def start_link(_opts) do
-    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+    GenServer.start_link(__MODULE__, empty_state(), name: __MODULE__)
   end
 
   def reset do
@@ -48,16 +57,26 @@ defmodule Wardwright.ProviderRuntime do
   end
 
   def status do
-    %{@providers_key => providers_status()}
+    state = state_snapshot()
+
+    %{
+      @providers_key => providers_status_from_state(state),
+      @provider_attempts_key => active_attempts_status_from_state(state)
+    }
   end
 
   def providers_status do
-    observed =
-      if Process.whereis(__MODULE__) do
-        GenServer.call(__MODULE__, :status)
-      else
-        %{}
-      end
+    state_snapshot()
+    |> providers_status_from_state()
+  end
+
+  def active_attempts_status do
+    state_snapshot()
+    |> active_attempts_status_from_state()
+  end
+
+  defp providers_status_from_state(state) do
+    observed = Map.get(state, :stats, %{})
 
     configured =
       Wardwright.current_config()
@@ -79,6 +98,14 @@ defmodule Wardwright.ProviderRuntime do
     |> Enum.sort_by(&{Map.get(&1, @provider_id_key), Map.get(&1, @model_key)})
   end
 
+  defp active_attempts_status_from_state(state) do
+    state
+    |> Map.get(:active_attempts, %{})
+    |> Map.values()
+    |> Enum.map(&active_attempt_record/1)
+    |> Enum.sort_by(&{Map.get(&1, @started_at_key), Map.get(&1, @attempt_id_key)})
+  end
+
   def complete(target, request, provider_fun)
       when is_map(target) and is_function(provider_fun, 0) do
     run(target, request, provider_fun, false)
@@ -95,10 +122,12 @@ defmodule Wardwright.ProviderRuntime do
     started = System.monotonic_time(:millisecond)
     provider_id = provider_id(target)
     model = Map.get(target, @model_key, "")
+    attempt_id = attempt_id(provider_id, model)
     stream_ref = make_ref()
     parent = self()
 
     publish("provider.attempt.started", %{
+      @attempt_id_key => attempt_id,
       @provider_id_key => provider_id,
       @model_key => model,
       @timeout_ms_key => timeout_ms,
@@ -113,9 +142,11 @@ defmodule Wardwright.ProviderRuntime do
         end)
       end)
 
-    {result, acc} = await_provider_stream(task, stream_ref, timeout_ms, acc, chunk_fun)
+    {result, acc} =
+      await_provider_stream(task, attempt_id, stream_ref, timeout_ms, acc, chunk_fun)
 
     publish("provider.attempt.finished", %{
+      @attempt_id_key => attempt_id,
       @provider_id_key => provider_id,
       @model_key => model,
       @status_key => result_status(result),
@@ -130,8 +161,10 @@ defmodule Wardwright.ProviderRuntime do
     started = System.monotonic_time(:millisecond)
     provider_id = provider_id(target)
     model = Map.get(target, @model_key, "")
+    attempt_id = attempt_id(provider_id, model)
 
     publish("provider.attempt.started", %{
+      @attempt_id_key => attempt_id,
       @provider_id_key => provider_id,
       @model_key => model,
       @timeout_ms_key => timeout_ms,
@@ -143,6 +176,7 @@ defmodule Wardwright.ProviderRuntime do
       |> await_provider(timeout_ms)
 
     publish("provider.attempt.finished", %{
+      @attempt_id_key => attempt_id,
       @provider_id_key => provider_id,
       @model_key => model,
       @status_key => result_status(result),
@@ -156,11 +190,23 @@ defmodule Wardwright.ProviderRuntime do
   def init(state), do: {:ok, state}
 
   @impl true
-  def handle_call(:reset, _from, _state), do: {:reply, :ok, %{}}
+  def handle_call(:reset, _from, _state), do: {:reply, :ok, empty_state()}
 
   def handle_call(:status, _from, state), do: {:reply, state, state}
 
   @impl true
+  def handle_cast({:provider_started, event}, state) do
+    {:noreply, record_started(state, event)}
+  end
+
+  def handle_cast({:provider_streaming, attempt_id}, state) do
+    {:noreply, record_streaming(state, attempt_id)}
+  end
+
+  def handle_cast({:provider_cancelling, attempt_id}, state) do
+    {:noreply, record_cancelling(state, attempt_id)}
+  end
+
   def handle_cast({:provider_finished, event}, state) do
     {:noreply, record_finished(state, event)}
   end
@@ -178,14 +224,17 @@ defmodule Wardwright.ProviderRuntime do
     end
   end
 
-  defp await_provider_stream(task, stream_ref, timeout_ms, acc, chunk_fun) do
+  defp await_provider_stream(task, attempt_id, stream_ref, timeout_ms, acc, chunk_fun) do
     receive do
       {^stream_ref, :chunk, chunk} ->
+        record_provider_streaming(attempt_id)
+
         case chunk_fun.(chunk, acc) do
           {:cont, acc} ->
-            await_provider_stream(task, stream_ref, timeout_ms, acc, chunk_fun)
+            await_provider_stream(task, attempt_id, stream_ref, timeout_ms, acc, chunk_fun)
 
           {:halt, acc} ->
+            record_provider_cancelling(attempt_id)
             send(task.pid, {stream_ref, :cancel})
 
             Task.yield(task, 500) || Task.shutdown(task, :brutal_kill)
@@ -269,10 +318,29 @@ defmodule Wardwright.ProviderRuntime do
         @created_at_key => System.system_time(:second)
       })
 
+    if type == "provider.attempt.started", do: record_provider_started(event)
     if type == "provider.attempt.finished", do: record_provider_finished(event)
 
     if Process.whereis(Wardwright.PubSub) do
       Events.publish(Events.topic(:models), event)
+    end
+  end
+
+  defp record_provider_started(event) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:provider_started, event})
+    end
+  end
+
+  defp record_provider_streaming(attempt_id) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:provider_streaming, attempt_id})
+    end
+  end
+
+  defp record_provider_cancelling(attempt_id) do
+    if Process.whereis(__MODULE__) do
+      GenServer.cast(__MODULE__, {:provider_cancelling, attempt_id})
     end
   end
 
@@ -287,7 +355,8 @@ defmodule Wardwright.ProviderRuntime do
     model = Map.get(event, @model_key, "")
     key = {provider_id, model}
     status = Map.get(event, @status_key, "provider_error")
-    previous = Map.get(state, key, empty_stats(provider_id, model))
+    stats_state = Map.get(state, :stats)
+    previous = Map.get(stats_state, key, empty_stats(provider_id, model))
     failed? = status == "provider_error"
 
     stats =
@@ -304,7 +373,57 @@ defmodule Wardwright.ProviderRuntime do
       |> Map.put(@last_latency_ms, Map.get(event, @latency_ms_key))
       |> Map.put(@last_attempt_at, Map.get(event, @created_at_key, System.system_time(:second)))
 
-    Map.put(state, key, stats)
+    state
+    |> Map.put(:stats, Map.put(stats_state, key, stats))
+    |> update_in([:active_attempts], &Map.delete(&1, Map.get(event, @attempt_id_key)))
+  end
+
+  defp record_started(state, event) do
+    attempt_id = Map.get(event, @attempt_id_key)
+
+    if attempt_id in [nil, ""] do
+      state
+    else
+      put_in(
+        state,
+        [:active_attempts, attempt_id],
+        %{
+          @attempt_status => "started",
+          @chunk_count => 0,
+          @last_event_at => Map.get(event, @created_at_key, System.system_time(:second)),
+          @started_at => Map.get(event, @created_at_key, System.system_time(:second)),
+          attempt_id: attempt_id,
+          provider_id: Map.get(event, @provider_id_key, ""),
+          model: Map.get(event, @model_key, ""),
+          stream: Map.get(event, @stream_key, false) == true,
+          timeout_ms: Map.get(event, @timeout_ms_key)
+        }
+      )
+    end
+  end
+
+  defp record_streaming(state, attempt_id) do
+    update_attempt(state, attempt_id, fn attempt ->
+      attempt
+      |> Map.put(@attempt_status, "streaming")
+      |> Map.put(@last_event_at, System.system_time(:second))
+      |> Map.update!(@chunk_count, &(&1 + 1))
+    end)
+  end
+
+  defp record_cancelling(state, attempt_id) do
+    update_attempt(state, attempt_id, fn attempt ->
+      attempt
+      |> Map.put(@attempt_status, "cancelling")
+      |> Map.put(@last_event_at, System.system_time(:second))
+    end)
+  end
+
+  defp update_attempt(state, attempt_id, fun) do
+    update_in(state, [:active_attempts, attempt_id], fn
+      nil -> nil
+      attempt -> fun.(attempt)
+    end)
   end
 
   defp provider_status(target, observed) do
@@ -336,6 +455,20 @@ defmodule Wardwright.ProviderRuntime do
     }
   end
 
+  defp active_attempt_record(attempt) do
+    %{
+      @attempt_id_key => attempt.attempt_id,
+      @provider_id_key => attempt.provider_id,
+      @model_key => attempt.model,
+      @status_key => attempt.status,
+      @stream_key => attempt.stream,
+      @timeout_ms_key => attempt.timeout_ms,
+      @started_at_key => attempt.started_at,
+      @last_event_at_key => attempt.last_event_at,
+      @chunk_count_key => attempt.chunk_count
+    }
+  end
+
   defp health(%{attempt_count: 0}), do: "unknown"
   defp health(%{consecutive_failures: failures}) when failures > 0, do: "degraded"
   defp health(_stats), do: "healthy"
@@ -353,6 +486,23 @@ defmodule Wardwright.ProviderRuntime do
       last_latency_ms: nil,
       last_attempt_at: nil
     }
+  end
+
+  defp empty_state do
+    %{stats: %{}, active_attempts: %{}}
+  end
+
+  defp state_snapshot do
+    if Process.whereis(__MODULE__) do
+      GenServer.call(__MODULE__, :status)
+    else
+      empty_state()
+    end
+  end
+
+  defp attempt_id(provider_id, model) do
+    id = :erlang.unique_integer([:positive, :monotonic])
+    "pat_#{provider_id}_#{:erlang.phash2(model)}_#{id}"
   end
 
   defp integer_value(value) when is_integer(value), do: value
