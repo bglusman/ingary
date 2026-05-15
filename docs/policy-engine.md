@@ -222,13 +222,20 @@ The evaluator now exposes the same behavior as an incremental arbiter:
 initialize state for a ruleset, consume one normalized provider chunk, receive
 the newly releasable output chunks for that step, and finish the stream to flush
 the held suffix. This gives the router a deterministic policy boundary for a
-future implementation that sends SSE while continuing to enforce the holdback
+runtime implementation that sends SSE while continuing to enforce the holdback
 window.
 
-The current HTTP route still evaluates the provider stream before deciding
-between SSE success and fail-closed JSON. Mid-stream policy cancellation, partial
-release followed by abort/retry, latency budgets, and raw provider-event offsets
-are still future work.
+The HTTP route now uses that boundary for live streaming. Provider transports
+emit normalized chunks into the router as they arrive. Bounded-horizon policies
+can release safe prefixes, keep the recent match window held, and cancel the
+provider attempt when a later trigger fires. If the response has already started,
+the client receives a terminal Wardwright SSE event and the receipt records the
+policy status. If no bytes have been sent, Wardwright can still fail closed with
+JSON.
+
+Remaining stream-runtime work includes explicit latency budgets, richer raw
+provider-event offsets in receipts, provider-specific pools, and a clearer
+operator-facing model for retries after any bytes have reached the client.
 
 ## State Scopes
 

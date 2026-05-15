@@ -57,36 +57,34 @@ defmodule Wardwright.Router do
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens
       })
 
-      provider = provider_outcome(request, decision, fail_closed?)
-      Wardwright.Policy.History.record_response(caller, provider.content)
-
-      receipt =
-        provider.status
-        |> build_receipt(model, caller, request, decision, provider.called_provider, policy)
-        |> apply_provider_outcome(provider)
-
-      Wardwright.ReceiptStore.insert(receipt)
-
-      record_runtime_event(model, caller, "receipt.finalized", %{
-        "receipt_id" => receipt["receipt_id"],
-        "status" => get_in(receipt, ["final", "status"]),
-        "simulation" => false,
-        "alert_count" => get_in(receipt, ["final", "alert_count"]) || 0
-      })
-
-      conn =
-        conn
-        |> put_resp_header("x-wardwright-receipt-id", receipt["receipt_id"])
-        |> put_resp_header("x-wardwright-selected-model", decision.selected_model)
-
-      status = response_status(receipt)
-
-      if Map.get(request, "stream") == true and status == 200 do
-        stream_chat(conn, request, decision, Map.get(provider, :stream_chunks))
+      if Map.get(request, "stream") == true and not fail_closed? and not decision.route_blocked do
+        stream_chat_runtime(conn, model, caller, request, decision, policy)
       else
+        provider = provider_outcome(request, decision, fail_closed?)
+        Wardwright.Policy.History.record_response(caller, provider.content)
+
+        receipt =
+          provider.status
+          |> build_receipt(model, caller, request, decision, provider.called_provider, policy)
+          |> apply_provider_outcome(provider)
+
+        Wardwright.ReceiptStore.insert(receipt)
+
+        record_runtime_event(model, caller, "receipt.finalized", %{
+          "receipt_id" => receipt["receipt_id"],
+          "status" => get_in(receipt, ["final", "status"]),
+          "simulation" => false,
+          "alert_count" => get_in(receipt, ["final", "alert_count"]) || 0
+        })
+
+        conn =
+          conn
+          |> put_resp_header("x-wardwright-receipt-id", receipt["receipt_id"])
+          |> put_resp_header("x-wardwright-selected-model", decision.selected_model)
+
         json(
           conn,
-          status,
+          response_status(receipt),
           chat_response(request, receipt, decision, provider.content)
         )
       end
@@ -352,30 +350,14 @@ defmodule Wardwright.Router do
   end
 
   defp provider_outcome(request, decision, false) when is_map(request) do
-    if Map.get(request, "stream") == true do
-      stream_policy = evaluate_stream_policy(request, decision)
+    structured_config = Wardwright.current_config()["structured_output"]
 
-      %{
-        content: nil,
-        status: stream_policy.status,
-        latency_ms: Map.get(stream_policy, :provider_latency_ms, 0),
-        error: Map.get(stream_policy, :provider_error),
-        called_provider: Map.get(stream_policy, :called_provider, false),
-        mock: Map.get(stream_policy, :mock, true),
-        structured_output: nil,
-        stream_chunks: stream_policy.chunks,
-        stream_policy: stream_policy
-      }
-    else
-      structured_config = Wardwright.current_config()["structured_output"]
-
-      Wardwright.Policy.StructuredOutput.run(structured_config, fn attempt_index ->
-        request
-        |> Map.put("wardwright_attempt_index", attempt_index)
-        |> then(&Wardwright.complete_selected_model(decision.selected_model, &1))
-        |> Map.put_new(:structured_output, nil)
-      end)
-    end
+    Wardwright.Policy.StructuredOutput.run(structured_config, fn attempt_index ->
+      request
+      |> Map.put("wardwright_attempt_index", attempt_index)
+      |> then(&Wardwright.complete_selected_model(decision.selected_model, &1))
+      |> Map.put_new(:structured_output, nil)
+    end)
   end
 
   defp require_messages(%{"messages" => messages}) when is_list(messages) and messages != [],
@@ -732,40 +714,59 @@ defmodule Wardwright.Router do
     end
   end
 
-  defp stream_chat(conn, request, decision, chunks) do
-    conn =
-      conn
-      |> put_resp_header("content-type", "text/event-stream")
-      |> put_resp_header("cache-control", "no-cache")
-      |> send_chunked(200)
-
-    chunks = chunks || default_stream_chunks(request, decision)
-
-    conn =
-      Enum.reduce(Enum.with_index(chunks), conn, fn {text, index}, acc ->
-        payload = %{
-          "id" => "chatcmpl_stream_mock",
-          "object" => "chat.completion.chunk",
-          "created" => System.system_time(:second),
-          "model" => Map.get(request, "model"),
-          "choices" => [%{"index" => index, "delta" => %{"content" => text}}]
-        }
-
-        {:ok, acc} = chunk(acc, "data: #{Jason.encode!(payload)}\n\n")
-        acc
-      end)
-
-    {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
-    conn
-  end
-
-  defp evaluate_stream_policy(request, decision) do
+  defp stream_chat_runtime(conn, model, caller, request, decision, policy) do
+    receipt = build_receipt("completed", model, caller, request, decision, false, policy)
+    receipt_id = receipt["receipt_id"]
     rules = Wardwright.current_config()["stream_rules"] || []
 
-    evaluate_stream_attempt(request, decision, rules, 0, 0, 0, [], [])
+    acc = %{
+      conn:
+        conn
+        |> put_resp_header("x-wardwright-receipt-id", receipt_id)
+        |> put_resp_header("x-wardwright-selected-model", decision.selected_model),
+      sent?: false,
+      request: request,
+      receipt_id: receipt_id,
+      chunks: []
+    }
+
+    {stream_policy, provider, acc} =
+      run_stream_runtime_attempt(request, decision, rules, 0, 0, 0, [], [], acc)
+
+    provider =
+      provider
+      |> Map.put(:stream_policy, stream_policy)
+      |> Map.put(:stream_chunks, stream_policy.chunks)
+      |> Map.put(:content, Enum.join(acc.chunks))
+      |> Map.put_new(:structured_output, nil)
+
+    Wardwright.Policy.History.record_response(caller, provider.content)
+
+    receipt =
+      receipt
+      |> apply_provider_outcome(provider)
+
+    Wardwright.ReceiptStore.insert(receipt)
+
+    record_runtime_event(model, caller, "receipt.finalized", %{
+      "receipt_id" => receipt["receipt_id"],
+      "status" => get_in(receipt, ["final", "status"]),
+      "simulation" => false,
+      "alert_count" => get_in(receipt, ["final", "alert_count"]) || 0
+    })
+
+    if acc.sent? do
+      acc.conn
+    else
+      json(
+        acc.conn,
+        response_status(receipt),
+        chat_response(request, receipt, decision, provider.content)
+      )
+    end
   end
 
-  defp evaluate_stream_attempt(
+  defp run_stream_runtime_attempt(
          request,
          decision,
          rules,
@@ -773,53 +774,238 @@ defmodule Wardwright.Router do
          attempt_index,
          retry_count,
          events,
-         attempts
+         attempts,
+         acc
        ) do
-    case stream_chunks(request, decision, attempt_index) do
-      {:ok, chunks, provider} ->
-        policy = Wardwright.Policy.Stream.evaluate(chunks, rules, attempt_index: attempt_index)
-        attempt = stream_attempt(policy, attempt_index, provider)
-        events = events ++ policy.events
-        attempts = attempts ++ [attempt]
+    stream_acc =
+      Map.merge(acc, %{
+        policy: Wardwright.Policy.Stream.start(rules, attempt_index: attempt_index),
+        attempt_released_chunks: []
+      })
 
-        trigger_event = List.last(policy.events) || %{}
-        retry_budget = stream_retry_budget(trigger_event, active_retry_budget)
+    {provider, stream_acc} =
+      stream_attempt_each(request, decision, attempt_index, stream_acc, &stream_runtime_chunk/2)
 
-        if policy.status == "stream_policy_retry_required" and retry_count < retry_budget do
-          retry_event = %{
-            "type" => "attempt.retry_requested",
-            "attempt_index" => attempt_index,
-            "next_attempt_index" => attempt_index + 1,
-            "retry_count" => retry_count + 1,
-            "max_retries" => retry_budget,
-            "rule_id" => Map.get(trigger_event, "rule_id"),
-            "reminder" => Map.get(trigger_event, "reminder")
-          }
+    {policy, stream_acc} =
+      if provider.status == "completed" and stream_acc.policy.status == "completed" do
+        {policy, released_chunks} = Wardwright.Policy.Stream.finish(stream_acc.policy)
 
-          evaluate_stream_attempt(
-            request,
-            decision,
-            rules,
+        released_chunks =
+          if is_nil(policy.horizon_bytes), do: policy.chunks, else: released_chunks
+
+        stream_acc = release_stream_chunks(stream_acc, released_chunks)
+        {policy, stream_acc}
+      else
+        {stream_acc.policy, stream_acc}
+      end
+
+    attempt = stream_attempt(policy, attempt_index, provider)
+    events = events ++ policy.events
+    attempts = attempts ++ [attempt]
+    trigger_event = List.last(policy.events) || %{}
+    retry_budget = stream_retry_budget(trigger_event, active_retry_budget)
+
+    cond do
+      provider.status == "provider_error" ->
+        policy =
+          provider_error_stream_policy(
+            provider,
+            retry_count,
             retry_budget,
-            attempt_index + 1,
-            retry_count + 1,
-            events ++ [reject_blank(retry_event)],
-            attempts
+            Enum.drop(attempts, -1)
           )
-        else
+
+        stream_acc =
+          if stream_acc.sent? do
+            send_stream_policy_terminal(stream_acc, policy)
+          else
+            stream_acc
+          end
+
+        {policy, provider, stream_acc}
+
+      policy.status == "stream_policy_retry_required" and
+        retry_count < retry_budget and not stream_acc.sent? ->
+        retry_event = %{
+          "type" => "attempt.retry_requested",
+          "attempt_index" => attempt_index,
+          "next_attempt_index" => attempt_index + 1,
+          "retry_count" => retry_count + 1,
+          "max_retries" => retry_budget,
+          "rule_id" => Map.get(trigger_event, "rule_id"),
+          "reminder" => Map.get(trigger_event, "reminder")
+        }
+
+        run_stream_runtime_attempt(
+          request,
+          decision,
+          rules,
+          retry_budget,
+          attempt_index + 1,
+          retry_count + 1,
+          events ++ [reject_blank(retry_event)],
+          attempts,
+          %{stream_acc | sent?: false, chunks: acc.chunks}
+        )
+
+      policy.status != "completed" and stream_acc.sent? ->
+        stream_acc = send_stream_policy_terminal(stream_acc, policy)
+
+        policy =
           policy
           |> Map.put(:events, events)
           |> Map.put(:attempts, attempts)
           |> Map.put(:retry_count, retry_count)
           |> Map.put(:max_retries, retry_budget)
-          |> Map.put(:called_provider, Map.get(provider, :called_provider, false))
-          |> Map.put(:mock, Map.get(provider, :mock, true))
+          |> Map.put(:called_provider, provider.called_provider)
+          |> Map.put(:mock, provider.mock)
           |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
-        end
 
-      {:error, provider} ->
-        provider_error_stream_policy(provider, retry_count, active_retry_budget, attempts)
+        {policy, %{provider | status: policy.status, content: Enum.join(stream_acc.chunks)},
+         stream_acc}
+
+      true ->
+        stream_acc = maybe_finish_sse(stream_acc)
+
+        provider =
+          if policy.status == "completed", do: provider, else: %{provider | status: policy.status}
+
+        policy =
+          policy
+          |> Map.put(:events, events)
+          |> Map.put(:attempts, attempts)
+          |> Map.put(:retry_count, retry_count)
+          |> Map.put(:max_retries, retry_budget)
+          |> Map.put(:called_provider, provider.called_provider)
+          |> Map.put(:mock, provider.mock)
+          |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
+
+        {policy, provider, stream_acc}
     end
+  end
+
+  defp stream_attempt_each(request, decision, attempt_index, acc, chunk_fun) do
+    mock_chunks =
+      if allow_mock_stream_chunks?() do
+        attempt_chunks = get_in(request, ["metadata", "mock_stream_attempt_chunks"])
+
+        cond do
+          is_list(attempt_chunks) and is_list(Enum.at(attempt_chunks, attempt_index)) ->
+            Enum.at(attempt_chunks, attempt_index)
+
+          attempt_index == 0 ->
+            get_in(request, ["metadata", "mock_stream_chunks"])
+
+          true ->
+            nil
+        end
+      end
+
+    case mock_chunks do
+      chunks when is_list(chunks) and chunks != [] ->
+        Enum.reduce_while(Enum.map(chunks, &metadata_string/1), acc, fn chunk, acc ->
+          case chunk_fun.(chunk, acc) do
+            {:cont, acc} -> {:cont, acc}
+            {:halt, acc} -> {:halt, acc}
+          end
+        end)
+        |> then(fn acc ->
+          {%{
+             content: nil,
+             status: "completed",
+             latency_ms: 0,
+             error: nil,
+             called_provider: false,
+             mock: true
+           }, acc}
+        end)
+
+      _ ->
+        stream_request = Map.put(request, "wardwright_attempt_index", attempt_index)
+
+        Wardwright.stream_selected_model_each(
+          decision.selected_model,
+          stream_request,
+          acc,
+          chunk_fun
+        )
+    end
+  end
+
+  defp stream_runtime_chunk(chunk, acc) do
+    case Wardwright.Policy.Stream.consume(acc.policy, chunk) do
+      {:cont, policy, released_chunks} ->
+        released_chunks = if is_nil(policy.horizon_bytes), do: [], else: released_chunks
+
+        {:cont,
+         acc
+         |> Map.put(:policy, policy)
+         |> release_stream_chunks(released_chunks)}
+
+      {:halt, policy, released_chunks} ->
+        released_chunks = if is_nil(policy.horizon_bytes), do: [], else: released_chunks
+
+        {:halt,
+         acc
+         |> Map.put(:policy, policy)
+         |> release_stream_chunks(released_chunks)}
+    end
+  end
+
+  defp release_stream_chunks(acc, []), do: acc
+
+  defp release_stream_chunks(acc, chunks) do
+    Enum.reduce(chunks, acc, fn text, acc ->
+      acc = ensure_sse_started(acc)
+
+      payload = %{
+        "id" => "chatcmpl_stream_#{acc.receipt_id}",
+        "object" => "chat.completion.chunk",
+        "created" => System.system_time(:second),
+        "model" => Map.get(acc.request, "model"),
+        "choices" => [%{"index" => length(acc.chunks), "delta" => %{"content" => text}}]
+      }
+
+      {:ok, conn} = chunk(acc.conn, "data: #{Jason.encode!(payload)}\n\n")
+
+      %{acc | conn: conn, chunks: acc.chunks ++ [text]}
+    end)
+  end
+
+  defp ensure_sse_started(%{sent?: true} = acc), do: acc
+
+  defp ensure_sse_started(acc) do
+    conn =
+      acc.conn
+      |> put_resp_header("content-type", "text/event-stream")
+      |> put_resp_header("cache-control", "no-cache")
+      |> send_chunked(200)
+
+    %{acc | conn: conn, sent?: true}
+  end
+
+  defp maybe_finish_sse(%{sent?: false} = acc), do: acc
+
+  defp maybe_finish_sse(acc) do
+    {:ok, conn} = chunk(acc.conn, "data: [DONE]\n\n")
+    %{acc | conn: conn}
+  end
+
+  defp send_stream_policy_terminal(acc, policy) do
+    acc = ensure_sse_started(acc)
+
+    payload = %{
+      "wardwright" => %{
+        "receipt_id" => acc.receipt_id,
+        "event" => policy.status,
+        "action" => policy.action,
+        "released_to_consumer" => policy.released_to_consumer
+      }
+    }
+
+    {:ok, conn} = chunk(acc.conn, "data: #{Jason.encode!(payload)}\n\n")
+    {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
+    %{acc | conn: conn}
   end
 
   defp stream_attempt(policy, attempt_index, provider) do
@@ -852,46 +1038,6 @@ defmodule Wardwright.Router do
   end
 
   defp stream_retry_budget(_trigger_event, active_retry_budget), do: active_retry_budget
-
-  defp stream_chunks(request, decision, attempt_index) do
-    mock_chunks =
-      if allow_mock_stream_chunks?() do
-        attempt_chunks = get_in(request, ["metadata", "mock_stream_attempt_chunks"])
-
-        cond do
-          is_list(attempt_chunks) and is_list(Enum.at(attempt_chunks, attempt_index)) ->
-            Enum.at(attempt_chunks, attempt_index)
-
-          attempt_index == 0 ->
-            get_in(request, ["metadata", "mock_stream_chunks"])
-
-          true ->
-            nil
-        end
-      end
-
-    case mock_chunks do
-      chunks when is_list(chunks) and chunks != [] ->
-        {:ok, Enum.map(chunks, &metadata_string/1),
-         %{called_provider: false, mock: true, status: "completed", latency_ms: 0}}
-
-      _ ->
-        stream_request = Map.put(request, "wardwright_attempt_index", attempt_index)
-        provider = Wardwright.stream_selected_model(decision.selected_model, stream_request)
-
-        if provider.status == "completed" and is_list(Map.get(provider, :stream_chunks)) do
-          {:ok, provider.stream_chunks,
-           %{
-             called_provider: provider.called_provider,
-             mock: provider.mock,
-             status: provider.status,
-             latency_ms: provider.latency_ms
-           }}
-        else
-          {:error, provider}
-        end
-    end
-  end
 
   defp provider_error_stream_policy(provider, retry_count, max_retries, attempts) do
     attempts =
@@ -945,14 +1091,6 @@ defmodule Wardwright.Router do
 
   defp allow_mock_stream_chunks? do
     Application.get_env(:wardwright, :allow_mock_stream_chunks, false)
-  end
-
-  defp default_stream_chunks(request, decision) do
-    [
-      "Mock Wardwright stream ",
-      "routed to #{decision.selected_model} ",
-      "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
-    ]
   end
 
   defp integer_value(value) when is_integer(value), do: value

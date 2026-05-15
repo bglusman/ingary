@@ -69,12 +69,21 @@ pretend an unbounded rule is safe to stream past.
 The evaluator also exposes an incremental arbiter API: initialize policy state,
 consume one normalized provider chunk, receive the newly releasable text chunks,
 and finish the stream to flush any remaining held suffix. That API is the
-contract boundary for the future router/runtime streaming state machine.
+contract boundary used by the router/runtime streaming state machine.
 
-Streaming TTSR still needs a router/runtime streaming state machine for
-provider-specific cancellation and restart while bytes are being sent to the
-client. Until that lands, live provider streams are parsed and evaluated before
-Wardwright chooses between SSE success and fail-closed JSON.
+The BEAM runtime now drives that arbiter while provider chunks arrive. Bounded
+horizon rules may release safe prefixes over SSE before the full provider stream
+finishes. If a later chunk trips a block rule, Wardwright cancels the provider
+attempt, sends a terminal stream-policy SSE event when headers have already been
+sent, and records the held/blocked bytes in the receipt. If no bytes have been
+released yet, Wardwright can still return fail-closed JSON with the policy
+status.
+
+Retry semantics remain intentionally conservative. A `retry` or
+`retry_with_reminder` action may restart an attempt before any bytes are sent to
+the client. Once bytes have been released, Wardwright cannot invisibly rewind the
+client stream; the runtime records the terminal policy event instead of
+pretending the failed attempt can be erased.
 
 ## Generated Simulation Cases
 

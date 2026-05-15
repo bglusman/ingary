@@ -308,6 +308,44 @@ defmodule Wardwright do
     end
   end
 
+  def stream_selected_model_each(selected_model, request, acc, chunk_fun)
+      when is_function(chunk_fun, 2) do
+    started = System.monotonic_time(:millisecond)
+
+    target =
+      current_config()
+      |> Map.get("targets", [])
+      |> Enum.find(fn target -> target["model"] == selected_model end)
+
+    case target do
+      nil ->
+        {result, acc} =
+          stream_mock_chunks(
+            [
+              "Mock Wardwright stream ",
+              "routed to #{selected_model} ",
+              "for #{Map.get(request, "model")}."
+            ],
+            acc,
+            chunk_fun
+          )
+
+        stream_each_outcome(acc, result, started)
+
+      target ->
+        {result, acc} =
+          Wardwright.ProviderRuntime.stream_each(
+            target,
+            request,
+            fn emit -> stream_target_each(target, request, emit) end,
+            acc,
+            chunk_fun
+          )
+
+        stream_each_outcome(acc, result, started)
+    end
+  end
+
   defp complete_target(target, request) do
     case provider_kind(target) do
       "mock" ->
@@ -345,6 +383,32 @@ defmodule Wardwright do
 
       "openai-compatible" ->
         stream_with_openai_compatible(target, request)
+
+      kind ->
+        {:error, "unsupported provider kind #{inspect(kind)}"}
+    end
+  end
+
+  defp stream_target_each(target, request, emit) do
+    case provider_kind(target) do
+      "mock" ->
+        [
+          "Mock Wardwright stream ",
+          "routed to #{target["model"]} ",
+          "for #{Map.get(request, "model")}."
+        ]
+        |> Enum.each(emit)
+
+        {:mock, :done}
+
+      "canned_sequence" ->
+        stream_canned_sequence_each(target, request, emit)
+
+      "ollama" ->
+        stream_ollama_each(target, request, emit)
+
+      "openai-compatible" ->
+        stream_openai_compatible_each(target, request, emit)
 
       kind ->
         {:error, "unsupported provider kind #{inspect(kind)}"}
@@ -398,6 +462,54 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_canned_sequence_each(target, request, emit) do
+    delay_ms = non_negative_integer(Map.get(target, "canned_delay_ms"), 0)
+    stream_error = blank_to_nil(to_string(Map.get(target, "canned_stream_error", "")))
+
+    target
+    |> canned_stream_chunks(request)
+    |> case do
+      chunks when is_list(chunks) and chunks != [] ->
+        Enum.each(chunks, fn chunk ->
+          if delay_ms > 0, do: Process.sleep(delay_ms)
+          emit.(to_string(chunk))
+        end)
+
+        case stream_error do
+          nil -> {:ok, :done}
+          reason -> {:error, reason}
+        end
+
+      _ ->
+        {:error, "canned_sequence target has no stream chunks"}
+    end
+  end
+
+  defp canned_stream_chunks(target, request) do
+    attempt_index = request |> Map.get("wardwright_attempt_index", 0) |> integer_value() || 0
+
+    target
+    |> Map.get("canned_stream_attempt_chunks", [])
+    |> attempt_stream_chunks(attempt_index)
+    |> case do
+      [] -> Map.get(target, "canned_stream_chunks", [])
+      chunks -> chunks
+    end
+    |> case do
+      [] ->
+        target
+        |> Map.get("canned_outputs", [])
+        |> Enum.at(attempt_index)
+        |> case do
+          output when is_binary(output) -> chunk_text(output)
+          _ -> []
+        end
+
+      chunks ->
+        chunks
+    end
+  end
+
   defp attempt_stream_chunks(attempt_chunks, attempt_index)
        when is_list(attempt_chunks) and is_integer(attempt_index) do
     case Enum.at(attempt_chunks, attempt_index) do
@@ -448,6 +560,8 @@ defmodule Wardwright do
               normalize_canned_stream_attempt_chunks(
                 Map.get(target, "canned_stream_attempt_chunks", [])
               ),
+            "canned_stream_error" =>
+              target |> Map.get("canned_stream_error", "") |> to_string() |> String.trim(),
             "canned_delay_ms" => non_negative_integer(Map.get(target, "canned_delay_ms"), 0),
             "provider_timeout_ms" =>
               positive_integer(Map.get(target, "provider_timeout_ms"), 180_000)
@@ -680,6 +794,24 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_ollama_each(target, request, emit) do
+    model = provider_model(target)
+
+    base_url =
+      Map.get(target, "provider_base_url") ||
+        System.get_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+
+    body =
+      Jason.encode!(%{
+        model: model,
+        messages: request_messages(request),
+        stream: true
+      })
+
+    "#{String.trim_trailing(base_url, "/")}/api/chat"
+    |> http_post_stream_each(body, [], {:lines, ""}, &parse_ollama_stream_part/3, emit)
+  end
+
   defp complete_with_openai_compatible(target, request) do
     with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
          {:ok, credential} <- provider_credential(target) do
@@ -731,6 +863,26 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_openai_compatible_each(target, request, emit) do
+    with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
+         {:ok, credential} <- provider_credential(target) do
+      body =
+        Jason.encode!(%{
+          model: provider_model(target),
+          messages: request_messages(request),
+          stream: true
+        })
+
+      headers = provider_headers(target) ++ [{~c"authorization", ~c"Bearer #{credential}"}]
+
+      "#{String.trim_trailing(base_url, "/")}/chat/completions"
+      |> http_post_stream_each(body, headers, {:sse, ""}, &parse_openai_sse_part/3, emit)
+    else
+      "" -> {:error, "provider_base_url is required for openai-compatible targets"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp http_post(url, body, headers) do
     request = {
       String.to_charlist(url),
@@ -774,6 +926,29 @@ defmodule Wardwright do
     end
   end
 
+  defp http_post_stream_each(url, body, headers, parser_state, parser_fun, emit) do
+    request = {
+      String.to_charlist(url),
+      [{~c"content-type", ~c"application/json"} | headers],
+      ~c"application/json",
+      body
+    }
+
+    case :httpc.request(
+           :post,
+           request,
+           [{:timeout, 180_000}],
+           sync: false,
+           stream: {:self, :once}
+         ) do
+      {:ok, request_id} ->
+        collect_http_stream_each(request_id, nil, parser_state, parser_fun, emit)
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
   defp collect_http_stream(request_id, parts, handler_pid) do
     receive do
       {:http, {^request_id, :stream_start, _headers, pid}} ->
@@ -803,6 +978,132 @@ defmodule Wardwright do
       180_000 ->
         :httpc.cancel_request(request_id)
         {:error, "provider stream timed out after 180000ms"}
+    end
+  end
+
+  defp collect_http_stream_each(request_id, handler_pid, parser_state, parser_fun, emit) do
+    receive do
+      {_stream_ref, :cancel} ->
+        :httpc.cancel_request(request_id)
+        {:error, "provider stream cancelled"}
+
+      {:http, {^request_id, :stream_start, _headers, pid}} ->
+        :ok = :httpc.stream_next(pid)
+        collect_http_stream_each(request_id, pid, parser_state, parser_fun, emit)
+
+      {:http, {^request_id, :stream_start, _headers}} ->
+        collect_http_stream_each(request_id, handler_pid, parser_state, parser_fun, emit)
+
+      {:http, {^request_id, :stream, part}} ->
+        if handler_pid, do: :ok = :httpc.stream_next(handler_pid)
+        parser_state = parser_fun.(IO.iodata_to_binary(part), parser_state, emit)
+        collect_http_stream_each(request_id, handler_pid, parser_state, parser_fun, emit)
+
+      {:http, {^request_id, :stream_end, _headers}} ->
+        finalize_stream_parser(parser_state, parser_fun, emit)
+        :ok
+
+      {:http, {^request_id, {{_, status, _}, _headers, response_body}}}
+      when status in 200..299 ->
+        response_body
+        |> IO.iodata_to_binary()
+        |> parser_fun.(parser_state, emit)
+        |> finalize_stream_parser(parser_fun, emit)
+
+        :ok
+
+      {:http, {^request_id, {{_, status, _}, _headers, _response_body}}} ->
+        {:error, "provider returned #{status}"}
+
+      {:http, {^request_id, {:error, reason}}} ->
+        {:error, inspect(reason)}
+    after
+      180_000 ->
+        :httpc.cancel_request(request_id)
+        {:error, "provider stream timed out after 180000ms"}
+    end
+    |> case do
+      :ok -> {:ok, :done}
+      error -> error
+    end
+  end
+
+  defp parse_ollama_stream_part(part, {:lines, pending}, emit) do
+    {lines, pending} = split_stream_lines(pending <> part)
+
+    Enum.each(lines, fn line ->
+      case Jason.decode(String.trim(line)) do
+        {:ok, event} ->
+          content = get_in(event, ["message", "content"]) || event["response"]
+          if content not in [nil, ""], do: emit.(content)
+
+        {:error, _} ->
+          :ok
+      end
+    end)
+
+    {:lines, pending}
+  end
+
+  defp finalize_stream_parser({:lines, _pending} = parser_state, parser_fun, emit) do
+    parser_fun.("\n", parser_state, emit)
+  end
+
+  defp finalize_stream_parser({:sse, _pending} = parser_state, parser_fun, emit) do
+    parser_fun.("\n\n", parser_state, emit)
+  end
+
+  defp parse_openai_sse_part(part, {:sse, pending}, emit) do
+    {events, pending} = split_sse_events(pending <> part)
+
+    Enum.each(events, fn event ->
+      event
+      |> String.split(["\r\n", "\n"], trim: true)
+      |> Enum.filter(&String.starts_with?(&1, "data: "))
+      |> Enum.map(fn "data: " <> data -> String.trim(data) end)
+      |> Enum.each(fn
+        "[DONE]" ->
+          :ok
+
+        data ->
+          case Jason.decode(data) do
+            {:ok, event} ->
+              content =
+                get_in(event, ["choices", Access.at(0), "delta", "content"]) ||
+                  get_in(event, ["choices", Access.at(0), "message", "content"])
+
+              if content not in [nil, ""], do: emit.(content)
+
+            {:error, _} ->
+              :ok
+          end
+      end)
+    end)
+
+    {:sse, pending}
+  end
+
+  defp split_stream_lines(buffer) do
+    parts = String.split(buffer, ["\r\n", "\n"])
+
+    case parts do
+      [] -> {[], ""}
+      parts -> {Enum.slice(parts, 0, max(length(parts) - 1, 0)), List.last(parts) || ""}
+    end
+  end
+
+  defp split_sse_events(buffer) do
+    cond do
+      String.contains?(buffer, "\n\n") ->
+        parts = String.split(buffer, "\n\n")
+        {Enum.slice(parts, 0, max(length(parts) - 1, 0)), List.last(parts) || ""}
+
+      String.contains?(buffer, "\r\n\r\n") ->
+        parts = String.split(buffer, "\r\n\r\n")
+        {Enum.slice(parts, 0, max(length(parts) - 1, 0)), List.last(parts) || ""}
+
+      true ->
+        {[], buffer}
     end
   end
 
@@ -952,6 +1253,28 @@ defmodule Wardwright do
   end
 
   defp normalize_stream_outcome(outcome), do: outcome
+
+  defp stream_mock_chunks(chunks, acc, chunk_fun) do
+    Enum.reduce_while(chunks, {{:mock, :done}, acc}, fn chunk, {_result, acc} ->
+      case chunk_fun.(chunk, acc) do
+        {:cont, acc} -> {:cont, {{:mock, :done}, acc}}
+        {:halt, acc} -> {:halt, {{:halted, :cancelled}, acc}}
+      end
+    end)
+  end
+
+  defp stream_each_outcome(acc, result, started) do
+    provider =
+      case result do
+        {:ok, _} -> provider_outcome(nil, "completed", started, nil, true, false)
+        {:mock, _} -> provider_outcome(nil, "completed", started, nil, false, true)
+        {:halted, _} -> provider_outcome(nil, "cancelled", started, nil, true, false)
+        {:error, reason} -> provider_outcome(nil, "provider_error", started, reason, true, false)
+        _ -> provider_outcome(nil, "provider_error", started, inspect(result), true, false)
+      end
+
+    {provider, acc}
+  end
 
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
