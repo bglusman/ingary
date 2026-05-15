@@ -1,6 +1,8 @@
 defmodule Wardwright.GleamPolicyCoreTest do
   use ExUnit.Case, async: true
 
+  alias Wardwright.Policy.CoreRuntime
+
   test "structured core classifies successful guard-loop outcomes" do
     assert Wardwright.Policy.StructuredCore.success_status(0) == "completed"
     assert Wardwright.Policy.StructuredCore.success_status(2) == "completed_after_guard"
@@ -83,4 +85,57 @@ defmodule Wardwright.GleamPolicyCoreTest do
     refute Wardwright.Policy.AlertCore.terminal?(:enqueued)
     assert Wardwright.Policy.AlertCore.terminal?(:dead_lettered)
   end
+
+  test "Elixir and Gleam policy cores remain equivalent for representative decisions" do
+    assert in_core(:compare, fn ->
+             [
+               Wardwright.Policy.StructuredCore.success_status(1),
+               Wardwright.Policy.StructuredCore.loop_outcome_status(
+                 "structured-json",
+                 1,
+                 3,
+                 1,
+                 2
+               ),
+               Wardwright.Policy.HistoryCore.count_decision([true, false, true],
+                 threshold: 2,
+                 recent_limit: 3,
+                 working_set_size: 3,
+                 scope: "session_id"
+               ),
+               Wardwright.Policy.AlertCore.decide_enqueue(
+                 %{"capacity" => 1, "on_full" => "fail_closed"},
+                 1,
+                 false,
+                 %{"idempotency_key" => "key-1", "rule_id" => "alert-rule"}
+               )
+             ]
+           end) ==
+             in_core(:elixir, fn ->
+               [
+                 Wardwright.Policy.StructuredCore.success_status(1),
+                 Wardwright.Policy.StructuredCore.loop_outcome_status(
+                   "structured-json",
+                   1,
+                   3,
+                   1,
+                   2
+                 ),
+                 Wardwright.Policy.HistoryCore.count_decision([true, false, true],
+                   threshold: 2,
+                   recent_limit: 3,
+                   working_set_size: 3,
+                   scope: "session_id"
+                 ),
+                 Wardwright.Policy.AlertCore.decide_enqueue(
+                   %{"capacity" => 1, "on_full" => "fail_closed"},
+                   1,
+                   false,
+                   %{"idempotency_key" => "key-1", "rule_id" => "alert-rule"}
+                 )
+               ]
+             end)
+  end
+
+  defp in_core(core, fun), do: CoreRuntime.with_core(core, fun)
 end
