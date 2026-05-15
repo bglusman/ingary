@@ -341,10 +341,10 @@ defmodule Wardwright do
         stream_with_canned_sequence(target, request)
 
       "ollama" ->
-        complete_with_ollama(target, request) |> stream_result_from_completion()
+        stream_with_ollama(target, request)
 
       "openai-compatible" ->
-        complete_with_openai_compatible(target, request) |> stream_result_from_completion()
+        stream_with_openai_compatible(target, request)
 
       kind ->
         {:error, "unsupported provider kind #{inspect(kind)}"}
@@ -407,9 +407,6 @@ defmodule Wardwright do
   end
 
   defp attempt_stream_chunks(_attempt_chunks, _attempt_index), do: []
-
-  defp stream_result_from_completion({:ok, content}), do: {:ok, chunk_text(content)}
-  defp stream_result_from_completion({:error, reason}), do: {:error, reason}
 
   defp chunk_text(text) when is_binary(text) do
     [text]
@@ -661,6 +658,28 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_with_ollama(target, request) do
+    model = provider_model(target)
+
+    base_url =
+      Map.get(target, "provider_base_url") ||
+        System.get_env("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+
+    body =
+      Jason.encode!(%{
+        model: model,
+        messages: request_messages(request),
+        stream: true
+      })
+
+    "#{String.trim_trailing(base_url, "/")}/api/chat"
+    |> http_post_stream(body, [])
+    |> case do
+      {:ok, response_body} -> {:ok, parse_ollama_stream_chunks(response_body)}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp complete_with_openai_compatible(target, request) do
     with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
          {:ok, credential} <- provider_credential(target) do
@@ -688,6 +707,30 @@ defmodule Wardwright do
     end
   end
 
+  defp stream_with_openai_compatible(target, request) do
+    with base_url when base_url != "" <- Map.get(target, "provider_base_url", ""),
+         {:ok, credential} <- provider_credential(target) do
+      body =
+        Jason.encode!(%{
+          model: provider_model(target),
+          messages: request_messages(request),
+          stream: true
+        })
+
+      headers = provider_headers(target) ++ [{~c"authorization", ~c"Bearer #{credential}"}]
+
+      "#{String.trim_trailing(base_url, "/")}/chat/completions"
+      |> http_post_stream(body, headers)
+      |> case do
+        {:ok, response_body} -> {:ok, parse_openai_sse_chunks(response_body)}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      "" -> {:error, "provider_base_url is required for openai-compatible targets"}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp http_post(url, body, headers) do
     request = {
       String.to_charlist(url),
@@ -706,6 +749,105 @@ defmodule Wardwright do
       {:error, reason} ->
         {:error, inspect(reason)}
     end
+  end
+
+  defp http_post_stream(url, body, headers) do
+    request = {
+      String.to_charlist(url),
+      [{~c"content-type", ~c"application/json"} | headers],
+      ~c"application/json",
+      body
+    }
+
+    case :httpc.request(
+           :post,
+           request,
+           [{:timeout, 180_000}],
+           sync: false,
+           stream: {:self, :once}
+         ) do
+      {:ok, request_id} ->
+        collect_http_stream(request_id, [], nil)
+
+      {:error, reason} ->
+        {:error, inspect(reason)}
+    end
+  end
+
+  defp collect_http_stream(request_id, parts, handler_pid) do
+    receive do
+      {:http, {^request_id, :stream_start, _headers, pid}} ->
+        :ok = :httpc.stream_next(pid)
+        collect_http_stream(request_id, parts, pid)
+
+      {:http, {^request_id, :stream_start, _headers}} ->
+        collect_http_stream(request_id, parts, handler_pid)
+
+      {:http, {^request_id, :stream, part}} ->
+        if handler_pid, do: :ok = :httpc.stream_next(handler_pid)
+        collect_http_stream(request_id, [part | parts], handler_pid)
+
+      {:http, {^request_id, :stream_end, _headers}} ->
+        {:ok, parts |> Enum.reverse() |> IO.iodata_to_binary()}
+
+      {:http, {^request_id, {{_, status, _}, _headers, response_body}}}
+      when status in 200..299 ->
+        {:ok, response_body}
+
+      {:http, {^request_id, {{_, status, _}, _headers, _response_body}}} ->
+        {:error, "provider returned #{status}"}
+
+      {:http, {^request_id, {:error, reason}}} ->
+        {:error, inspect(reason)}
+    after
+      180_000 ->
+        :httpc.cancel_request(request_id)
+        {:error, "provider stream timed out after 180000ms"}
+    end
+  end
+
+  defp parse_ollama_stream_chunks(response_body) do
+    response_body
+    |> stream_lines()
+    |> Enum.flat_map(fn line ->
+      case Jason.decode(line) do
+        {:ok, event} -> [get_in(event, ["message", "content"]) || event["response"]]
+        {:error, _} -> []
+      end
+    end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+  end
+
+  defp parse_openai_sse_chunks(response_body) do
+    response_body
+    |> stream_lines()
+    |> Enum.flat_map(fn
+      "data: [DONE]" ->
+        []
+
+      "data: " <> data ->
+        case Jason.decode(data) do
+          {:ok, event} ->
+            [
+              get_in(event, ["choices", Access.at(0), "delta", "content"]) ||
+                get_in(event, ["choices", Access.at(0), "message", "content"])
+            ]
+
+          {:error, _} ->
+            []
+        end
+
+      _line ->
+        []
+    end)
+    |> Enum.reject(&(&1 in [nil, ""]))
+  end
+
+  defp stream_lines(response_body) when is_binary(response_body) do
+    response_body
+    |> String.split(["\r\n", "\n"], trim: true)
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
   end
 
   defp provider_credential(target) do

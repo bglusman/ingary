@@ -200,17 +200,17 @@ retried with a reminder while preserving the failed attempt as unreleased
 receipt evidence. Test-only mock chunks still exist as an escape hatch, but the
 router can now call the selected provider through `Wardwright.ProviderRuntime`
 for each stream attempt and retry the provider boundary before releasing bytes.
-Receipts record the stream policy action, trigger count, trigger events, retry
-count, per-attempt provider status, and generated/released/held/rewritten/blocked
-byte counts.
+Ollama NDJSON streams and OpenAI-compatible SSE streams are parsed from native
+HTTP streaming transport messages before policy evaluation. Receipts record the
+stream policy action, trigger count, trigger events, retry count, per-attempt
+provider status, and generated/released/held/rewritten/blocked byte counts.
 
 Split chunk boundaries are treated cautiously. Terminal block/retry checks and
 rewrite checks inspect the buffered stream window, so a pattern such as
 `OldClient(` is still caught if a provider emits `Old` and `Client(` in separate
 events. Non-native streaming provider fallbacks are treated as one held response
-unit rather than artificially chunked output. Native HTTP streaming,
-mid-stream cancellation/restart, latency budgets, and raw provider-event offsets
-are still future work.
+unit rather than artificially chunked output. Mid-stream policy cancellation,
+latency budgets, and raw provider-event offsets are still future work.
 
 ## State Scopes
 

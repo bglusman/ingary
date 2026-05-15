@@ -1,3 +1,73 @@
+defmodule WardwrightTest.StreamingProvider do
+  use Plug.Router
+
+  plug(:match)
+  plug(:dispatch)
+
+  post "/ollama/api/chat" do
+    {:ok, _body, conn} = Plug.Conn.read_body(conn)
+
+    conn =
+      conn
+      |> Plug.Conn.put_resp_content_type("application/x-ndjson")
+      |> Plug.Conn.send_chunked(200)
+
+    {:ok, conn} =
+      Plug.Conn.chunk(
+        conn,
+        Jason.encode!(%{"message" => %{"content" => "use Old"}, "done" => false}) <> "\n"
+      )
+
+    {:ok, conn} =
+      Plug.Conn.chunk(
+        conn,
+        Jason.encode!(%{"message" => %{"content" => "Client(arg) now"}, "done" => false}) <>
+          "\n"
+      )
+
+    {:ok, conn} = Plug.Conn.chunk(conn, Jason.encode!(%{"done" => true}) <> "\n")
+    conn
+  end
+
+  post "/openai/chat/completions" do
+    {:ok, _body, conn} = Plug.Conn.read_body(conn)
+
+    case Plug.Conn.get_req_header(conn, "authorization") do
+      ["Bearer test-openai-key"] ->
+        conn =
+          conn
+          |> Plug.Conn.put_resp_content_type("text/event-stream")
+          |> Plug.Conn.send_chunked(200)
+
+        {:ok, conn} =
+          Plug.Conn.chunk(
+            conn,
+            "data: " <>
+              Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "hello "}}]}) <>
+              "\n\n"
+          )
+
+        {:ok, conn} =
+          Plug.Conn.chunk(
+            conn,
+            "data: " <>
+              Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "world"}}]}) <>
+              "\n\n"
+          )
+
+        {:ok, conn} = Plug.Conn.chunk(conn, "data: [DONE]\n\n")
+        conn
+
+      _ ->
+        Plug.Conn.send_resp(conn, 401, "missing authorization")
+    end
+  end
+
+  match _ do
+    Plug.Conn.send_resp(conn, 404, "not found")
+  end
+end
+
 defmodule WardwrightTest do
   use ExUnit.Case, async: false
   use ExUnitProperties
@@ -1808,6 +1878,110 @@ defmodule WardwrightTest do
     assert provider_error =~ "provider timed out after 1ms"
   end
 
+  test "ollama stream targets use provider HTTP chunks for stream policy decisions" do
+    base_url = streaming_provider_base_url("/ollama")
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "ollama/live-test",
+          "context_window" => 256,
+          "provider_base_url" => base_url
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "ollama-stream-split-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 0
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 409
+
+    body = Jason.decode!(conn.resp_body)
+    stream_policy = get_in(body, ["wardwright", "stream_policy"])
+
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_retry_required"
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] == 0
+
+    assert [
+             %{
+               "status" => "stream_policy_retry_required",
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => "completed"
+             }
+           ] = stream_policy["attempts"]
+
+    assert [
+             %{
+               "rule_id" => "ollama-stream-split-retry",
+               "match_scope" => "stream_window"
+             }
+           ] = stream_policy["events"]
+  end
+
+  test "openai-compatible stream targets parse SSE deltas from provider HTTP chunks" do
+    base_url = streaming_provider_base_url("/openai")
+    System.put_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS", "1")
+    System.put_env("WARDWRIGHT_TEST_OPENAI_KEY", "test-openai-key")
+
+    on_exit(fn ->
+      System.delete_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS")
+      System.delete_env("WARDWRIGHT_TEST_OPENAI_KEY")
+    end)
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "openai-compatible/live-test",
+          "context_window" => 256,
+          "provider_kind" => "openai-compatible",
+          "provider_base_url" => base_url,
+          "credential_env" => "WARDWRIGHT_TEST_OPENAI_KEY"
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "hello "
+    assert conn.resp_body =~ "world"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == true
+    assert get_in(receipt, ["attempts", Access.at(0), "mock"]) == false
+    assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == true
+  end
+
   test "stream policy retry budget exhaustion keeps violating bytes unreleased" do
     config =
       unit_policy_config()
@@ -2308,6 +2482,14 @@ defmodule WardwrightTest do
       Enum.reduce(headers, conn, fn {key, value}, acc -> put_req_header(acc, key, value) end)
     end)
     |> Wardwright.Router.call(@opts)
+  end
+
+  defp streaming_provider_base_url(prefix) do
+    ref = :"wardwright_streaming_provider_#{System.unique_integer([:positive])}"
+    {:ok, _pid} = Plug.Cowboy.http(WardwrightTest.StreamingProvider, [], ref: ref, port: 0)
+    port = :ranch.get_port(ref)
+    on_exit(fn -> Plug.Cowboy.shutdown(ref) end)
+    "http://127.0.0.1:#{port}#{prefix}"
   end
 
   defp unit_policy_config do
