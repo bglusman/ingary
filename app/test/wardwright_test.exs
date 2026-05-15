@@ -739,6 +739,45 @@ defmodule WardwrightTest do
              "secret-stream"
   end
 
+  test "stream policy detects terminal regex matches split across chunks before release" do
+    config =
+      unit_policy_config()
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "split-secret-stream",
+          "regex" => "secret-[0-9]+",
+          "action" => "block"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        metadata: %{"mock_stream_chunks" => ["safe prefix sec", "ret-123 suffix"]},
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 422
+    refute conn.resp_body =~ "text/event-stream"
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "stream_policy_blocked"
+    assert get_in(body, ["wardwright", "stream_policy", "released_to_consumer"]) == false
+    assert get_in(body, ["wardwright", "stream_policy", "trigger_count"]) == 1
+
+    assert [
+             %{
+               "rule_id" => "split-secret-stream",
+               "action" => "block",
+               "chunk_index" => 1,
+               "match_scope" => "stream_window"
+             }
+           ] = get_in(body, ["wardwright", "stream_policy", "events"])
+  end
+
   test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
     assert %{"engine" => "wasm", "action" => "block", "status" => "error"} =
              Wardwright.Policy.Engine.evaluate(%{"engine" => "wasm"}, %{})

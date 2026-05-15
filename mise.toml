@@ -18,6 +18,15 @@ depends = ["check:app", "check:contracts"]
 description = "Run a bounded Muex mutation sample for the Wardwright app"
 run = "cd app && MIX_ENV=test mix muex --max-mutations 30 --fail-at 0"
 
+[tasks."mutation:policy"]
+description = "Run focused Muex checks for policy-critical Wardwright modules; do not run concurrently with mix test"
+run = [
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/structured_output.ex' --test-paths 'test/wardwright_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/stream.ex' --test-paths 'test/wardwright_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy_cache.ex' --test-paths 'test/wardwright_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/router.ex' --test-paths 'test/wardwright_test.exs,test/runtime_visibility_test.exs' --max-mutations 40 --fail-at 100",
+]
+
 [tasks."run:app"]
 description = "Run app on 127.0.0.1:8791"
 env = { WARDWRIGHT_BIND = "127.0.0.1:8791", WARDWRIGHT_ALLOW_TEST_CREDENTIALS = "1" }
