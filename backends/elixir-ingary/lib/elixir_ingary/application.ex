@@ -14,7 +14,8 @@ defmodule ElixirIngary.Application do
       [
         ElixirIngary.ReceiptStore,
         ElixirIngary.PolicyCache,
-        http_child(host, port)
+        {Phoenix.PubSub, name: ElixirIngary.PubSub},
+        endpoint_child(host, port)
       ]
       |> Enum.reject(&is_nil/1)
 
@@ -28,10 +29,26 @@ defmodule ElixirIngary.Application do
     result
   end
 
-  defp http_child(host, port) do
+  defp endpoint_child(host, port) do
     if serve_http?() do
-      {Plug.Cowboy, scheme: :http, plug: ElixirIngary.Router, options: [ip: host, port: port]}
+      endpoint_config =
+        :elixir_ingary
+        |> Application.get_env(ElixirIngaryWeb.Endpoint, [])
+        |> Keyword.merge(
+          http: [ip: host, port: port],
+          server: true,
+          secret_key_base: secret_key_base()
+        )
+
+      Application.put_env(:elixir_ingary, ElixirIngaryWeb.Endpoint, endpoint_config)
+
+      ElixirIngaryWeb.Endpoint
     end
+  end
+
+  defp secret_key_base do
+    System.get_env("INGARY_SECRET_KEY_BASE") ||
+      Base.encode64(:crypto.strong_rand_bytes(64))
   end
 
   defp serve_http?, do: Application.get_env(:elixir_ingary, :serve_http, true)

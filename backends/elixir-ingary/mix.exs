@@ -23,7 +23,11 @@ defmodule ElixirIngary.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:phoenix, "~> 1.7"},
+      {:phoenix_html, "~> 4.1"},
+      {:phoenix_live_view, "~> 1.0"},
       {:plug_cowboy, "~> 2.7"},
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:stream_data, "~> 1.3", only: :test}
     ]
   end
