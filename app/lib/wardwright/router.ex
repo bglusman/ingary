@@ -134,75 +134,114 @@ defmodule Wardwright.Router do
   end
 
   get "/v1/receipts" do
-    filters =
-      conn.query_params
-      |> Map.take([
-        "model",
-        "consuming_agent_id",
-        "consuming_user_id",
-        "session_id",
-        "run_id",
-        "status",
-        "tenant_id",
-        "application_id",
-        "synthetic_model",
-        "synthetic_version",
-        "selected_provider",
-        "selected_model",
-        "simulation",
-        "stream_policy_action",
-        "created_at_min",
-        "created_at_max"
-      ])
-      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
-      |> Map.new()
+    with :ok <- require_protected_access(conn) do
+      filters =
+        conn.query_params
+        |> Map.take([
+          "model",
+          "consuming_agent_id",
+          "consuming_user_id",
+          "session_id",
+          "run_id",
+          "status",
+          "tenant_id",
+          "application_id",
+          "synthetic_model",
+          "synthetic_version",
+          "selected_provider",
+          "selected_model",
+          "simulation",
+          "stream_policy_action",
+          "created_at_min",
+          "created_at_max"
+        ])
+        |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+        |> Map.new()
 
-    limit = parse_limit(Map.get(conn.query_params, "limit"))
-    receipts = Wardwright.ReceiptStore.list(filters, limit)
-    json(conn, 200, %{"data" => receipts})
+      limit = parse_limit(Map.get(conn.query_params, "limit"))
+      receipts = Wardwright.ReceiptStore.list(filters, limit)
+      json(conn, 200, %{"data" => receipts})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/v1/receipts/:receipt_id" do
-    case Wardwright.ReceiptStore.get(receipt_id) do
-      nil -> error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
-      receipt -> json(conn, 200, receipt)
+    with :ok <- require_protected_access(conn) do
+      case Wardwright.ReceiptStore.get(receipt_id) do
+        nil -> error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
+        receipt -> json(conn, 200, receipt)
+      end
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
     end
   end
 
   get "/admin/storage" do
-    json(conn, 200, Wardwright.ReceiptStore.health())
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Wardwright.ReceiptStore.health())
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/admin/runtime" do
-    json(conn, 200, Wardwright.Runtime.status())
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Wardwright.Runtime.status())
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   post "/v1/policy-cache/events" do
-    with {:ok, event} <- Wardwright.PolicyCache.add(conn.body_params) do
+    with :ok <- require_protected_access(conn),
+         {:ok, event} <- Wardwright.PolicyCache.add(conn.body_params) do
       json(conn, 201, %{"event" => event})
     else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
       {:error, message} ->
         error(conn, 400, message, "invalid_request", "invalid_policy_cache_event")
     end
   end
 
   get "/v1/policy-cache/recent" do
-    filter = %{
-      "kind" => blank_to_nil(Map.get(conn.query_params, "kind")),
-      "key" => blank_to_nil(Map.get(conn.query_params, "key")),
-      "scope" => cache_scope_from_query(conn.query_params)
-    }
+    with :ok <- require_protected_access(conn) do
+      filter = %{
+        "kind" => blank_to_nil(Map.get(conn.query_params, "kind")),
+        "key" => blank_to_nil(Map.get(conn.query_params, "key")),
+        "scope" => cache_scope_from_query(conn.query_params)
+      }
 
-    limit = parse_limit(Map.get(conn.query_params, "limit"))
-    json(conn, 200, %{"data" => Wardwright.PolicyCache.recent(filter, limit)})
+      limit = parse_limit(Map.get(conn.query_params, "limit"))
+      json(conn, 200, %{"data" => Wardwright.PolicyCache.recent(filter, limit)})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/admin/providers" do
-    json(conn, 200, %{"data" => Wardwright.providers()})
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, %{"data" => Wardwright.providers()})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   get "/admin/synthetic-models" do
-    json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, %{"data" => [Wardwright.synthetic_model_record()]})
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
   end
 
   post "/__test/config" do
@@ -337,6 +376,66 @@ defmodule Wardwright.Router do
     do: :ok
 
   defp require_messages(_), do: {:error, "messages must not be empty"}
+
+  defp require_protected_access(conn) do
+    cond do
+      local_request?(conn) ->
+        :ok
+
+      admin_token_valid?(conn) ->
+        :ok
+
+      Application.get_env(:wardwright, :allow_prototype_access, false) ->
+        :ok
+
+      true ->
+        {:error, :protected, "protected endpoint requires localhost or admin token"}
+    end
+  end
+
+  defp local_request?(%{remote_ip: {127, 0, 0, 1}}), do: true
+  defp local_request?(%{remote_ip: {0, 0, 0, 0, 0, 0, 0, 1}}), do: true
+  defp local_request?(_conn), do: false
+
+  defp admin_token_valid?(conn) do
+    case {admin_token(), request_admin_token(conn)} do
+      {token, request_token} when is_binary(token) and is_binary(request_token) ->
+        Plug.Crypto.secure_compare(token, request_token)
+
+      {_token, _request_token} ->
+        false
+    end
+  rescue
+    _error -> false
+  end
+
+  defp admin_token do
+    (Application.get_env(:wardwright, :admin_token) || System.get_env("WARDWRIGHT_ADMIN_TOKEN"))
+    |> metadata_string()
+    |> blank_to_nil()
+  end
+
+  defp request_admin_token(conn) do
+    conn
+    |> get_req_header("authorization")
+    |> List.first()
+    |> bearer_token()
+    |> case do
+      nil ->
+        conn
+        |> get_req_header("x-wardwright-admin-token")
+        |> List.first()
+        |> metadata_string()
+        |> blank_to_nil()
+
+      token ->
+        token
+    end
+  end
+
+  defp bearer_token("Bearer " <> token), do: blank_to_nil(token)
+  defp bearer_token("bearer " <> token), do: blank_to_nil(token)
+  defp bearer_token(_value), do: nil
 
   defp route_decision(request, policy) do
     estimate = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))

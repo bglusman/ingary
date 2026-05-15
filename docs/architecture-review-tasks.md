@@ -14,7 +14,7 @@ deployment with real provider credentials.
 
 | ID | Priority | Area | Status | Task |
 |---|---:|---|---|---|
-| ARCH-001 | P1 | Security | In progress | Remove or gate prototype mutation surfaces before real credentials are configured. `POST /__test/config` is now disabled unless `:allow_test_config` or `WARDWRIGHT_ALLOW_TEST_CONFIG=1` is set; remaining work is auth/gating for `/admin/*`, receipt reads, and policy-cache writes. |
+| ARCH-001 | P1 | Security | In progress | Remove or gate prototype mutation surfaces before real credentials are configured. `POST /__test/config` is now disabled unless `:allow_test_config` or `WARDWRIGHT_ALLOW_TEST_CONFIG=1` is set. `/admin/*`, receipt reads, and policy-cache APIs now require loopback access or an admin token. This is a homelab/single-operator guard, not a complete product auth model. Provider API credentials should be managed separately through fnox-backed secret lookup. Remaining work is to define deployment-topology-specific caller authorization: local-only, SSO/reverse-proxy integration, API-key authorization to use specific synthetic models, or a database-backed user/permission system if the product later needs one. |
 | ARCH-002 | P1 | Route policy | In progress | Make route-policy overrides fail closed by default. Forced missing/too-small models now block rather than fallback; remaining work is an explicit `allow_fallback` policy option if we decide fallback is product-meaningful. |
 | ARCH-003 | P1 | Policy engines | In progress | Normalize primitive, Dune, WASM, and hybrid policy outputs into one action shape. Hybrid now propagates nested actions; remaining work is a formal action/result schema and conflict-resolution metadata. |
 | ARCH-004 | P1 | TTSR | Open | Replace mock stream chunks with real provider stream holdback, abort/regenerate orchestration, retry budgets, and receipts that distinguish released, rewritten, retried, and blocked bytes. |
@@ -28,7 +28,9 @@ deployment with real provider credentials.
 ## Follow-Up Review Gates
 
 - Before enabling real provider credentials: close `ARCH-001`, or explicitly
-  document that the server is localhost-only and blocked from remote access.
+  document that the server is localhost-only or fronted by a trusted auth/SSO
+  boundary. Do not treat provider credential storage, model-use authorization,
+  and admin/configuration access as the same security problem.
 - Before evaluating TTSR product quality: close `ARCH-004` enough to test a real
   streamed provider path, not only mock chunks.
 - Before building a large policy UI: close enough of `ARCH-003` and `ARCH-005`

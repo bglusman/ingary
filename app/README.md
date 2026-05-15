@@ -63,6 +63,16 @@ simulation calls write in-memory receipts and publish runtime visibility events
 through Phoenix PubSub. Caller context is extracted from `X-Wardwright-*` and
 `X-Client-Request-Id` headers first, then from request `metadata`.
 
+Prototype-sensitive endpoints are restricted to loopback callers unless
+`WARDWRIGHT_ADMIN_TOKEN` or `config :wardwright, :admin_token` is set and the
+request provides `Authorization: Bearer <token>` or
+`X-Wardwright-Admin-Token`. This currently covers `/admin/*`, receipt reads,
+and policy-cache read/write APIs. This is intended for a homelab or
+single-operator deployment shape. It is not a full multi-user auth system:
+provider API keys should stay behind fnox-backed secret lookup, while decisions
+about who may use a synthetic model, configure a provider, or enter through SSO
+depend on the eventual deployment topology.
+
 ## BEAM Direction
 
 Elixir is the active backend direction for this platform. BEAM processes map

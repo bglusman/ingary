@@ -1359,6 +1359,46 @@ defmodule WardwrightTest do
     assert body["write_health"] == "ok"
   end
 
+  test "protected prototype endpoints reject non-local callers without an admin token" do
+    remote_ip = {203, 0, 113, 10}
+
+    for {method, path, body} <- [
+          {:get, "/admin/storage", nil},
+          {:get, "/v1/receipts", nil},
+          {:post, "/v1/policy-cache/events", %{"kind" => "request_text"}}
+        ] do
+      conn = call(method, path, body, [], remote_ip)
+      assert conn.status == 403
+      assert %{"error" => %{"code" => "protected_endpoint"}} = Jason.decode!(conn.resp_body)
+    end
+  end
+
+  test "protected prototype endpoints accept configured admin bearer token" do
+    previous = Application.get_env(:wardwright, :admin_token)
+    Application.put_env(:wardwright, :admin_token, "local-review-token")
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:wardwright, :admin_token, previous),
+        else: Application.delete_env(:wardwright, :admin_token)
+    end)
+
+    rejected = call(:get, "/admin/storage", nil, [], {203, 0, 113, 10})
+    assert rejected.status == 403
+
+    conn =
+      call(
+        :get,
+        "/admin/storage",
+        nil,
+        [{"authorization", "Bearer local-review-token"}],
+        {203, 0, 113, 10}
+      )
+
+    assert conn.status == 200
+    assert Jason.decode!(conn.resp_body)["kind"] == "memory"
+  end
+
   test "receipt list is deterministic and returns storage summaries" do
     older = receipt_fixture("rcpt_b", 1_800_000_000, "agent-b")
     newer_low_id = receipt_fixture("rcpt_a", 1_800_000_001, "agent-a")
@@ -1430,11 +1470,12 @@ defmodule WardwrightTest do
            ]
   end
 
-  defp call(method, path, body \\ nil, headers \\ []) do
+  defp call(method, path, body \\ nil, headers \\ [], remote_ip \\ {127, 0, 0, 1}) do
     encoded = if is_nil(body), do: nil, else: Jason.encode!(body)
 
     method
     |> conn(path, encoded)
+    |> Map.put(:remote_ip, remote_ip)
     |> put_req_header("content-type", "application/json")
     |> then(fn conn ->
       Enum.reduce(headers, conn, fn {key, value}, acc -> put_req_header(acc, key, value) end)
