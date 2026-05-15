@@ -7,7 +7,7 @@ description: Historical visible contract for the structured-output bakeoff.
 
 This is the visible implementation contract for the structured-output bakeoff.
 Agents may read this document and translate it into native tests. The final
-Python backend oracle is held out and is run externally after implementation.
+backend oracle is held out and is run externally after implementation.
 
 The implementation attempt is timeboxed. Use a 30 minute default agent timeout
 for the first rerun unless the harness shows that is too short for all
@@ -216,4 +216,4 @@ An implementation attempt is complete when:
   fail for the intended reason
 - normal backend checks pass
 - known limitations are recorded in `docs/bakeoff-results/<feature>-<backend>.json`
-- the backend is ready for external held-out Python oracle evaluation
+- the backend is ready for external held-out oracle evaluation

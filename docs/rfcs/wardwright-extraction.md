@@ -866,7 +866,7 @@ are enforcement rules.
 
 Conceptual shape:
 
-```python
+```starlark
 def on_event(ctx, event):
     if event.kind == "text_delta" and regex_match(ctx.window.text, r"OldClient\("):
         return retry(
@@ -924,9 +924,6 @@ Parser choices should follow the spike goal:
   Rust becomes authoritative.
 - `tree-sitter-starlark` is useful for source-aware editor visualization and
   incremental parsing.
-- Python `ast` is acceptable for an early Starlark-like subset prototype if the
-  spike explicitly rejects unsupported Python nodes and validates activation
-  with a real Starlark parser later.
 
 This spike should be compared against the structured-primitives workbench using
 the same policies and scenarios: TTSR, recent-history count/comparison rules,

@@ -17,15 +17,8 @@ done
 pass() { printf '✓ %s\n' "$1"; }
 fail() { printf '✗ %s\n' "$1" >&2; FAILURES=$((FAILURES + 1)); }
 
-echo "── App ──────────────────────────────────────────────"
-(cd app && mise exec -- mix format --check-formatted && mise exec -- mix test) && pass "app format/test" || fail "app format/test"
-
-echo "── Python contracts ─────────────────────────────────"
-python3 -m py_compile tests/*.py && pass "python compile" || fail "python compile"
-
-if [ "$QUICK" = false ]; then
-  python3 tests/storage_contract.py --store all --cases 50 && pass "storage contract" || fail "storage contract"
-fi
+echo "── Baseline ─────────────────────────────────────────"
+mise run check && pass "mise check" || fail "mise check"
 
 echo ""
 if [ "$FAILURES" -eq 0 ]; then

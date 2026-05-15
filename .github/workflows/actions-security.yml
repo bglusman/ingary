@@ -19,8 +19,6 @@ jobs:
         with:
           persist-credentials: false
       - name: Install zizmor
-        run: |
-          python3 -m venv /tmp/zizmor-venv
-          /tmp/zizmor-venv/bin/pip install zizmor==1.16.3
+        run: cargo install zizmor --version 1.16.3 --locked
       - name: Audit workflows
-        run: /tmp/zizmor-venv/bin/zizmor --offline --format=github .
+        run: zizmor --offline --format=github .

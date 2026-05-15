@@ -18,7 +18,8 @@ now use Wardwright; GitHub Pages is configured for `wardwright.dev`.
 
 - Move the active Elixir/LiveView application to `app`.
 - Remove the old Go and Rust backend prototype directories from the live tree.
-- Keep shared HTTP/storage/policy contracts and Python probes.
+- Keep shared HTTP/storage/policy contracts, but express executable behavior in
+  native ExUnit/StreamData tests now that Wardwright is BEAM-first.
 - Keep historical bakeoff docs and git history as the record of comparison.
 - Update local hooks and mise tasks so routine checks exercise the active stack
   instead of maintaining removed prototypes.

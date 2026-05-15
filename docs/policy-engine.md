@@ -454,7 +454,7 @@ being backed by unbounded historical storage.
 
 For example:
 
-```python
+```starlark
 ctx.receipts.list(
     scope = "session",
     where = {"event_type": "tool_call.finished", "tool_name": "browser"},
@@ -780,9 +780,6 @@ Implementation options should be chosen for the layer being tested:
   Rust owns policy execution.
 - `tree-sitter-starlark` is useful for editor-grade concrete syntax,
   highlighting, source spans, and incremental UI feedback.
-- Python `ast` can be a fast exploratory parser for a Starlark-like subset, but
-  it must reject unsupported Python nodes and must not become the activation
-  validator because Python accepts syntax and semantics Starlark should reject.
 
 The decisive comparison is not expressiveness. Programmable policy will always
 be more expressive. The product question is whether a technical policy author

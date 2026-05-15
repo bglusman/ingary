@@ -6,12 +6,20 @@ description: Experiment plan for choosing Wardwright's primary backend prototype
 
 # Prototype Bakeoff Plan
 
-Wardwright currently keeps Go, Rust, Elixir, and a proposed Gleam-on-BEAM variant
-alive so the first durable implementation can be chosen from evidence instead of
-preference. The bakeoff
-turns that intention into a controlled experiment: three non-trivial governance
-features, implemented independently in each prototype, scored with a
-rubric defined before implementation begins.
+This page is a historical record of the prototype-selection experiment. The
+resulting decision is recorded in [Backend Selection Decision](backend-selection-decision.html):
+Wardwright is now BEAM-first, with Elixir owning runtime plumbing and Gleam
+owning correctness-heavy pure logic where the boundary is stable enough.
+
+The old standalone harnesses and cross-backend executable probes have been
+removed from the live tree. New executable behavior belongs in native
+ExUnit/StreamData tests under `app/test`.
+
+The original bakeoff kept Go, Rust, Elixir, and a proposed Gleam-on-BEAM variant
+alive so the first durable implementation could be chosen from evidence instead
+of preference. The bakeoff turned that intention into a controlled experiment:
+three non-trivial governance features, implemented independently in each
+prototype, scored with a rubric defined before implementation began.
 
 The goal is not to prove that one language is universally better. The goal is
 to identify which prototype gives Wardwright the best combination of correctness,
@@ -181,10 +189,10 @@ evaluation oracle before implementation branches are created.
    guidance. Agents may read this contract.
 2. Add visible example fixtures only when they clarify the contract. These
    fixtures are translation material, not the final judge.
-3. Write the final Python backend oracle separately from the agent worktree.
+3. Write the final held-out backend oracle separately from the agent worktree.
    It should hit only public/prototype test APIs and assert externally visible
    behavior. Agents must not run this oracle during implementation.
-4. Confirm the held-out Python oracle fails against all three backends for the
+4. Confirm the held-out backend oracle fails against all three backends for the
    expected missing-feature reasons.
 5. Hold a human review gate on both the visible contract and held-out oracle.
    The review should judge whether scenarios, data generation, edge cases, and
@@ -202,7 +210,7 @@ evaluation oracle before implementation branches are created.
    credentials or local models are available, including local Ollama. They may
    adapt those live tests for the backend they are building. Live tests are
    discovery and realism tools, not CI gates and not the final oracle.
-10. After each agent finishes, run the held-out Python backend oracle externally
+10. After each agent finishes, run the held-out backend oracle externally
    against the completed backend as the final correctness gate.
 11. Run the normal repo checks and collect metrics.
 
@@ -216,12 +224,12 @@ fixtures before the implementation is considered complete.
 Agents should also consider lightweight mutation testing before declaring a
 feature done: deliberately break a condition, branch, guard action, eviction
 rule, or receipt field and confirm the native tests fail for the intended
-reason. Held-out Python oracle failures are measured externally after the agent
+reason. Held-out oracle failures are measured externally after the agent
 finishes.
 
 ## Contract And Oracle Quality Bar
 
-The visible contract and held-out Python oracle are not smoke tests. Together
+The visible contract and held-out oracle are not smoke tests. Together
 they define and evaluate bakeoff behavior and should be reviewed before kickoff.
 A weak contract or oracle will produce misleading implementation scores.
 
@@ -268,12 +276,12 @@ The kickoff checklist for each bakeoff contract and oracle:
 ## Controls
 
 - All implementation branches start from the same `main` SHA.
-- The visible feature contract and held-out Python oracle are frozen before
+- The visible feature contract and held-out oracle are frozen before
   implementation starts.
 - Each implementation receives the same prompt, acceptance criteria, and
   validation commands.
 - Implementation worktrees expose the visible contract but not the held-out
-  Python oracle.
+  held-out oracle.
 - Do not cross-port code or design details until all three attempts for that
   feature are complete.
 - Dependency additions are allowed, but each addition is scored for maintenance
@@ -314,7 +322,7 @@ Suggested fields:
   "dependencies_added": [],
   "checks": {
     "native": "pass",
-    "held_out_python_oracle": "pass",
+    "held_out_backend_oracle": "pass",
     "mise_check": "pass",
     "gitleaks": "pass"
   },
@@ -339,21 +347,15 @@ is to test the measurement system itself: wall-clock timing, command counts,
 input/output token estimates, weighted token cost, git diff effects, command
 output size, and expected-versus-observed comparisons.
 
-Initial local probe:
-
-```sh
-python3 scripts/bakeoff_harness.py \
-  tests/fixtures/bakeoff_instrumentation/toy_static_actions.json \
-  --output /tmp/wardwright-bakeoff-instrumentation.json \
-  --artifact-dir /tmp/wardwright-bakeoff-instrumentation-artifacts
-```
-
-This harness intentionally supports approximate token counting without a
-provider. When real agent runs are used, prefer direct provider or tool usage
-metadata. If an external runner such as opencode is used, capture its session
-export or stats output alongside the harness result. The initial cost proxy
-reports both `total_input + 5 * output` and `uncached_input + 5 * output` until
-provider-specific cached-input pricing is known.
+The retired local probe used deterministic static actions and approximate token
+counting without a provider. If a future bakeoff is needed, rebuild that
+instrumentation around the active agent runner and native BEAM checks instead
+of restoring the old cross-backend scripts. When real agent runs are used,
+prefer direct provider or tool usage metadata. If an external runner such as
+opencode is used, capture its session export or stats output alongside the
+harness result. The initial cost proxy reports both `total_input + 5 * output`
+and `uncached_input + 5 * output` until provider-specific cached-input pricing is
+known.
 
 The first probe is expected to be boring: it should run a few static commands,
 produce no repository state change, and match expected action counts. Real
@@ -367,20 +369,10 @@ outputs and the exact input blob are available for later tokenization and audit.
 The JSON summary keeps previews and paths; the artifact directory preserves the
 raw material.
 
-Real-model Codex probe:
-
-```sh
-python3 scripts/bakeoff_harness.py \
-  tests/fixtures/bakeoff_instrumentation/codex_real_model_no_tool.json \
-  --output /tmp/wardwright-codex-real-model-probe.json \
-  --artifact-dir /tmp/wardwright-codex-real-model-artifacts \
-  --timeout 120
-```
-
-`codex exec --json` emits `turn.completed.usage`; the harness parses those
-events into `model_usage` and derives cached/uncached input, cache hit rate,
-output, reasoning output, and weighted token proxies. That is the preferred
-accounting path for bakeoff runs when Codex is the agent runner.
+The real-model Codex probe used `codex exec --json` usage events to derive
+cached/uncached input, cache hit rate, output, reasoning output, and weighted
+token proxies. That remains the preferred accounting shape if bakeoffs resume,
+but the old repository-local harness is no longer maintained.
 
 A successful GPT-5.5 medium no-tool probe on 2026-05-14 captured:
 
@@ -429,7 +421,7 @@ Score each implementation out of 100 after the post-commit adversarial review.
 
 | Dimension | Points | What good looks like |
 |---|---:|---|
-| Held-out correctness | 20 | Passes all held-out Python backend scenarios and properties without backend-specific exceptions. |
+| Held-out correctness | 20 | Passes all held-out backend scenarios and properties without backend-specific exceptions. |
 | Native test translation | 15 | Native tests express the same behavior and can fail for real regressions. |
 | Feature completeness | 15 | Implements the full frozen spec, including edge cases and receipt fields. |
 | Code hygiene and maintainability | 15 | Clear structure, small interfaces, low special-casing, idiomatic backend style. |
@@ -453,7 +445,7 @@ After each bakeoff:
   feature winner.
 - If scores are within 5 points, treat the bakeoff as inconclusive and record
   the differentiators instead of forcing a winner.
-- If a backend fails the held-out Python oracle or has unresolved security blockers,
+- If a backend fails the held-out oracle or has unresolved security blockers,
   it cannot win that bakeoff.
 
 After all three bakeoffs:
@@ -477,7 +469,7 @@ After all three bakeoffs:
 Do not launch all nine implementation jobs until the measurement process has
 proved itself on real work.
 
-1. Freeze the visible contract, held-out Python oracle, and base `main` SHA.
+1. Freeze the visible contract, held-out oracle, and base `main` SHA.
 2. Launch the first wave as four concurrent jobs for one bakeoff feature, one
    per backend/variant.
 3. Review the outputs, metrics, native test translations, held-out oracle
@@ -503,7 +495,7 @@ Before the first bakeoff, fill this table from live code:
 | `history_threshold` request policy |  |  |  |  |  |
 | Stream governance/TTSR |  |  |  |  |  |
 | Native property tests |  |  |  |  |  |
-| Shared Python probes |  |  |  |  |  |
+| Shared probes |  |  |  |  |  |
 | Load-test harness |  |  |  |  |  |
 
 ## BEAM Runtime Isolation Requirement

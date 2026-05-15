@@ -37,10 +37,9 @@ literal pattern to guarantee that the complete trigger can be detected before
 any trigger byte is released. A shorter horizon is a simulator counterexample,
 not an acceptable production policy.
 
-Regex rules are simulated with Python regular expressions for shared tests, but
-production implementations should use a bounded regex engine or an equivalent
-validated subset. Regex authoring should reject or warn on patterns whose
-future-match intent cannot fit inside the configured horizon.
+Regex rules are simulated with the same validated regex subset exposed by the
+native BEAM policy engine. Regex authoring should reject or warn on patterns
+whose future-match intent cannot fit inside the configured horizon.
 
 ## Retry And Block Semantics
 

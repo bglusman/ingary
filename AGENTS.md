@@ -14,7 +14,6 @@ active tree is now BEAM-first:
 
 - `app`
 - `contracts`
-- `tests`
 - `docs`
 
 ## Public Repo Rules
@@ -50,16 +49,6 @@ In short:
 ```bash
 # App
 (cd app && mise exec -- mix format --check-formatted && mise exec -- mix test)
-
-# Shared Python contracts
-python3 -m py_compile tests/*.py
-python3 tests/storage_contract.py --store all --cases 50
-```
-
-When the app server is running, the shared HTTP probe should pass:
-
-```bash
-python3 tests/contract_probe.py --base-url http://127.0.0.1:8791 --fuzz-runs 10
 ```
 
 ## Product Contract Rules
