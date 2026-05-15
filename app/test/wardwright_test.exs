@@ -561,6 +561,70 @@ defmodule WardwrightTest do
 
     assert [%{"rule_id" => "dune-route-gate", "action" => "restrict_routes"}] =
              get_in(body, ["receipt", "decision", "policy_actions"])
+
+    assert [
+             %{
+               "action_schema" => "wardwright.policy_action.v1",
+               "phase" => "request.routing",
+               "effect_type" => "route_constraint",
+               "source" => %{"type" => "engine", "engine" => "dune", "status" => "ok"},
+               "conflict_key" => "route_constraints",
+               "conflict_policy" => "ordered"
+             }
+           ] = get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "route-affecting policy actions expose ordered conflict metadata" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "local/qwen", "context_window" => 32},
+        %{"model" => "managed/kimi", "context_window" => 256}
+      ])
+      |> Map.put("governance", [
+        %{
+          "id" => "private-local-provider",
+          "kind" => "route_gate",
+          "action" => "restrict_routes",
+          "contains" => "private",
+          "allowed_targets" => ["local"]
+        },
+        %{
+          "id" => "private-specific-model",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "private",
+          "target_model" => "local/qwen"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "private working notes"}]
+        }
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "decision", "policy_route_constraints"]) == %{
+             "allowed_targets" => ["local"],
+             "forced_model" => "local/qwen"
+           }
+
+    assert [
+             %{
+               "conflict_schema" => "wardwright.policy_conflict.v1",
+               "key" => "route_constraints",
+               "class" => "ordered",
+               "rule_ids" => ["private-local-provider", "private-specific-model"],
+               "required_resolution" => "preserve policy declaration order"
+             }
+           ] = get_in(body, ["receipt", "decision", "policy_conflicts"])
   end
 
   test "hybrid policy engine propagates nested blocking actions" do
@@ -596,9 +660,12 @@ defmodule WardwrightTest do
 
     assert [
              %{
+               "action_schema" => "wardwright.policy_action.v1",
                "rule_id" => "primitive-deny",
                "kind" => "route_gate",
-               "action" => "block"
+               "action" => "block",
+               "effect_type" => "terminal",
+               "conflict_key" => "terminal_decision"
              }
            ] = get_in(receipt, ["decision", "policy_actions"])
   end
@@ -606,9 +673,17 @@ defmodule WardwrightTest do
   test "hybrid policy reports policy blocks separately from engine failures" do
     assert %{
              "engine" => "hybrid",
+             "result_schema" => "wardwright.policy_result.v1",
              "status" => "ok",
              "action" => "block",
-             "actions" => [%{"rule_id" => "primitive-deny", "action" => "block"}]
+             "actions" => [
+               %{
+                 "action_schema" => "wardwright.policy_action.v1",
+                 "rule_id" => "primitive-deny",
+                 "action" => "block",
+                 "effect_type" => "terminal"
+               }
+             ]
            } =
              Wardwright.Policy.Engine.evaluate(
                %{

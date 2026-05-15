@@ -594,7 +594,8 @@ defmodule Wardwright.Router do
         "reason" => decision.reason,
         "rule" => decision.rule,
         "governance" => Wardwright.current_config()["governance"],
-        "policy_actions" => policy["actions"]
+        "policy_actions" => policy["actions"],
+        "policy_conflicts" => policy["conflicts"]
       },
       "attempts" => [
         %{

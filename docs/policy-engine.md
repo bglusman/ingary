@@ -39,6 +39,31 @@ Policy language is less important than the policy ABI:
 - what actions it can return
 - how receipts explain the decision
 
+## Action Contract
+
+Request-phase policy engines now normalize returned actions through
+`Wardwright.Policy.Action` before the router, receipts, or UI see them. The
+current contract is `wardwright.policy_action.v1`; engine-level results use
+`wardwright.policy_result.v1`.
+
+Every normalized action includes:
+
+- `rule_id`, `kind`, `action`, and `matched`
+- `phase`, such as `request.routing`, `request.rewrite`, `request.alert`,
+  `request.history`, or `request.terminal`
+- `effect_type`, such as `route_constraint`, `request_transform`, `alert`,
+  `annotation`, or `terminal`
+- `source`, distinguishing primitive policy actions from Dune, WASM, hybrid,
+  or other engine-produced actions
+- `priority`, `conflict_key`, and `conflict_policy` when the action can affect
+  ordering-sensitive behavior
+
+Receipts expose `decision.policy_actions` in that shape and summarize detected
+same-key ordered conflicts in `decision.policy_conflicts`. This is intentionally
+not a UI-specific format; it is the backend projection surface that the
+workbench, simulation traces, and future AI-assisted authoring flow should
+consume. Route constraints are still applied in policy declaration order.
+
 The user experience should be visual, conversational, and simulation-first. The
 deterministic policy artifact is the storage and review format, not the primary
 interface. Operators should be able to describe the behavior they want, let an

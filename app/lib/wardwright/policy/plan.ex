@@ -21,6 +21,9 @@ defmodule Wardwright.Policy.Plan do
         policy
         |> Map.update!("actions", &Enum.reverse/1)
         |> Map.update!("events", &Enum.reverse/1)
+        |> then(fn policy ->
+          Map.put(policy, "conflicts", Wardwright.Policy.Action.conflicts(policy["actions"]))
+        end)
 
       {request, policy}
     end)
@@ -32,7 +35,8 @@ defmodule Wardwright.Policy.Plan do
       "events" => [],
       "alert_count" => 0,
       "route_constraints" => %{},
-      "blocked" => false
+      "blocked" => false,
+      "conflicts" => []
     }
 
   defp apply_rule(rule, text, caller, request, policy) do
@@ -77,6 +81,7 @@ defmodule Wardwright.Policy.Plan do
         "severity" => severity
       }
       |> put_route_action_fields(rule)
+      |> Wardwright.Policy.Action.normalize(rule: rule)
 
     case action do
       action when action in ["escalate", "alert_async"] ->
@@ -197,10 +202,12 @@ defmodule Wardwright.Policy.Plan do
           action,
           "target_model",
           Map.get(action, "model", Map.get(value, "target_model", Map.get(value, "model")))
-        )
+        ),
+      "source" => Map.get(action, "source")
     }
     |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
     |> Map.new()
+    |> Wardwright.Policy.Action.normalize(rule: rule)
   end
 
   defp engine_action_record(_action, rule) do
@@ -212,6 +219,7 @@ defmodule Wardwright.Policy.Plan do
       "message" => "policy engine returned a non-map action",
       "severity" => "warning"
     }
+    |> Wardwright.Policy.Action.normalize(rule: rule)
   end
 
   defp apply_route_action(request, policy, action_record) do
@@ -317,19 +325,21 @@ defmodule Wardwright.Policy.Plan do
 
       severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
 
-      action_record = %{
-        "rule_id" => rule_id,
-        "kind" => "history_threshold",
-        "action" => action,
-        "matched" => true,
-        "message" => message,
-        "severity" => severity,
-        "cache_kind" => Map.get(rule, "cache_kind", ""),
-        "cache_key" => Map.get(rule, "cache_key", ""),
-        "cache_scope" => Map.get(rule, "cache_scope", ""),
-        "history_count" => count,
-        "threshold" => threshold
-      }
+      action_record =
+        %{
+          "rule_id" => rule_id,
+          "kind" => "history_threshold",
+          "action" => action,
+          "matched" => true,
+          "message" => message,
+          "severity" => severity,
+          "cache_kind" => Map.get(rule, "cache_kind", ""),
+          "cache_key" => Map.get(rule, "cache_key", ""),
+          "cache_scope" => Map.get(rule, "cache_scope", ""),
+          "history_count" => count,
+          "threshold" => threshold
+        }
+        |> Wardwright.Policy.Action.normalize(rule: rule)
 
       policy = Map.update!(policy, "actions", &[action_record | &1])
 
@@ -382,20 +392,22 @@ defmodule Wardwright.Policy.Plan do
 
       severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
 
-      action_record = %{
-        "rule_id" => rule_id,
-        "kind" => "history_regex_threshold",
-        "action" => action,
-        "matched" => true,
-        "message" => message,
-        "severity" => severity,
-        "cache_kind" => Map.get(rule, "cache_kind", ""),
-        "cache_key" => Map.get(rule, "cache_key", ""),
-        "cache_scope" => Map.get(rule, "cache_scope", ""),
-        "pattern" => Map.get(rule, "pattern", ""),
-        "history_count" => count,
-        "threshold" => threshold
-      }
+      action_record =
+        %{
+          "rule_id" => rule_id,
+          "kind" => "history_regex_threshold",
+          "action" => action,
+          "matched" => true,
+          "message" => message,
+          "severity" => severity,
+          "cache_kind" => Map.get(rule, "cache_kind", ""),
+          "cache_key" => Map.get(rule, "cache_key", ""),
+          "cache_scope" => Map.get(rule, "cache_scope", ""),
+          "pattern" => Map.get(rule, "pattern", ""),
+          "history_count" => count,
+          "threshold" => threshold
+        }
+        |> Wardwright.Policy.Action.normalize(rule: rule)
 
       policy = Map.update!(policy, "actions", &[action_record | &1])
 

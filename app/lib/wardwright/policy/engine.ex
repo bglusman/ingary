@@ -3,17 +3,21 @@ defmodule Wardwright.Policy.Engine do
 
   def evaluate(%{"engine" => "primitive", "rules" => rules}, context) when is_list(rules) do
     %{"engine" => "primitive", "status" => "ok", "actions" => primitive_actions(rules, context)}
+    |> Wardwright.Policy.Action.normalize_result()
   end
 
-  def evaluate(%{"engine" => "dune", "source" => source}, context) when is_binary(source) do
+  def evaluate(%{"engine" => "dune", "source" => source} = policy, context)
+      when is_binary(source) do
     source
     |> String.replace("__WARDWRIGHT_CONTEXT__", inspect(context, charlists: :as_lists))
     |> Wardwright.PolicySandbox.Dune.eval_string()
     |> normalize_dune_result()
+    |> Wardwright.Policy.Action.normalize_result(rule: policy)
   end
 
   def evaluate(%{"engine" => "wasm"} = policy, _context) do
     Wardwright.PolicySandbox.Wasm.evaluate(policy)
+    |> Wardwright.Policy.Action.normalize_result(rule: policy)
   end
 
   def evaluate(%{"engine" => "hybrid", "engines" => engines}, context) when is_list(engines) do
@@ -34,6 +38,7 @@ defmodule Wardwright.Policy.Engine do
       "actions" => Enum.flat_map(results, &result_actions/1),
       "results" => results
     }
+    |> Wardwright.Policy.Action.normalize_result()
   end
 
   def evaluate(_policy, _context) do
@@ -43,6 +48,7 @@ defmodule Wardwright.Policy.Engine do
       "action" => "block",
       "reason" => "unsupported policy engine"
     }
+    |> Wardwright.Policy.Action.normalize_result()
   end
 
   defp primitive_actions(rules, context) do
@@ -85,6 +91,13 @@ defmodule Wardwright.Policy.Engine do
     result
     |> Map.put("action", Map.get(value, "action", value[:action] || "allow"))
     |> Map.put("reason", Map.get(value, "reason", value[:reason]))
+    |> Map.put("message", Map.get(value, "message", value[:message]))
+    |> Map.put("severity", Map.get(value, "severity", value[:severity]))
+    |> Map.put("allowed_targets", Map.get(value, "allowed_targets", value[:allowed_targets]))
+    |> Map.put(
+      "target_model",
+      Map.get(value, "target_model", value[:target_model] || value[:model])
+    )
   end
 
   defp normalize_dune_result(%{"status" => "ok"} = result),
