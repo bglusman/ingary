@@ -102,13 +102,68 @@ defmodule WardwrightTest do
                     }}
 
     assert %{
-             "kind" => "ets_bounded_recent_history",
+             "kind" => "ets_session_catalog_bounded_history",
+             "topology" => "catalog_per_session_tables",
              "bounded" => true,
              "entry_count" => 2,
-             "max_entries" => 2
+             "max_entries" => 2,
+             "session_count" => 1,
+             "stores" => [
+               %{
+                 "entry_count" => 2,
+                 "scope" => %{"session_id" => "session-a"},
+                 "scope_key" => "session:session-a"
+               }
+             ]
            } = Wardwright.PolicyCache.status()
 
     assert [%{"sequence" => 3}, %{"sequence" => 2}] = Wardwright.PolicyCache.recent(%{}, 10)
+  end
+
+  test "policy cache isolates per-session stores while preserving scoped reads" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 2, "recent_limit" => 10})
+
+    for {session_id, count} <- [{"session-a", 3}, {"session-b", 1}] do
+      for index <- 1..count do
+        assert {:ok, _event} =
+                 Wardwright.PolicyCache.add(%{
+                   "kind" => "tool_call",
+                   "key" => "shell:ls",
+                   "scope" => %{"session_id" => session_id},
+                   "created_at_unix_ms" => index
+                 })
+      end
+    end
+
+    assert %{"entry_count" => 3, "session_count" => 2, "stores" => stores} =
+             Wardwright.PolicyCache.status()
+
+    assert Enum.sort(Enum.map(stores, & &1["entry_count"])) == [1, 2]
+    assert stores |> Enum.map(& &1["owner"]) |> Enum.uniq() |> length() == 2
+
+    assert [
+             %{"scope" => %{"session_id" => "session-a"}},
+             %{"scope" => %{"session_id" => "session-a"}}
+           ] =
+             Wardwright.PolicyCache.recent(
+               %{"kind" => "tool_call", "scope" => %{"session_id" => "session-a"}},
+               10
+             )
+
+    assert [%{"scope" => %{"session_id" => "session-b"}}] =
+             Wardwright.PolicyCache.recent(
+               %{"kind" => "tool_call", "scope" => %{"session_id" => "session-b"}},
+               10
+             )
+
+    cross_session = Wardwright.PolicyCache.recent(%{"kind" => "tool_call"}, 10)
+
+    assert cross_session ==
+             Enum.sort_by(
+               cross_session,
+               fn event -> {event["created_at_unix_ms"], event["sequence"], event["id"]} end,
+               :desc
+             )
   end
 
   test "history threshold policy reads only configured cache scope" do

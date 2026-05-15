@@ -3,7 +3,10 @@ defmodule Wardwright.PolicyCache do
 
   use GenServer
 
-  @table :wardwright_policy_cache
+  alias Wardwright.PolicyCache.SessionStore
+
+  @catalog :wardwright_policy_cache_catalog
+  @anonymous_session "anonymous"
 
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
@@ -14,19 +17,65 @@ defmodule Wardwright.PolicyCache do
   end
 
   def add(input) when is_map(input) do
-    GenServer.call(__MODULE__, {:add, input})
+    input = normalize_input(input)
+
+    with {:ok, pid} <- store_for(input["scope"]) do
+      add_to_store(pid, input)
+    end
   end
 
   def recent(filter \\ %{}, limit \\ nil) do
-    GenServer.call(__MODULE__, {:recent, filter || %{}, limit})
+    filter = normalize_filter(filter || %{})
+    limit = normalize_limit(limit, current_config())
+
+    filter
+    |> candidate_stores()
+    |> Enum.flat_map(fn %{table: table} -> table_events(table) end)
+    |> Enum.filter(&matches?(&1, filter))
+    |> Enum.sort_by(
+      fn event ->
+        {event["created_at_unix_ms"], event["sequence"], event["id"]}
+      end,
+      :desc
+    )
+    |> Enum.take(limit)
   end
 
   def count(filter \\ %{}) do
-    GenServer.call(__MODULE__, {:count, filter || %{}})
+    filter = normalize_filter(filter || %{})
+
+    filter
+    |> candidate_stores()
+    |> Enum.flat_map(fn %{table: table} -> table_events(table) end)
+    |> Enum.count(&matches?(&1, filter))
   end
 
   def status do
-    GenServer.call(__MODULE__, :status)
+    stores = live_stores()
+    config = current_config()
+    entry_count = Enum.sum(Enum.map(stores, & &1.entry_count))
+    next_sequence = stores |> Enum.map(& &1.next_sequence) |> Enum.max(fn -> 1 end)
+
+    %{
+      "kind" => "ets_session_catalog_bounded_history",
+      "topology" => "catalog_per_session_tables",
+      "max_entries" => config["max_entries"],
+      "recent_limit" => config["recent_limit"],
+      "entry_count" => entry_count,
+      "session_count" => length(stores),
+      "next_sequence" => next_sequence,
+      "bounded" => true,
+      "stores" =>
+        Enum.map(stores, fn store ->
+          %{
+            "scope_key" => store.scope_key,
+            "scope" => store.scope,
+            "entry_count" => store.entry_count,
+            "next_sequence" => store.next_sequence,
+            "owner" => inspect(store.pid)
+          }
+        end)
+    }
   end
 
   def reset, do: configure(%{})
@@ -34,135 +83,163 @@ defmodule Wardwright.PolicyCache do
   @impl true
   def init(config) do
     table =
-      :ets.new(@table, [
-        :ordered_set,
+      :ets.new(@catalog, [
+        :set,
         :protected,
         :named_table,
-        read_concurrency: true,
-        write_concurrency: true
+        read_concurrency: true
       ])
 
-    {:ok, %{config: normalize_config(config), next: 0, table: table}}
+    {:ok, %{config: normalize_config(config), catalog: table}}
   end
 
   @impl true
   def handle_call({:configure, config}, _from, state) do
-    :ets.delete_all_objects(state.table)
-    state = %{state | config: normalize_config(config), next: 0}
-    {:reply, :ok, state}
+    state.catalog
+    |> catalog_entries()
+    |> Enum.each(fn %{pid: pid} ->
+      if Process.alive?(pid) do
+        DynamicSupervisor.terminate_child(Wardwright.PolicyCache.SessionSupervisor, pid)
+      end
+    end)
+
+    :ets.delete_all_objects(state.catalog)
+    {:reply, :ok, %{state | config: normalize_config(config)}}
   end
 
-  def handle_call({:add, input}, _from, state) do
-    with {:ok, event} <- build_event(input, state) do
-      :ets.insert(state.table, {event["sequence"], event})
-      evict(state.table, state.config)
-      state = %{state | next: state.next + 1}
-      publish_added(event, state)
-      {:reply, {:ok, event}, state}
-    else
-      {:error, message} ->
-        {:reply, {:error, message}, state}
+  def handle_call(:config, _from, state) do
+    {:reply, state.config, state}
+  end
+
+  def handle_call({:ensure_store, scope}, _from, state) do
+    scope_key = scope_key(scope)
+
+    case lookup_store(scope_key) do
+      {:ok, store} ->
+        {:reply, {:ok, store.pid}, state}
+
+      :error ->
+        case start_store(scope_key, scope, state.config) do
+          {:ok, store} ->
+            :ets.insert(state.catalog, {scope_key, store})
+            {:reply, {:ok, store.pid}, state}
+
+          {:error, reason} ->
+            {:reply, {:error, "failed to start policy cache session store: #{inspect(reason)}"},
+             state}
+        end
     end
   end
 
-  def handle_call({:recent, filter, limit}, _from, state) do
-    limit = normalize_limit(limit, state.config)
+  defp store_for(scope) do
+    scope_key = scope_key(scope)
 
-    events =
-      state.table
-      |> events()
-      |> Enum.sort_by(& &1["sequence"], :desc)
-      |> Enum.filter(&matches?(&1, filter))
-      |> Enum.take(limit)
-
-    {:reply, events, state}
-  end
-
-  def handle_call({:count, filter}, _from, state) do
-    count =
-      state.table
-      |> events()
-      |> Enum.count(&matches?(&1, filter))
-
-    {:reply, count, state}
-  end
-
-  def handle_call(:status, _from, state) do
-    {:reply,
-     %{
-       "kind" => "ets_bounded_recent_history",
-       "max_entries" => state.config["max_entries"],
-       "recent_limit" => state.config["recent_limit"],
-       "entry_count" => :ets.info(state.table, :size) || 0,
-       "next_sequence" => state.next + 1,
-       "bounded" => true
-     }, state}
-  end
-
-  defp initial_event_count(table), do: :ets.info(table, :size) || 0
-
-  defp build_event(input, state) do
-    kind = input |> Map.get("kind", "") |> to_string() |> String.trim()
-    key = input |> Map.get("key", "") |> to_string() |> String.trim()
-    created_at = integer_value(Map.get(input, "created_at_unix_ms", 0))
-
-    cond do
-      kind == "" ->
-        {:error, "kind must not be empty"}
-
-      created_at < 0 ->
-        {:error, "created_at_unix_ms must not be negative"}
-
-      state.config["max_entries"] < 1 ->
-        {:error, "policy cache is disabled"}
-
-      true ->
-        sequence = state.next + 1
-
-        {:ok,
-         %{
-           "id" => "pc_" <> String.pad_leading(Integer.to_string(sequence, 16), 16, "0"),
-           "sequence" => sequence,
-           "kind" => kind,
-           "key" => key,
-           "scope" => clean_scope(Map.get(input, "scope", %{})),
-           "value" => Map.get(input, "value", %{}),
-           "created_at_unix_ms" => created_at
-         }}
+    case lookup_store(scope_key) do
+      {:ok, %{pid: pid}} -> {:ok, pid}
+      :error -> GenServer.call(__MODULE__, {:ensure_store, scope})
     end
   end
 
-  defp evict(table, config) do
-    excess = initial_event_count(table) - config["max_entries"]
+  defp add_to_store(pid, input) do
+    SessionStore.add(pid, input)
+  catch
+    :exit, _reason ->
+      with {:ok, fresh_pid} <- GenServer.call(__MODULE__, {:ensure_store, input["scope"]}) do
+        SessionStore.add(fresh_pid, input)
+      end
+  end
 
-    if excess > 0 do
-      table
-      |> events()
-      |> Enum.sort_by(fn event -> {event["created_at_unix_ms"], event["sequence"]} end)
-      |> Enum.take(excess)
-      |> Enum.each(fn event -> :ets.delete(table, event["sequence"]) end)
+  defp start_store(scope_key, scope, config) do
+    spec = {SessionStore, scope_key: scope_key, scope: scope, config: config}
+
+    case DynamicSupervisor.start_child(Wardwright.PolicyCache.SessionSupervisor, spec) do
+      {:ok, pid} ->
+        {:ok, session_store_info(pid)}
+
+      {:error, {:already_started, pid}} ->
+        {:ok, session_store_info(pid)}
+
+      other ->
+        other
     end
   end
 
-  defp events(table) do
+  defp lookup_store(scope_key) do
+    case :ets.lookup(@catalog, scope_key) do
+      [{^scope_key, %{pid: pid} = store}] when is_pid(pid) ->
+        if Process.alive?(pid), do: {:ok, store}, else: :error
+
+      _ ->
+        :error
+    end
+  rescue
+    ArgumentError -> :error
+  end
+
+  defp current_config do
+    GenServer.call(__MODULE__, :config)
+  end
+
+  defp candidate_stores(%{"scope" => scope}) do
+    case Map.get(scope, "session_id") do
+      value when is_binary(value) and value != "" ->
+        case lookup_store(session_scope_key(value)) do
+          {:ok, store} -> [store]
+          :error -> []
+        end
+
+      _ ->
+        live_stores()
+    end
+  end
+
+  defp live_stores do
+    @catalog
+    |> catalog_entries()
+    |> Enum.filter(&Process.alive?(&1.pid))
+    |> Enum.map(&refresh_store_info/1)
+  rescue
+    ArgumentError -> []
+  end
+
+  defp refresh_store_info(%{pid: pid} = store) do
+    case safe_session_store_info(pid) do
+      {:ok, info} -> info
+      :error -> store
+    end
+  end
+
+  defp session_store_info(pid) do
+    info = SessionStore.info(pid)
+
+    %{
+      pid: info.pid,
+      table: info.table,
+      scope_key: info.scope_key,
+      scope: info.scope,
+      entry_count: info.entry_count,
+      next_sequence: info.next_sequence
+    }
+  end
+
+  defp safe_session_store_info(pid) do
+    {:ok, session_store_info(pid)}
+  catch
+    :exit, _ -> :error
+  end
+
+  defp catalog_entries(table) do
+    table
+    |> :ets.tab2list()
+    |> Enum.map(fn {_scope_key, store} -> store end)
+  end
+
+  defp table_events(table) do
     table
     |> :ets.tab2list()
     |> Enum.map(fn {_sequence, event} -> event end)
-  end
-
-  defp publish_added(event, state) do
-    if Process.whereis(Wardwright.PubSub) do
-      Wardwright.Runtime.Events.publish(Wardwright.Runtime.Events.topic(:policies), %{
-        "type" => "policy_cache.event_recorded",
-        "sequence" => event["sequence"],
-        "kind" => event["kind"],
-        "key" => event["key"],
-        "scope" => event["scope"],
-        "created_at_unix_ms" => event["created_at_unix_ms"],
-        "entry_count" => initial_event_count(state.table),
-        "max_entries" => state.config["max_entries"]
-      })
-    end
+  rescue
+    ArgumentError -> []
   end
 
   defp matches?(event, filter) do
@@ -171,6 +248,20 @@ defmodule Wardwright.PolicyCache do
     (blank?(filter["kind"]) or event["kind"] == filter["kind"]) and
       (blank?(filter["key"]) or event["key"] == filter["key"]) and
       Enum.all?(scope, fn {key, value} -> get_in(event, ["scope", key]) == value end)
+  end
+
+  defp normalize_input(input) do
+    Map.put(input, "scope", clean_scope(Map.get(input, "scope", %{})))
+  end
+
+  defp normalize_filter(filter) do
+    filter
+    |> stringify_keys()
+    |> Map.update("scope", %{}, &clean_scope/1)
+  end
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), value} end)
   end
 
   defp normalize_limit(nil, config), do: config["recent_limit"]
@@ -202,6 +293,15 @@ defmodule Wardwright.PolicyCache do
   end
 
   defp clean_scope(_), do: %{}
+
+  defp scope_key(scope) do
+    case Map.get(scope, "session_id") do
+      value when is_binary(value) and value != "" -> session_scope_key(value)
+      _ -> session_scope_key(@anonymous_session)
+    end
+  end
+
+  defp session_scope_key(session_id), do: "session:" <> session_id
 
   defp blank?(value), do: value in [nil, ""]
 

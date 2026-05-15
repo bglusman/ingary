@@ -199,6 +199,10 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <dl class="kv">
             <dt>Store</dt>
             <dd><%= @policy_cache_status["kind"] %></dd>
+            <dt>Topology</dt>
+            <dd><%= @policy_cache_status["topology"] || "single_table" %></dd>
+            <dt>Sessions</dt>
+            <dd><%= @policy_cache_status["session_count"] || 0 %></dd>
             <dt>Recent Limit</dt>
             <dd><%= @policy_cache_status["recent_limit"] %></dd>
             <dt>Next Sequence</dt>

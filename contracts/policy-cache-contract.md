@@ -6,13 +6,13 @@ hot state in ETS behind `Wardwright.PolicyCache`. It is not the durable receipt
 store and must not become an ambient log of prompts or completions.
 
 The current prototype exposes this as one logical cache API. The intended
-runtime shape is more granular:
+runtime shape is now partially implemented as:
 
 - one low-write session catalog for active session metadata and table
   references
 - one bounded ordered ETS table per active session for session-local history
 - separate aggregate/index tables for policies that intentionally read across
-  sessions, callers, models, or tenants
+  sessions, callers, models, or tenants, still to be implemented
 
 Policy code must request named scopes and facts through this contract rather
 than discovering ETS table names or references directly.
