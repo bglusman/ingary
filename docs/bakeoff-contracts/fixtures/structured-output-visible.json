@@ -29,6 +29,24 @@
       "kind": "json_path_number",
       "path": "/confidence",
       "gte": 0.7
+    },
+    {
+      "id": "answer-not-draft",
+      "kind": "json_path_string_not_contains",
+      "path": "/answer",
+      "pattern": "draft"
+    },
+    {
+      "id": "answer-not-unsafe",
+      "kind": "json_path_string_not_contains",
+      "path": "/answer",
+      "pattern": "unsafe"
+    },
+    {
+      "id": "answer-not-debug",
+      "kind": "json_path_string_not_contains",
+      "path": "/answer",
+      "pattern": "debug"
     }
   ],
   "guard_loop": {
@@ -106,17 +124,17 @@
     {
       "name": "global_budget_exhausted_mixed_failures",
       "tier": "core",
-      "description": "Different failure types consume the global attempt budget without success.",
+      "description": "Different semantic rules consume the global attempt budget without any one rule reaching its per-rule budget.",
       "outputs": [
-        "{broken",
-        "{\"answer\":\"missing confidence\"}",
-        "{\"answer\":\"still too uncertain\",\"confidence\":0.2}",
-        "{\"answer\":\"extra field\",\"confidence\":0.9,\"debug\":\"not allowed\"}"
+        "{\"answer\":\"draft response\",\"confidence\":0.91}",
+        "{\"answer\":\"unsafe response\",\"confidence\":0.91}",
+        "{\"answer\":\"debug response\",\"confidence\":0.91}",
+        "{\"answer\":\"still too uncertain\",\"confidence\":0.2}"
       ],
       "expected": {
         "final_status": "exhausted_guard_budget",
-        "guard_types": ["json_syntax", "schema_validation", "semantic_validation", "schema_validation"],
-        "guard_rule_ids": ["structured-json", "structured-json", "minimum-confidence", "structured-json"],
+        "guard_types": ["semantic_validation", "semantic_validation", "semantic_validation", "semantic_validation"],
+        "guard_rule_ids": ["answer-not-draft", "answer-not-unsafe", "answer-not-debug", "minimum-confidence"],
         "attempt_count": 4
       }
     }
