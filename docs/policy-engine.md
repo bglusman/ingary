@@ -218,6 +218,13 @@ needed to detect split literal or regex matches. If any active stream rule omits
 a horizon, the evaluator keeps the older full-buffer behavior so an unbounded
 rule cannot accidentally miss a cross-chunk trigger.
 
+Rules may also declare `max_hold_ms` to bound how long the oldest unreleased
+bytes may remain in the stream policy window. Wardwright applies the strictest
+declared budget across active stream rules. If the budget is exceeded before the
+held bytes are released, the attempt fails closed with
+`stream_policy_latency_exceeded`, cancels the provider attempt, and records
+`max_hold_ms` plus `max_observed_hold_ms` in the stream-policy receipt.
+
 The evaluator now exposes the same behavior as an incremental arbiter:
 initialize state for a ruleset, consume one normalized provider chunk, receive
 the newly releasable output chunks for that step, and finish the stream to flush
@@ -233,9 +240,9 @@ the client receives a terminal Wardwright SSE event and the receipt records the
 policy status. If no bytes have been sent, Wardwright can still fail closed with
 JSON.
 
-Remaining stream-runtime work includes explicit latency budgets, richer raw
-provider-event offsets in receipts, provider-specific pools, and a clearer
-operator-facing model for retries after any bytes have reached the client.
+Remaining stream-runtime work includes richer raw provider-event offsets in
+receipts, provider-specific pools, and a clearer operator-facing model for
+retries after any bytes have reached the client.
 
 ## State Scopes
 

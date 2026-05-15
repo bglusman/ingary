@@ -655,6 +655,8 @@ defmodule Wardwright.Router do
       "released_bytes" => Map.get(stream_policy, :released_bytes, 0),
       "held_bytes" => Map.get(stream_policy, :held_bytes, 0),
       "max_held_bytes" => Map.get(stream_policy, :max_held_bytes, 0),
+      "max_hold_ms" => Map.get(stream_policy, :max_hold_ms),
+      "max_observed_hold_ms" => Map.get(stream_policy, :max_observed_hold_ms, 0),
       "rewritten_bytes" => Map.get(stream_policy, :rewritten_bytes, 0),
       "blocked_bytes" => Map.get(stream_policy, :blocked_bytes, 0)
     }
@@ -710,6 +712,7 @@ defmodule Wardwright.Router do
       "exhausted_rule_budget" -> 422
       "exhausted_guard_budget" -> 422
       "stream_policy_blocked" -> 422
+      "stream_policy_latency_exceeded" -> 422
       "stream_policy_retry_context_exceeded" -> 422
       "stream_policy_retry_required" -> 409
       _ -> 200
@@ -1074,6 +1077,8 @@ defmodule Wardwright.Router do
       "released_bytes" => policy.released_bytes,
       "held_bytes" => policy.held_bytes,
       "max_held_bytes" => Map.get(policy, :max_held_bytes, 0),
+      "max_hold_ms" => Map.get(policy, :max_hold_ms),
+      "max_observed_hold_ms" => Map.get(policy, :max_observed_hold_ms, 0),
       "rewritten_bytes" => policy.rewritten_bytes,
       "blocked_bytes" => policy.blocked_bytes
     }
