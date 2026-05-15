@@ -4,18 +4,24 @@ Elixir/LiveView implementation of the Wardwright synthetic model platform contra
 It currently serves mock model responses and local policy evaluation surfaces;
 real provider credentials and outbound model calls are not wired here yet.
 
+Gleam is compiled inside the same Mix project for small, correctness-heavy
+policy decisions. Elixir keeps ownership of HTTP, Phoenix, processes, PubSub,
+and mutable state; Gleam modules under `src/wardwright` own pure structured
+output, history-threshold, and alert-queue classifications behind Elixir wrapper
+modules in `lib/wardwright/policy`.
+
 ## Run
 
 ```bash
 cd app
-mix deps.get
-mix run --no-halt
+mise exec -- mix deps.get
+mise exec -- mix run --no-halt
 ```
 
 The server binds to `127.0.0.1:8787` by default. Override with:
 
 ```bash
-WARDWRIGHT_BIND=127.0.0.1:8788 mix run --no-halt
+WARDWRIGHT_BIND=127.0.0.1:8788 mise exec -- mix run --no-halt
 ```
 
 Smoke check:
@@ -32,7 +38,8 @@ curl -s http://127.0.0.1:8787/v1/chat/completions \
 Run tests:
 
 ```bash
-mix test
+mise exec -- gleam format --check src
+mise exec -- mix test
 ```
 
 ## Implemented Surface
@@ -78,6 +85,11 @@ Policy execution is split by trust tier. Local/operator-authored policy can use
 structured primitives and Dune-backed BEAM snippets with timeout, reduction, and
 memory caps. Externally shared or untrusted policy should target a stronger
 portable boundary such as WASM, a sidecar, or a hosted policy service.
+
+Current pure policy decisions use Gleam where the boundary is stable enough:
+structured-output guard-loop status, recent-history threshold classification,
+and alert enqueue/backpressure classification. Keep process ownership and
+side-effecting delivery in Elixir unless a later spike proves a better split.
 
 The old Go and Rust backend prototypes remain in git history as bakeoff
 evidence, but they are no longer part of the live tree.

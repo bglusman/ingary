@@ -21,9 +21,19 @@ defmodule Wardwright.Policy.History do
   def count(filter), do: Wardwright.PolicyCache.count(filter)
 
   def regex_count(filter, pattern, limit \\ nil) do
-    filter
-    |> Wardwright.PolicyCache.recent(limit)
-    |> PolicyRegex.count_matches(pattern)
+    matches =
+      filter
+      |> Wardwright.PolicyCache.recent(limit)
+      |> Enum.map(fn event ->
+        text =
+          get_in(event, ["value", "text"]) ||
+            get_in(event, ["value", "content"]) ||
+            Map.get(event, "key", "")
+
+        PolicyRegex.match?(to_string(text), pattern)
+      end)
+
+    Wardwright.Policy.HistoryCore.count_recent_matches(matches, recent_limit: length(matches))
   end
 
   def scope_from_caller(_caller, scope_name) when scope_name in [nil, ""], do: %{}

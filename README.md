@@ -25,7 +25,8 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
 - `tests/storage_contract.py` - executable storage/sink behavior fixture.
-- `app` - active Elixir/Phoenix LiveView application.
+- `app` - active Elixir/Phoenix LiveView application, including Gleam policy
+  core modules under `app/src/wardwright`.
 - `docs/rfcs/wardwright-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `wardwright.org`.
 

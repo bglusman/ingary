@@ -152,9 +152,11 @@ The first goal is a dense operational workbench, not a marketing dashboard.
    behavior and projection shape before adding a UI component library.
 
 3. **Gleam Decision Core**
-   Extract one non-trivial state machine into Gleam and call it from the live
-   Elixir path. Good candidates are structured-output guard-loop arbitration,
-   TTSR action arbitration, and deterministic cache eviction.
+   Initial Gleam decision modules now live under `app/src/wardwright` and are
+   called from the live Elixir path through wrapper modules. They currently own
+   structured-output guard-loop arbitration, recent-history threshold
+   classification, and alert enqueue/backpressure classification. Next
+   candidates are TTSR action arbitration and deterministic cache eviction.
 
 4. **Runtime Isolation Demo**
    Build model/session dynamic supervisors in the primary Elixir backend and

@@ -47,26 +47,34 @@ defmodule Wardwright.Policy.AlertDelivery do
       event["type"] != "policy.alert" ->
         {state, result(event, key, "not_alerting")}
 
-      MapSet.member?(state.seen, key) ->
-        {state, result(event, key, "duplicate_suppressed")}
-
-      length(state.queue) < state.config["capacity"] ->
-        state =
-          state
-          |> Map.update!(:seen, &MapSet.put(&1, key))
-          |> Map.update!(:queue, &(&1 ++ [key]))
-
-        {state, result(event, key, "queued")}
-
-      state.config["on_full"] == "drop" ->
-        {Map.update!(state, :seen, &MapSet.put(&1, key)), result(event, key, "dropped")}
-
-      state.config["on_full"] == "dead_letter" ->
-        {Map.update!(state, :seen, &MapSet.put(&1, key)), result(event, key, "dead_lettered")}
-
       true ->
-        {Map.update!(state, :seen, &MapSet.put(&1, key)), result(event, key, "failed_closed")}
+        decision =
+          Wardwright.Policy.AlertCore.decide_enqueue(
+            state.config,
+            length(state.queue),
+            MapSet.member?(state.seen, key),
+            Map.put(event, "idempotency_key", key)
+          )
+
+        apply_delivery_decision(state, event, decision)
     end
+  end
+
+  defp apply_delivery_decision(state, event, %{key: key, outcome: "duplicate_suppressed"}) do
+    {state, result(event, key, "duplicate_suppressed")}
+  end
+
+  defp apply_delivery_decision(state, event, %{key: key, outcome: "queued"}) do
+    state =
+      state
+      |> Map.update!(:seen, &MapSet.put(&1, key))
+      |> Map.update!(:queue, &(&1 ++ [key]))
+
+    {state, result(event, key, "queued")}
+  end
+
+  defp apply_delivery_decision(state, event, %{key: key, outcome: outcome}) do
+    {Map.update!(state, :seen, &MapSet.put(&1, key)), result(event, key, outcome)}
   end
 
   defp idempotency_key(event, receipt_hint) do

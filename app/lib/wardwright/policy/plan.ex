@@ -305,7 +305,7 @@ defmodule Wardwright.Policy.Plan do
 
     count = Wardwright.PolicyCache.count(filter)
 
-    if count < threshold do
+    if not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
       {request, policy}
     else
       action = Map.get(rule, "action", "annotate")
@@ -370,7 +370,7 @@ defmodule Wardwright.Policy.Plan do
         Map.get(rule, "limit")
       )
 
-    if count < threshold do
+    if not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
       {request, policy}
     else
       action = Map.get(rule, "action", "annotate")

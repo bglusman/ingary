@@ -37,7 +37,7 @@ defmodule Wardwright.Policy.StructuredOutput do
         case validate_output(provider.content || "", config) do
           {:ok, schema_id, parsed} ->
             final_status =
-              if acc["guard_events"] == [], do: "completed", else: "completed_after_guard"
+              Wardwright.Policy.StructuredCore.success_status(length(acc["guard_events"]))
 
             structured = %{
               "final_status" => final_status,
@@ -57,7 +57,12 @@ defmodule Wardwright.Policy.StructuredOutput do
               "attempt_index" => attempt_index,
               "rule_id" => rule_id,
               "guard_type" => guard_type,
-              "action" => Map.get(guard_config, "on_violation", "retry_with_validation_feedback")
+              "action" =>
+                Map.get(
+                  guard_config,
+                  "on_violation",
+                  Wardwright.Policy.StructuredCore.guard_action()
+                )
             }
 
             acc = %{
@@ -66,23 +71,32 @@ defmodule Wardwright.Policy.StructuredOutput do
                 "rule_failures" => failures
             }
 
+            outcome_status =
+              Wardwright.Policy.StructuredCore.loop_outcome_status(
+                rule_id,
+                failures[rule_id],
+                max_failures_per_rule,
+                attempt_index + 1,
+                max_attempts
+              )
+
             cond do
-              failures[rule_id] >= max_failures_per_rule ->
+              outcome_status == "exhausted_rule_budget" ->
                 {:halt,
                  %{
                    provider
                    | content: nil,
-                     status: "exhausted_rule_budget",
-                     structured_output: exhausted(acc, "exhausted_rule_budget", rule_id)
+                     status: outcome_status,
+                     structured_output: exhausted(acc, outcome_status, rule_id)
                  }}
 
-              attempt_index + 1 >= max_attempts ->
+              outcome_status == "exhausted_guard_budget" ->
                 {:halt,
                  %{
                    provider
                    | content: nil,
-                     status: "exhausted_guard_budget",
-                     structured_output: exhausted(acc, "exhausted_guard_budget")
+                     status: outcome_status,
+                     structured_output: exhausted(acc, outcome_status)
                  }}
 
               true ->
