@@ -1,0 +1,83 @@
+{
+  "schema": "ingary.bakeoff.result.structured_output.v1",
+  "attempt": "attempt2",
+  "round": 1,
+  "backend": "elixir",
+  "scope": "backends/elixir-ingary",
+  "branch": "bakeoff2/structured-elixir",
+  "base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks_run": [
+    {
+      "command": "mise exec -- mix format --check-formatted",
+      "cwd": "backends/elixir-ingary",
+      "status": "passed"
+    },
+    {
+      "command": "mise exec -- mix test",
+      "cwd": "backends/elixir-ingary",
+      "status": "passed",
+      "summary": "4 properties, 14 tests, 0 failures"
+    }
+  ],
+  "implemented_core": {
+    "answer_v1_schema_validation": true,
+    "json_syntax_guards": true,
+    "schema_guards": true,
+    "confidence_semantic_guard": true,
+    "retry_loop": true,
+    "global_attempt_budget": true,
+    "fail_closed_exhausted_budget": true,
+    "complete_receipts": true,
+    "visible_fixture_translated_to_exunit": true,
+    "streaming": false
+  },
+  "implemented_advanced": {
+    "answer_v2_schema_alternative_selection": true,
+    "per_rule_budget_exhaustion": true,
+    "generated_repeated_rule_budget_test": false,
+    "generated_schema_alternative_test": false
+  },
+  "receipt_fields": [
+    "final.status",
+    "final.structured_output_status",
+    "final.selected_schema",
+    "final.parsed_output",
+    "final.attempt_count",
+    "final.guard_events",
+    "final.exhausted_rule_id",
+    "structured_output.status",
+    "structured_output.provider_target",
+    "structured_output.guard_events"
+  ],
+  "known_limitations": [
+    "The JSON schema evaluator intentionally implements only the schema vocabulary used by the visible structured-output contract: object, array, string, number, required, minLength, enum, minimum, maximum, and additionalProperties=false.",
+    "The deterministic canned provider is test-only and reads configured outputs from __test/config.",
+    "Per-rule budget exhaustion is applied to semantic guard failures. JSON syntax and schema failures still consume the global attempt budget so mixed visible failures can repair as specified.",
+    "Failed governed completions return an OpenAI-compatible 200 response with the final exhausted status recorded in the receipt; the response body does not yet expose a first-class structured error object."
+  ],
+  "mutation_check": {
+    "performed": true,
+    "mutation": "Temporarily changed object schema validation to allow all additional properties.",
+    "command": "mise exec -- mix test test/elixir_ingary_test.exs:430",
+    "expected_failure": "The extra field then success case failed because the first output completed instead of recording a schema_validation guard.",
+    "restored": true
+  },
+  "self_review": {
+    "correctness": [
+      "Core visible scenarios and additional visible core repairs are covered through public /v1/chat/completions calls and receipt assertions.",
+      "Successful governed outputs are parsed and re-emitted as JSON content; exhausted paths leave parsed_output absent and record ordered guard events."
+    ],
+    "architecture": [
+      "Structured-output logic is isolated in ElixirIngary.StructuredOutput and only routed for non-streaming chat when structured_output schemas are configured.",
+      "The implementation favors the bakeoff contract over a general JSON Schema engine; replacing the local validator with a library would be cleaner if schema coverage expands."
+    ],
+    "security": [
+      "No credentials, private endpoints, prompts, provider tokens, or raw secret-bearing content were added.",
+      "Receipts store canned provider output only as parsed structured output on success, matching the feature contract."
+    ],
+    "test_quality": [
+      "Tests assert public response and receipt behavior, including statuses, attempt counts, schema selection, rule ids, guard types, actions, and parsed output.",
+      "The mutation check confirmed the strict additionalProperties behavior can fail for the intended reason."
+    ]
+  }
+}

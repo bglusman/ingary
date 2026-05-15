@@ -55,6 +55,30 @@ defmodule WardwrightTest do
     end
   end
 
+  test "policy cache filters require matching kind and key together" do
+    Wardwright.PolicyCache.configure(%{"max_entries" => 8, "recent_limit" => 8})
+
+    for {kind, key} <- [
+          {"tool_call", "shell:ls"},
+          {"tool_call", "shell:rm"},
+          {"response_text", "shell:ls"}
+        ] do
+      assert {:ok, _event} =
+               Wardwright.PolicyCache.add(%{
+                 "kind" => kind,
+                 "key" => key,
+                 "scope" => %{"session_id" => "session-a"}
+               })
+    end
+
+    assert [%{"kind" => "tool_call", "key" => "shell:ls"}] =
+             Wardwright.PolicyCache.recent(%{
+               "kind" => "tool_call",
+               "key" => "shell:ls",
+               "scope" => %{"session_id" => "session-a"}
+             })
+  end
+
   test "history threshold policy reads only configured cache scope" do
     config =
       unit_policy_config()
@@ -222,6 +246,221 @@ defmodule WardwrightTest do
                "reminder_injected" => true
              }
            ] = get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "structured output guard retries canned provider outputs and records guard receipts" do
+    config =
+      structured_policy_config(
+        [
+          "{not json",
+          ~s({"answer":"missing confidence"}),
+          ~s({"answer":"valid and confident","confidence":0.91})
+        ],
+        3
+      )
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "return structured json"}]
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    structured = get_in(body, ["wardwright", "structured_output"])
+    assert structured["final_status"] == "completed_after_guard"
+    assert structured["selected_schema"] == "answer_v1"
+    assert structured["attempt_count"] == 3
+
+    assert Enum.map(structured["guard_events"], & &1["guard_type"]) == [
+             "json_syntax",
+             "schema_validation"
+           ]
+
+    assert get_in(body, ["choices", Access.at(0), "message", "content"]) ==
+             ~s({"answer":"valid and confident","confidence":0.91})
+  end
+
+  test "structured output guard fails closed when per-rule budget is exhausted" do
+    config =
+      structured_policy_config([
+        ~s({"answer":"too uncertain one","confidence":0.1}),
+        ~s({"answer":"too uncertain two","confidence":0.2}),
+        ~s({"answer":"would have succeeded too late","confidence":0.95})
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "return structured json"}]
+      })
+
+    assert conn.status == 422
+    body = Jason.decode!(conn.resp_body)
+
+    structured = get_in(body, ["wardwright", "structured_output"])
+    assert structured["final_status"] == "exhausted_rule_budget"
+    assert structured["exhausted_rule_id"] == "minimum-confidence"
+
+    assert Enum.map(structured["guard_events"], & &1["rule_id"]) == [
+             "minimum-confidence",
+             "minimum-confidence"
+           ]
+  end
+
+  test "structured semantic rules reject matched JSON pointer strings" do
+    config =
+      structured_policy_config([~s({"answer":"draft answer","confidence":0.95})], 3)
+      |> get_in(["structured_output"])
+      |> update_in(["semantic_rules"], fn rules ->
+        rules ++
+          [
+            %{
+              "id" => "answer-not-draft",
+              "kind" => "json_path_string_not_contains",
+              "path" => "/answer",
+              "pattern" => "draft"
+            }
+          ]
+      end)
+
+    assert {:error, "semantic_validation", "answer-not-draft"} =
+             Wardwright.Policy.StructuredOutput.validate_output(
+               ~s({"answer":"draft answer","confidence":0.95}),
+               config
+             )
+
+    assert {:ok, "answer_v1", %{"answer" => "final answer", "confidence" => 0.95}} =
+             Wardwright.Policy.StructuredOutput.validate_output(
+               ~s({"answer":"final answer","confidence":0.95}),
+               config
+             )
+  end
+
+  test "structured guard honors integer attempt budgets exactly" do
+    config =
+      structured_policy_config(["{not json"], 5)
+      |> get_in(["structured_output"])
+      |> put_in(["guard_loop", "max_attempts"], 2)
+
+    provider = fn _attempt_index ->
+      %{
+        content: "{not json",
+        status: "completed",
+        latency_ms: 0,
+        error: nil,
+        called_provider: false,
+        mock: true,
+        structured_output: nil
+      }
+    end
+
+    result = Wardwright.Policy.StructuredOutput.run(config, provider)
+    assert result.status == "exhausted_guard_budget"
+    assert get_in(result.structured_output, ["attempt_count"]) == 2
+    assert length(get_in(result.structured_output, ["guard_events"])) == 2
+  end
+
+  test "history regex threshold uses automatically recorded request text inside session scope" do
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 8, "recent_limit" => 8})
+      |> Map.put("governance", [
+        %{
+          "id" => "dangerous-shell-history",
+          "kind" => "history_regex_threshold",
+          "action" => "alert_async",
+          "cache_kind" => "request_text",
+          "cache_key" => "chat_completion",
+          "cache_scope" => "session_id",
+          "pattern" => "rm\\s+-rf",
+          "threshold" => 1,
+          "severity" => "critical"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    miss =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
+        [{"x-wardwright-session-id", "session-a"}]
+      )
+
+    assert get_in(Jason.decode!(miss.resp_body), ["receipt", "final", "alert_count"]) == 0
+
+    hit =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{
+          request: %{
+            model: "unit-model",
+            messages: [%{role: "user", content: "please run rm -rf /tmp/demo"}]
+          }
+        },
+        [{"x-wardwright-session-id", "session-a"}]
+      )
+
+    receipt = Jason.decode!(hit.resp_body)["receipt"]
+    assert get_in(receipt, ["final", "alert_count"]) == 1
+    assert [%{"outcome" => "queued"}] = get_in(receipt, ["final", "alert_delivery"])
+
+    isolated =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{request: %{model: "unit-model", messages: [%{role: "user", content: "hello"}]}},
+        [{"x-wardwright-session-id", "session-b"}]
+      )
+
+    assert get_in(Jason.decode!(isolated.resp_body), ["receipt", "final", "alert_count"]) == 0
+  end
+
+  test "alert delivery backpressure can fail closed before provider invocation" do
+    config =
+      unit_policy_config()
+      |> Map.put("alert_delivery", %{"capacity" => 0, "on_full" => "fail_closed"})
+      |> Map.put("governance", [
+        %{
+          "id" => "always-alert",
+          "kind" => "request_guard",
+          "action" => "alert_async",
+          "contains" => "alert me",
+          "message" => "alert queue full"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "alert me"}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "policy_failed_closed"
+    assert [%{"outcome" => "failed_closed"}] = get_in(body, ["wardwright", "alert_delivery"])
+  end
+
+  test "policy engine adapters fail closed for unsupported WASM and Dune failures" do
+    assert %{"engine" => "wasm", "action" => "block", "status" => "error"} =
+             Wardwright.Policy.Engine.evaluate(%{"engine" => "wasm"}, %{})
+
+    assert %{"engine" => "dune", "action" => "block", "status" => "error"} =
+             Wardwright.Policy.Engine.evaluate(
+               %{"engine" => "dune", "source" => "raise \"nope\""},
+               %{}
+             )
   end
 
   test "test config rejects invalid route graph shapes" do
@@ -403,6 +642,46 @@ defmodule WardwrightTest do
         }
       ]
     }
+  end
+
+  defp structured_policy_config(outputs, max_failures_per_rule \\ 2) do
+    unit_policy_config()
+    |> Map.put("targets", [
+      %{
+        "model" => "canned/model",
+        "context_window" => 256,
+        "provider_kind" => "canned_sequence",
+        "canned_outputs" => outputs
+      }
+    ])
+    |> Map.put("structured_output", %{
+      "schemas" => %{
+        "answer_v1" => %{
+          "type" => "object",
+          "required" => ["answer", "confidence"],
+          "properties" => %{
+            "answer" => %{"type" => "string", "minLength" => 1},
+            "confidence" => %{"type" => "number", "minimum" => 0, "maximum" => 1},
+            "citations" => %{"type" => "array", "items" => %{"type" => "string"}}
+          },
+          "additionalProperties" => false
+        }
+      },
+      "semantic_rules" => [
+        %{
+          "id" => "minimum-confidence",
+          "kind" => "json_path_number",
+          "path" => "/confidence",
+          "gte" => 0.7
+        }
+      ],
+      "guard_loop" => %{
+        "max_attempts" => 4,
+        "max_failures_per_rule" => max_failures_per_rule,
+        "on_violation" => "retry_with_validation_feedback",
+        "on_exhausted" => "block"
+      }
+    })
   end
 
   defp receipt_fixture(receipt_id, created_at, agent_id, opts \\ []) do

@@ -1,0 +1,63 @@
+{
+  "schema": "ingary.bakeoff.result.structured_output_attempt2_go.v1",
+  "backend": "go-ingary",
+  "branch": "bakeoff2/structured-go",
+  "base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks_run": [
+    {
+      "command": "mise trust",
+      "result": "passed",
+      "notes": "Required before mise would run this checkout's Go commands."
+    },
+    {
+      "command": "mise exec -- gofmt -w main.go structured_output_test.go",
+      "working_directory": "backends/go-ingary",
+      "result": "passed"
+    },
+    {
+      "command": "mise exec -- go test ./...",
+      "working_directory": "backends/go-ingary",
+      "result": "passed"
+    }
+  ],
+  "implemented_core": [
+    "answer_v1 JSON schema validation with required fields, type checks, minLength, numeric bounds, arrays, and additionalProperties=false",
+    "single-value JSON syntax guard for malformed, prose, fenced, refusal, and truncated outputs",
+    "schema validation guard using configured schema_rule_id",
+    "confidence semantic guard for json_path_number at /confidence with gte 0.7",
+    "retry loop for non-streaming chat completions",
+    "global max_attempts budget with fail-closed exhausted_guard_budget",
+    "receipts expose final status, selected schema, parsed output on success, attempt count, ordered guard events, rule ids, guard types, actions, and provider attempts"
+  ],
+  "implemented_advanced": [
+    "answer_v2 schema alternative selection",
+    "schema alternative repair after an earlier guarded attempt",
+    "no schema alternative match records schema_validation and retries or exhausts",
+    "semantic per-rule budget exhaustion records exhausted_rule_budget and exhausted_rule_id"
+  ],
+  "native_tests": [
+    "visible contract scenarios translated into Go HTTP/receipt tests",
+    "generated-style table coverage for valid answer_v1 objects",
+    "invalid-first repair cases for syntax, extra fields, wrong type, and low confidence",
+    "all-invalid global budget exhaustion",
+    "repeated semantic rule exhaustion"
+  ],
+  "known_limitations": [
+    "Structured governance is implemented only for non-streaming chat completions.",
+    "The JSON Schema evaluator is intentionally limited to the visible bakeoff schema features used by answer_v1 and answer_v2.",
+    "Per-rule early exhaustion is applied to semantic rule ids; JSON syntax and schema failures use the global attempt budget to match the visible mixed-failure fixture.",
+    "Retry feedback is represented in guard receipts and retry behavior, but the provider request prompt is not augmented with raw validation detail."
+  ],
+  "mutation_check": {
+    "change": "Temporarily changed confidence comparison from number < gte to number <= gte.",
+    "expected_failure": "The generated valid boundary case with confidence 0.7 should no longer complete.",
+    "observed_failure": "TestStructuredOutputCoreGeneratedStyleCases/generated_valid_answer_v1_objects_complete_without_guards returned HTTP 422 exhausted_guard_budget instead of HTTP 200.",
+    "restored": true
+  },
+  "self_review": {
+    "correctness": "Core visible behavior and advanced schema alternative/per-rule semantic budget cases are covered by native tests.",
+    "architecture": "The implementation stays inside the existing Go prototype flow and public receipt maps, but the validator should be factored out if structured output grows beyond bakeoff scope.",
+    "security": "Receipts do not record raw provider output or prompt content; parsed structured output is recorded only after validation succeeds.",
+    "test_quality": "Tests exercise public HTTP behavior and stored receipts, including failure receipts, rather than private helper internals."
+  }
+}

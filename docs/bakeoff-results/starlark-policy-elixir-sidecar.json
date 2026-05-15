@@ -1,0 +1,114 @@
+{
+  "schema": "ingary.bakeoff.starlark_policy_result.v1",
+  "variant": "elixir_sidecar",
+  "backend": "backends/elixir-ingary",
+  "status": "prototype_complete",
+  "implementation": {
+    "sidecar_language": "Rust",
+    "starlark_runtime": "starlark 0.13",
+    "process_boundary": "Supervised BEAM Port running a local child process over newline-delimited JSON on stdio.",
+    "supervision": "ElixirIngary.Application supervises ElixirIngary.StarlarkPolicySidecar. The GenServer owns one Port and restarts it after timeout or child exit.",
+    "callable_shape": {
+      "endpoint": "POST /__test/starlark-policy",
+      "request": {
+        "policy_name": "string",
+        "source": "Starlark source defining evaluate(ctx)",
+        "input": "Policy ABI JSON object",
+        "timeout_ms": "optional integer, default 300"
+      },
+      "response": {
+        "action": "allow | retry | block | switch_model",
+        "model": "optional string",
+        "reason": "string",
+        "trace": "array of rule/action/result/reason objects"
+      }
+    },
+    "dependency_choices": [
+      "Rust sidecar keeps Starlark execution outside BEAM schedulers.",
+      "stdio Port avoids a network listener and is deterministic for ExUnit.",
+      "Jason is reused for the Elixir side of the JSON protocol."
+    ]
+  },
+  "required_scenarios": {
+    "allow_default": "passed",
+    "current_session_history_literal_count_block": "passed",
+    "current_session_history_regex_count_block": "not_implemented_literal_only",
+    "structured_guard_retry": "passed",
+    "dynamic_model_switch": "passed",
+    "fail_closed_on_policy_error": "passed",
+    "fail_closed_on_runaway_loop_timeout": "passed",
+    "fail_closed_on_import_filesystem_network_attempts": "passed"
+  },
+  "trace": {
+    "stable_policy_or_rule_id": true,
+    "action_result_reason": true,
+    "source_spans": false,
+    "notes": "Trace records policy/rule id, selected action, result and reason. Source spans were not attempted in this timebox."
+  },
+  "safety_observations": [
+    "No loader is installed, so Starlark load/import attempts fail closed.",
+    "No filesystem or network APIs are provided in Globals::standard, so open/http attempts fail closed as missing variables.",
+    "Runaway policies are bounded at the Elixir call boundary. On timeout the GenServer returns block and restarts the Port, killing the child process.",
+    "Errors are sanitized to a first-line, control-character-stripped message capped at 240 characters before crossing back into receipts/tests."
+  ],
+  "latency_observations": [
+    "Warm ExUnit endpoint calls were generally sub-millisecond to low-millisecond in local logs.",
+    "The first sidecar call after application start paid process startup cost around 14ms when the Rust binary was already built.",
+    "If the binary is absent, the GenServer attempts a one-time cargo build before opening the Port; this moves cold build cost to startup instead of policy evaluation timeout."
+  ],
+  "limitations": [
+    "Regex helpers are not exposed yet; the covered history scenario uses literal substring matching from the visible fixture.",
+    "Only a prototype test endpoint is wired; synthetic chat/simulate routing is not governed by Starlark yet.",
+    "The Port worker serializes policy evaluations and is not suitable for production concurrency without pooling or per-request workers.",
+    "Timeout enforcement is at the process boundary rather than interpreter fuel/instruction counting.",
+    "No AST/source-span metadata is returned."
+  ],
+  "checks": [
+    {
+      "command": "cargo fmt --manifest-path backends/elixir-ingary/sidecars/starlark_policy_sidecar/Cargo.toml --check",
+      "result": "passed"
+    },
+    {
+      "command": "cargo test --manifest-path backends/elixir-ingary/sidecars/starlark_policy_sidecar/Cargo.toml",
+      "result": "passed",
+      "summary": "5 tests passed"
+    },
+    {
+      "command": "mise exec -- mix format --check-formatted",
+      "cwd": "backends/elixir-ingary",
+      "result": "passed"
+    },
+    {
+      "command": "mise exec -- mix test",
+      "cwd": "backends/elixir-ingary",
+      "result": "passed",
+      "summary": "1 property, 16 tests, 0 failures"
+    }
+  ],
+  "adversarial_review": {
+    "status": "completed_after_initial_commit",
+    "findings": [
+      {
+        "area": "architecture",
+        "severity": "fixed_blocker",
+        "finding": "The first committed GenServer shape could accept a second evaluation while one Port response was pending and overwrite the waiting caller. The amended version fails closed with sidecar already evaluating a policy instead of corrupting request/response matching."
+      },
+      {
+        "area": "architecture",
+        "severity": "non_blocking",
+        "finding": "The single Port worker is adequate for a deterministic spike endpoint but would need a pool, per-request workers, or upstream backpressure before production routing integration."
+      },
+      {
+        "area": "code_quality",
+        "severity": "non_blocking",
+        "finding": "The sidecar protocol and error normalization are intentionally small and readable. The largest quality debt is that timeout enforcement lives in the BEAM wrapper rather than explicit interpreter fuel."
+      },
+      {
+        "area": "test_quality",
+        "severity": "non_blocking",
+        "finding": "Tests cover behavior through the endpoint and native evaluator, including fail-closed negatives and busy-call fail-closed behavior. They do not yet prove regex matching."
+      }
+    ]
+  },
+  "viability_verdict": "Viable for the Elixir backend as an architecture spike. A supervised local sidecar gives clear fail-closed behavior without risking BEAM scheduler starvation. Production viability depends on adding fuel/instruction limits or per-request process isolation, regex/helper APIs, pooled concurrency, and routing integration."
+}

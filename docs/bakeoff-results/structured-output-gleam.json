@@ -1,0 +1,103 @@
+{
+  "schema": "ingary.bakeoff.result.structured_output.v1",
+  "backend": "gleam-on-beam",
+  "branch": "bakeoff2/structured-gleam",
+  "base_sha": "97d6f07974c190d0d1c2f431590814ab70392a6d",
+  "implemented_core_coverage": {
+    "answer_v1_schema_validation": true,
+    "json_syntax_guards": true,
+    "schema_guards": true,
+    "confidence_semantic_guards": true,
+    "retry_loop": true,
+    "global_attempt_budget": true,
+    "fail_closed_exhausted_budget": true,
+    "complete_receipts": true
+  },
+  "implemented_advanced_coverage": {
+    "answer_v2_schema_alternative_selection": true,
+    "per_rule_budget_exhaustion": "partial: enforced for semantic/business rules; schema_rule_id failures continue to global budget to match visible core scenarios"
+  },
+  "gleam_elixir_boundary_shape": {
+    "elixir_owns": [
+      "Plug/Cowboy routes",
+      "application supervision",
+      "dynamic model and session registries",
+      "test config ingress",
+      "receipt storage",
+      "JSON decoding and HTTP response assembly"
+    ],
+    "gleam_owns": [
+      "typed guard type modeling",
+      "typed loop outcome modeling",
+      "pure final status selection",
+      "pure guard rule id selection",
+      "pure budget outcome selection"
+    ],
+    "boundary_notes": "Elixir loads the nested Gleam project's BEAM modules from structured_core/build when available and has identical Elixir fallback decisions so the HTTP app can still start if the Gleam build artifacts are absent."
+  },
+  "isolation_behavior": {
+    "implemented": true,
+    "shape": "Application supervises Registry plus DynamicSupervisor pairs for model runtimes and session runtimes. Chat completions execute through a session runtime keyed by synthetic model and session id.",
+    "native_test": "A deliberately crashed session process is replaced and does not break another session under the same model.",
+    "limitations": [
+      "The structured-output loop is still synchronous inside the session process.",
+      "There is no per-model pool sizing or queue-depth telemetry yet.",
+      "Model runtime currently records process boundary only; route graph state remains in persistent config."
+    ]
+  },
+  "sidecar_backpressure_risks": {
+    "sidecar_used": false,
+    "risks": [
+      "A single session process serializes work for that session; long provider calls can delay later requests in the same session.",
+      "Unbounded dynamic session creation could grow process counts without idle reaping.",
+      "Repeated crash loops are supervised but not rate-limited beyond DynamicSupervisor defaults.",
+      "Cold start is low for local BEAM processes but still creates model/session processes on first use."
+    ],
+    "next_iteration": "Add per-model/session child specs with idle timeout, bounded request queues, telemetry for queue length and restarts, and pool or task handoff for provider calls that should not serialize unrelated work."
+  },
+  "known_limitations": [
+    "Only the JSON-schema subset used by the bakeoff visible fixtures is implemented: object type, required fields, string minLength/enum, number min/max, arrays of strings, and additionalProperties false.",
+    "The canned_sequence provider is test-config only and consumes outputs per request rather than maintaining shared provider state.",
+    "Per-rule exhaustion is applied to semantic_validation events; repeated json_syntax/schema_validation events use the global attempt budget.",
+    "Gleam owns pure decision functions but not the full schema validator because JSON interop and decode work remained faster and clearer in Elixir inside the timebox."
+  ],
+  "setup_friction": [
+    "mise.toml had to be trusted before local tools could run.",
+    "Gleam was not configured initially; installed gleam 1.14.0 through mise after gleam_stdlib required >= 1.14.0.",
+    "Mix dependencies were not fetched in the worktree and required mix deps.get before Elixir tests could run."
+  ],
+  "checks_run": [
+    {
+      "command": "cd backends/elixir-ingary/structured_core && mise exec -- gleam format --check src test && mise exec -- gleam test",
+      "status": "passed"
+    },
+    {
+      "command": "cd backends/elixir-ingary && mise exec -- mix format --check-formatted && mise exec -- mix test",
+      "status": "passed"
+    }
+  ],
+  "mutation_check": {
+    "change": "Temporarily weakened confidence semantic validation from value >= configured gte to value >= 0.0.",
+    "command": "cd backends/elixir-ingary && mise exec -- mix test --seed 1 test/elixir_ingary_test.exs:293",
+    "observed_failure": "Generated low-confidence property failed because a confidence 0.0 response completed instead of exhausting the semantic rule budget.",
+    "restored": true
+  },
+  "self_review": {
+    "correctness": [
+      "Receipts include final status, selected schema, parsed output on success, attempt count, ordered guard events, rule ids, guard types, actions, exhausted rule id, model id/version, session id, and failure domain.",
+      "Core visible scenarios and generated confidence properties are translated into native ExUnit tests."
+    ],
+    "architecture": [
+      "The Elixir runtime shell remains responsible for HTTP, config, supervision, and receipts.",
+      "Gleam's current value is modest but real for status/budget ADTs; a fuller evaluator would move schema/config normalization into Gleam once interop shape settles."
+    ],
+    "security": [
+      "No credentials, private endpoints, prompts, or provider tokens were added.",
+      "Provider raw output is only fixture-controlled canned JSON in tests; receipts store parsed structured output but do not log raw user prompts or credentials."
+    ],
+    "test_quality": [
+      "Tests assert public HTTP behavior and receipt shape rather than private functions.",
+      "Mutation check proved the semantic confidence property can fail for the intended behavior."
+    ]
+  }
+}

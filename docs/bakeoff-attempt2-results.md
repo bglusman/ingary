@@ -75,3 +75,15 @@ For a next attempt, the strongest improvement would be to include one small
 visible request/receipt JSON example per backend-facing behavior, while keeping
 the larger Python evaluator hidden. That should preserve held-out evaluation
 without leaving room for incompatible but superficially plausible config shapes.
+
+## Archived Result Artifacts
+
+The raw bakeoff result JSON files are archived under `docs/bakeoff-results/`.
+They cover the 12 attempt-2 feature/backend runs plus the four Starlark policy
+engine spikes. These are historical evaluation artifacts, not active
+implementation code.
+
+The active BEAM prototype has since absorbed the important failing behavior from
+the external evaluator: structured-output guard budgets, automatic session
+history ingestion, regex history thresholds, alert queue outcomes, and
+fail-closed alert backpressure now have router-facing ExUnit coverage.

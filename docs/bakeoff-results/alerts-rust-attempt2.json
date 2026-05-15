@@ -1,0 +1,66 @@
+{
+  "prototype": "rust-ingary",
+  "attempt": "attempt2",
+  "round": 1,
+  "scope": "backends/rust-ingary only",
+  "shared_base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks": [
+    {
+      "command": "mise exec -- cargo test",
+      "working_directory": "backends/rust-ingary",
+      "status": "passed",
+      "notes": "25 native Rust tests passed, including the alert sink and existing governance tests."
+    },
+    {
+      "command": "mise exec -- cargo fmt --check",
+      "working_directory": "backends/rust-ingary",
+      "status": "passed",
+      "notes": "Passed after applying cargo fmt."
+    }
+  ],
+  "coverage": {
+    "core_native_scenarios": [
+      "fast sink records one accepted delivery",
+      "duplicate idempotency key is suppressed and not enqueued twice",
+      "full queue with dead_letter records a dead-letter instead of silently losing the alert",
+      "full queue with fail_closed marks the alert report blocked so the request path can fail closed",
+      "receipt annotations include queue depth, capacity, and delivery/dead-letter status"
+    ],
+    "advanced_differentiators": [
+      "slow sink enqueue returns within a bounded latency budget while delivery continues asynchronously",
+      "fail-then-recover sink records a retry and eventually delivers"
+    ],
+    "admin_surfaces": [
+      "GET /admin/alerts exposes queue depth, capacity, configured behavior, deliveries, dead letters, and drops",
+      "receipts expose alert_sink details under decision, final, and final.events"
+    ],
+    "test_style": "Native Rust unit and async tests. Property-style tests already exist for stream governance and policy-cache eviction; alert backpressure uses table-like focused scenarios because queue fullness and retry timing are stateful."
+  },
+  "limitations": [
+    "The alert sink is in-memory prototype state, not durable storage.",
+    "Delivery workers are spawned Tokio tasks; graceful shutdown/drain semantics are represented by inspectable pending/delivered state but no shutdown drain hook was added in this round.",
+    "Retry behavior is deliberately synthetic: fail_then_recover fails the first attempt and succeeds on retry, sufficient for contract visibility but not a general retry scheduler.",
+    "Fail-closed request behavior is wired through chat and simulate paths, but native tests cover the report-level block decision rather than a full HTTP request."
+  ],
+  "mutation_check_self_review": {
+    "tests_capable_of_failing": [
+      "Changing duplicate suppression to insert a second delivery would fail duplicate_alert_idempotency_key_is_not_enqueued_twice.",
+      "Allowing a dead-lettered idempotency key to enqueue after capacity frees would fail dead_lettered_idempotency_key_is_not_enqueued_after_capacity_frees.",
+      "Changing dead_letter full-queue behavior to drop would fail full_queue_dead_letters_without_silent_loss.",
+      "Removing queue capacity/depth evidence from receipts would fail receipt_includes_alert_queue_evidence_and_terminal_status.",
+      "Making slow delivery synchronous would fail slow_sink_enqueue_stays_under_request_latency_budget."
+    ],
+    "architecture_review": [
+      "The sink is intentionally small and isolated from provider execution. Request-governance policy events remain the source of alerts, and the sink annotates receipts without changing the policy evaluator's matching responsibilities.",
+      "The queue is represented by guarded pending accounting plus spawned delivery tasks rather than a Tokio mpsc queue. That keeps request enqueue bounded and easy to inspect, but it is a prototype shortcut that would need replacement for production durability and coordinated shutdown."
+    ],
+    "security_review": [
+      "No provider credentials, raw prompts, private endpoints, or deployment identifiers were added.",
+      "Alert records store rule id, severity, status, and idempotency key only; no raw user content is added to the alert admin surface."
+    ],
+    "test_quality_review": [
+      "Tests assert externally meaningful behavior: delivery status, queue evidence, duplicate suppression, request block decision, and retry outcomes.",
+      "Tests avoid relying on private map ordering. Timing assertions are limited to the enqueue boundary and use a generous budget."
+    ]
+  }
+}

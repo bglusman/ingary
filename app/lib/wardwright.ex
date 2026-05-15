@@ -31,6 +31,7 @@ defmodule Wardwright do
       "stream_rules" => [%{"id" => "mock_noop", "pattern" => "", "action" => "pass"}],
       "prompt_transforms" => %{},
       "structured_output" => nil,
+      "alert_delivery" => %{"capacity" => 16, "on_full" => "dead_letter"},
       "policy_cache" => %{"max_entries" => 64, "recent_limit" => 20},
       "governance" => [
         %{"id" => "prompt_transforms", "kind" => "request_transform", "action" => "transform"}
@@ -45,6 +46,7 @@ defmodule Wardwright do
   def reset_config do
     :persistent_term.put({__MODULE__, :config}, default_config())
     Wardwright.PolicyCache.configure(default_config()["policy_cache"])
+    Wardwright.Policy.AlertDelivery.configure(default_config()["alert_delivery"])
   end
 
   def put_config(config) when is_map(config) do
@@ -53,6 +55,7 @@ defmodule Wardwright do
     with :ok <- validate_config(config) do
       :persistent_term.put({__MODULE__, :config}, config)
       Wardwright.PolicyCache.configure(config["policy_cache"])
+      Wardwright.Policy.AlertDelivery.configure(config["alert_delivery"])
       {:ok, config}
     end
   end
@@ -245,6 +248,11 @@ defmodule Wardwright do
             |> complete_with_openai_compatible(request)
             |> provider_outcome_from_result(started)
 
+          "canned_sequence" ->
+            target
+            |> complete_with_canned_sequence(request)
+            |> provider_outcome_from_result(started)
+
           kind ->
             provider_outcome(
               nil,
@@ -255,6 +263,16 @@ defmodule Wardwright do
               false
             )
         end
+    end
+  end
+
+  defp complete_with_canned_sequence(target, request) do
+    outputs = Map.get(target, "canned_outputs", [])
+    attempt_index = request |> Map.get("wardwright_attempt_index", 0) |> integer_value() || 0
+
+    case Enum.at(outputs, attempt_index) || List.last(outputs) do
+      output when is_binary(output) -> {:ok, output}
+      _ -> {:error, "canned_sequence target has no outputs"}
     end
   end
 
@@ -286,18 +304,38 @@ defmodule Wardwright do
             "credential_env" =>
               target |> Map.get("credential_env", "") |> to_string() |> String.trim(),
             "credential_fnox_key" =>
-              target |> Map.get("credential_fnox_key", "") |> to_string() |> String.trim()
+              target |> Map.get("credential_fnox_key", "") |> to_string() |> String.trim(),
+            "canned_outputs" => normalize_canned_outputs(Map.get(target, "canned_outputs", []))
           }
-          |> Enum.reject(fn {_key, value} -> value == "" end)
+          |> Enum.reject(fn {_key, value} -> value == "" or value == [] end)
           |> Map.new()
         end),
       "stream_rules" => Map.get(config, "stream_rules", []),
       "prompt_transforms" => Map.get(config, "prompt_transforms", %{}),
       "structured_output" => Map.get(config, "structured_output"),
+      "alert_delivery" => normalize_alert_delivery(Map.get(config, "alert_delivery", %{})),
       "policy_cache" => normalize_policy_cache(Map.get(config, "policy_cache", %{})),
       "governance" => Map.get(config, "governance", [])
     }
   end
+
+  defp normalize_canned_outputs(outputs) when is_list(outputs),
+    do: Enum.map(outputs, &to_string/1)
+
+  defp normalize_canned_outputs(_), do: []
+
+  defp normalize_alert_delivery(config) when is_map(config) do
+    %{
+      "capacity" => non_negative_integer(Map.get(config, "capacity"), 16),
+      "on_full" =>
+        case Map.get(config, "on_full") do
+          value when value in ["drop", "dead_letter", "fail_closed"] -> value
+          _ -> "dead_letter"
+        end
+    }
+  end
+
+  defp normalize_alert_delivery(_), do: %{"capacity" => 16, "on_full" => "dead_letter"}
 
   defp normalize_policy_cache(config) when is_map(config) do
     %{
@@ -567,6 +605,13 @@ defmodule Wardwright do
   defp positive_integer(value, default) do
     case integer_value(value) do
       value when is_integer(value) and value > 0 -> value
+      _ -> default
+    end
+  end
+
+  defp non_negative_integer(value, default) do
+    case integer_value(value) do
+      value when is_integer(value) and value >= 0 -> value
       _ -> default
     end
   end

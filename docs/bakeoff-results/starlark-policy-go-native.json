@@ -1,0 +1,93 @@
+{
+  "schema": "ingary.bakeoff.starlark_policy_result.v1",
+  "variant": "go_native_starlark",
+  "worktree": "/Users/admin/projects/ingary.starlark-go-native",
+  "branch": "spike/starlark-go-native",
+  "dependency_choices": [
+    {
+      "module": "go.starlark.net",
+      "version": "v0.0.0-20260326113308-fadfc96def35",
+      "reason": "Native Go Starlark runtime with parser/compiler/evaluator support, thread cancellation, and execution step limits."
+    }
+  ],
+  "callable_shape": {
+    "go_api": "EvaluateStarlarkPolicy(StarlarkPolicyEvaluationRequest) StarlarkPolicyEvaluationResult",
+    "http_endpoint": "POST /__test/starlark-policy/evaluate",
+    "request": {
+      "name": "optional stable policy/rule id",
+      "source": "Starlark source defining evaluate(ctx)",
+      "input": "Policy ABI object with request, history, and structured_output"
+    },
+    "response": {
+      "action": "allow | retry | block | switch_model",
+      "model": "optional for switch_model",
+      "reason": "policy or fail-closed reason",
+      "trace": "single stable trace row with rule, result, reason, and coarse span"
+    }
+  },
+  "implemented_scenarios": [
+    "allow default",
+    "current-session history literal count block",
+    "current-session history regex count block through regex_count_session(ctx, pattern)",
+    "structured guard retry",
+    "dynamic model switch",
+    "fail closed on policy error",
+    "fail closed on runaway loop through execution step budget and timeout cancellation",
+    "fail closed on load/import attempt",
+    "fail closed on filesystem and network attempts because no open/socket/network APIs are predeclared"
+  ],
+  "safety_observations": [
+    "The evaluator provides no module loader beyond a loader that always returns an error, so load/import attempts fail closed.",
+    "The Starlark thread has a max execution step budget and a wall-clock cancellation timer. The runaway-loop test proves an enabled while loop is interrupted and normalized to block.",
+    "Host filesystem and network APIs are not exposed. Attempts to call open or socket fail as undefined names and are normalized to block.",
+    "Errors are collapsed into one-line reasons with policy filename and Starlark error text; no host path, provider credential, prompt, or raw user-content logging is added."
+  ],
+  "latency_observations": [
+    "No benchmark was added in this timebox.",
+    "The native test suite including Starlark scenarios completed in under one second on the local mise-managed Go toolchain.",
+    "Each evaluation currently parses and compiles policy source per call; production use would need compilation/cache strategy and benchmarked budgets."
+  ],
+  "limitations": [
+    "Trace spans are coarse stable placeholders such as policy.star:evaluate, not AST source ranges.",
+    "The prototype executes source per request and does not implement policy signing, persistence, cache invalidation, or multi-tenant isolation boundaries beyond the Starlark sandbox.",
+    "The regex helper is intentionally narrow and only counts current-session history text against ctx.request.metadata.session.",
+    "The endpoint is under /__test and is not wired into chat routing or receipt production flow."
+  ],
+  "checks": [
+    {
+      "command": "mise exec -- go test ./...",
+      "cwd": "backends/go-ingary",
+      "result": "pass",
+      "output_summary": "ok go-ingary 0.881s"
+    },
+    {
+      "command": "jq empty docs/bakeoff-results/starlark-policy-go-native.json",
+      "cwd": ".",
+      "result": "pass",
+      "output_summary": "valid JSON"
+    }
+  ],
+  "adversarial_review": {
+    "architecture": [
+      "Acceptable for spike: the evaluator is isolated from existing governance policy code and exposed only through a deterministic test endpoint.",
+      "Production blocker: parsing source on every call and accepting arbitrary source directly over HTTP is not a deployable architecture without authenticated policy management, compiled policy caching, versioning, and route integration."
+    ],
+    "code_quality": [
+      "The conversion layer is deliberately small and explicit for JSON-compatible ABI types.",
+      "The only custom predeclared helper is regex_count_session; it should not grow into an unstructured standard library without a reviewed ABI."
+    ],
+    "security": [
+      "No imports, filesystem, network, subprocess, environment, or provider access are exposed to policies.",
+      "Fail-closed normalization covers runtime errors, syntax/load errors, invalid action results, missing switch_model model, and runaway execution."
+    ],
+    "test_quality": [
+      "Tests assert externally visible policy decisions and reasons, not internal Starlark implementation details.",
+      "Negative tests are capable of failing: they require block actions and specific fail-closed evidence for errors, sandbox attempts, invalid results, and runaway loops."
+    ],
+    "blockers_found": []
+  },
+  "viability_verdict": {
+    "status": "viable_for_go_backend_spike",
+    "summary": "Native Go Starlark is viable for deterministic policy execution and fail-closed sandbox behavior in the Go prototype. The main remaining work is production policy lifecycle, compiled-policy caching, trace/source-span enrichment, and integration into the real routing/receipt path."
+  }
+}

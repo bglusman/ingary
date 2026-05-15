@@ -1,0 +1,57 @@
+{
+  "attempt": "attempt2",
+  "round": 1,
+  "backend": "go-ingary",
+  "branch": "bakeoff2/history-go",
+  "base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "scope": "Go prototype only",
+  "checks": [
+    {
+      "command": "mise exec -- gofmt -w main.go recent_history_test.go",
+      "working_directory": "backends/go-ingary",
+      "status": "passed"
+    },
+    {
+      "command": "mise exec -- go test ./...",
+      "working_directory": "backends/go-ingary",
+      "status": "passed"
+    }
+  ],
+  "coverage": [
+    "Manual current-session/current-run events count toward recent_history rules.",
+    "Manual events from another session or another run do not count.",
+    "Irrelevant in-scope events are part of the working set but do not count as matches.",
+    "Policy cache eviction is still property-tested for deterministic created_at_unix_ms then sequence ordering.",
+    "Threshold rules do not trigger before enough matching events and trigger once threshold is reached.",
+    "Normal /v1/chat/completions requests feed chat_request history before policy evaluation, so a threshold-crossing request can produce a receipt-visible decision.",
+    "Literal and regex match conditions are both covered.",
+    "Concurrent manual writes to one session/run are serialized by the cache lock and all become visible after writers finish.",
+    "Receipts expose scope, count, threshold, matched rule/action, recent_limit, working_set_size, match type, match value, and matched event sequences in policy_actions."
+  ],
+  "limitations": [
+    "The prototype stores recent history only in memory and resets it when __test/config is replaced.",
+    "recent_history is intentionally scoped only by available session_id and run_id; requests without either identifier do not match recent history.",
+    "Automatic chat_request history stores request text in memory for matching, but the external recent-history API redacts that text and marks text_redacted.",
+    "Regex patterns use Go regexp syntax and invalid regexes are rejected by __test/config validation.",
+    "The test/admin simulation endpoint reports policy decisions but does not create receipts or mutate chat history."
+  ],
+  "mutation_check": [
+    "Changing the scope filter to session-only would fail the run isolation assertions.",
+    "Counting all in-scope events without literal or regex matching would fail irrelevant-event and regex/literal tests.",
+    "Moving chat history insertion after evaluation would fail the second chat receipt threshold test.",
+    "Removing cache locking or dropping writes would fail the concurrent visibility test."
+  ],
+  "self_review": {
+    "architecture": "The implementation extends the existing MemoryPolicyCache and governance rule path instead of adding a parallel history subsystem. This keeps eviction, locking, config reset, and receipt plumbing in one place.",
+    "code_quality": "The recent-history rule evaluation is isolated in helper functions. The rule currently returns no action on invalid regex at runtime, but config validation rejects invalid regexes for normal use.",
+    "test_quality": "Tests assert behavior through policy results, HTTP handlers, and persisted receipts rather than private fields. Existing property coverage continues to exercise deterministic eviction."
+  },
+  "excluded_by_instruction": [
+    "uv",
+    "pytest",
+    "Python bakeoff tests",
+    "held-out evaluator",
+    "Rust backend",
+    "Elixir backend"
+  ]
+}

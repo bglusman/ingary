@@ -1,0 +1,102 @@
+{
+  "variant": "alerts-gleam",
+  "backend_scope": "backends/elixir-ingary plus backends/elixir-ingary/alert_core",
+  "base_sha": "97d6f07974c190d0d1c2f431590814ab70392a6d",
+  "checks": [
+    {
+      "command": "cd backends/elixir-ingary && mise x -- mix format --check-formatted",
+      "status": "passed"
+    },
+    {
+      "command": "cd backends/elixir-ingary && mise x -- mix test",
+      "status": "passed",
+      "coverage": "1 StreamData property and 20 ExUnit tests"
+    },
+    {
+      "command": "cd backends/elixir-ingary/alert_core && mise x -- gleam format --check src test && mise x -- gleam test",
+      "status": "passed",
+      "coverage": "5 Gleam tests"
+    }
+  ],
+  "implemented_contract": {
+    "config": [
+      "alert_sink.capacity",
+      "alert_sink.on_full: dead_letter/drop/fail_closed",
+      "alert_sink.sink_behavior: fast/slow/fail_then_recover",
+      "alert_sink.retry_limit",
+      "alert_sink.slow_ms",
+      "alert_sink.idempotency_key: rule/rule_session/event_id"
+    ],
+    "receipt_fields": [
+      "final.alert_delivery_status",
+      "final.alert_deliveries[].status",
+      "final.alert_deliveries[].queue_depth",
+      "final.alert_deliveries[].queue_capacity",
+      "failure_domain",
+      "caller.session_id",
+      "synthetic_model",
+      "synthetic_version"
+    ],
+    "admin_surfaces": [
+      "GET /admin/alerts exposes queue depth, capacity, counters, retries, and delivery terminal states",
+      "POST /__test/runtime/:action exposes ping/crash/stall for runtime isolation tests"
+    ]
+  },
+  "gleam_elixir_boundary_shape": {
+    "elixir_owns": [
+      "Plug/Cowboy routing",
+      "application supervision",
+      "dynamic model runtime registry/supervisor and fixed session registry with per-model session supervisors",
+      "AlertSink GenServer queue ownership",
+      "test HTTP surfaces and receipt persistence"
+    ],
+    "gleam_owns": [
+      "typed alert config enums",
+      "pure enqueue/backpressure decisions",
+      "duplicate idempotency classification",
+      "retry and terminal status classification"
+    ],
+    "integration_note": "Gleam is included as a nested BEAM-target project with tests. The live Elixir GenServer mirrors those decisions directly rather than loading compiled Gleam modules into Mix, so the boundary is useful for semantic evaluation but not yet a single compiled runtime core."
+  },
+  "core_scenarios": {
+    "fast_sink_records_one_accepted_delivery": "covered by ExUnit and admin /admin/alerts delivered_count assertion",
+    "duplicate_idempotency_key_not_enqueued_twice": "covered by ExUnit and Gleam duplicate decision test",
+    "full_queue_dead_letters_without_silent_loss": "covered by ExUnit with queue capacity evidence and admin dead_letter_count",
+    "full_queue_fail_closed_blocks_request": "covered by ExUnit with HTTP 503 and persisted blocked receipt",
+    "receipt_includes_queue_depth_or_capacity": "covered by ExUnit assertions on final.alert_deliveries",
+    "slow_sink_request_path_bounded": "covered by ExUnit latency assertion below 100 ms with 250 ms sink delay",
+    "failing_then_recovering_retries": "covered by ExUnit retry_count and delivered attempt 2 assertion plus Gleam retry classification"
+  },
+  "isolation_behavior": {
+    "model_runtime": "ElixirIngary.RuntimeSupervisor starts one ElixirIngary.ModelRuntime subtree per synthetic model/version.",
+    "session_runtime": "Each model runtime starts a dynamic supervisor for session workers. Session names are registered in one fixed app-level registry keyed by model/version/session to avoid config-derived atom growth.",
+    "alert_sink_failure_domain": "The prototype uses one app-level AlertSink, so backpressure is globally visible across models. Receipts identify the model/session failure domain for each alert, but the queue is not yet per-model or per-session.",
+    "tested": "A deliberate session crash under unit-model/unit-version does not prevent a sibling session or an independent other-model/other-version session runtime from answering."
+  },
+  "sidecar_backpressure_risks": [
+    "Single AlertSink worker serializes enqueue decisions across all models and sessions.",
+    "Slow sink delivery is modeled with delayed messages so requests stay bounded, but a very high enqueue rate would still concentrate state in one GenServer.",
+    "Global capacity means one saturated model/session can dead-letter or block unrelated model/session alerts.",
+    "Failing sink retries are bounded by retry_limit; restart storms are not modeled because delivery failures do not crash the sink.",
+    "No external sidecar protocol is used, so protocol failures and cold-start latency are not exercised in this variant."
+  ],
+  "limitations": [
+    "No graceful shutdown drain hook is wired into application shutdown; drain is exposed for tests through AlertSink.drain/1.",
+    "Gleam semantic core is tested separately and not invoked by the live Elixir request path.",
+    "Queue state is in-memory only and not durable across node restarts.",
+    "The fail_then_recover behavior is deterministic and only fails the first attempt."
+  ],
+  "setup_friction": [
+    "mise.toml initially was untrusted locally; resolved with mise trust.",
+    "Gleam was not present in the original tool config; installed and added gleam@1.16.0 through mise.",
+    "Elixir dependencies had not been fetched in this worktree; resolved with mix deps.get."
+  ],
+  "mutation_check_self_review": {
+    "bug_found_during_tests": "Initial AlertSink accepted events but did not append them to the queue, causing capacity/retry/drain tests to fail. Fixed by appending accepted keys before scheduling delivery. Post-commit review found stale delivery timers could mutate a freshly configured queue generation; fixed with generation tokens on scheduled delivery messages.",
+    "adversarial_notes": [
+      "Tests assert externally visible receipt/admin behavior, not private GenServer state except through public snapshot/drain helpers.",
+      "The latency test would fail if slow sink delivery were performed inside the request call path.",
+      "The full-queue tests use different session IDs so duplicate idempotency cannot mask capacity behavior."
+    ]
+  }
+}

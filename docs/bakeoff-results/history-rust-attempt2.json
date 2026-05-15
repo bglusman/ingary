@@ -1,0 +1,63 @@
+{
+  "bakeoff": "recent-history-governor",
+  "attempt": 2,
+  "round": 1,
+  "backend": "rust-ingary",
+  "scope": "backends/rust-ingary",
+  "base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks": [
+    {
+      "command": "mise exec -- cargo fmt --check",
+      "working_directory": "backends/rust-ingary",
+      "status": "passed"
+    },
+    {
+      "command": "mise exec -- cargo test",
+      "working_directory": "backends/rust-ingary",
+      "status": "passed",
+      "result": "22 passed; 0 failed"
+    }
+  ],
+  "coverage": {
+    "native_tests": [
+      "manual events from another session do not affect current-session decisions",
+      "irrelevant in-session events do not count toward a text-match threshold",
+      "deterministic eviction keeps the youngest created_at_unix_ms/sequence events",
+      "recent_limit selects events by newest created_at_unix_ms and then newest sequence, not insertion order",
+      "threshold decisions do not trigger before enough matches and do trigger once enough matches exist",
+      "normal /v1/chat/completions requests append session-scoped history and can trigger a later request",
+      "concurrent manual writes through the serialized cache all become visible",
+      "literal and regex matchers both work",
+      "receipts expose scope, count, threshold, matched rule/action, recent_limit, and working-set size in policy_actions"
+    ],
+    "api_surface": [
+      "POST /v1/policy-cache/events accepts deterministic events with session/run scope and text",
+      "GET /v1/policy-cache/recent reads the deterministic in-memory cache",
+      "POST /v1/chat/completions feeds chat_request history after evaluating the current request"
+    ]
+  },
+  "limitations": [
+    "The recent-history governor is prototype in-memory state only; restart loses history.",
+    "Rules are configured through the existing dynamic governance JSON rather than a typed policy schema.",
+    "Regexes are compiled during each evaluation after config validation; acceptable for the bakeoff prototype but not ideal for production hot paths.",
+    "Current-session/run isolation depends on caller session_id and/or run_id; requests with neither identifier do not match current-scope history rules."
+  ],
+  "mutation_check": {
+    "status": "manual",
+    "notes": [
+      "Changing the session_id on matching manual events causes the out-of-session test to fail.",
+      "Removing the post-evaluation chat history append causes the chat_completions_feed_history_for_later_decisions test to fail.",
+      "Changing eviction ordering away from created_at_unix_ms then sequence causes the property-style eviction test to fail.",
+      "Changing matcher handling from regex to literal-only causes the regex matcher test to fail."
+    ]
+  },
+  "self_review": {
+    "status": "post_commit_review_fix",
+    "notes": [
+      "Core behavior is covered by native Rust tests without invoking shared Python, uv, pytest, or held-out evaluators.",
+      "No Go or Elixir backend files were touched.",
+      "Receipts expose decision trace metadata but do not copy recent-history event text into policy_actions.",
+      "Adversarial review found and fixed recent_limit ordering so deterministic created_at_unix_ms controls the recent working set."
+    ]
+  }
+}
