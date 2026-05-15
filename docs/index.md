@@ -64,11 +64,14 @@ and runtime visibility for constrained agentic workflows.
 
 ## Current Focus
 
-The active prototype compares Go, Rust, and Elixir backends against the same
-HTTP contract, storage contract, BDD scenarios, and property-style probes.
-Fork-based foundation spikes have been removed from the codebase; the current
-direction is to integrate with systems such as LiteLLM and TensorZero where
-useful, while keeping Ingary's synthetic-model semantics independent.
+The active prototype started by comparing Go, Rust, and Elixir backends against
+the same HTTP contract, storage contract, BDD scenarios, and property-style
+probes. Recent bakeoffs make the tentative primary direction Elixir plus Gleam:
+Elixir for runtime plumbing and supervision, Gleam for correctness-heavy pure
+business logic, and LiveView for the operator UI. Fork-based foundation spikes
+have been removed from the codebase; the current direction is to integrate with
+systems such as LiteLLM and TensorZero where useful, while keeping Ingary's
+synthetic-model semantics independent.
 
 Near-term work:
 
@@ -76,7 +79,9 @@ Near-term work:
 2. Add alert sinks and policy receipt events.
 3. Add durable SQLite storage for model definitions and receipts.
 4. Add Starlark as the first portable advanced policy language.
-5. Keep WASM and external policy engines as later pluggable execution targets.
+5. Move the policy projection and simulation workbench toward LiveView.
+6. Keep WASM, Dune, and external policy engines as later pluggable execution
+   targets.
 
 ## Name
 
