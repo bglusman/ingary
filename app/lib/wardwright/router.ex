@@ -82,7 +82,7 @@ defmodule Wardwright.Router do
       status = response_status(receipt)
 
       if Map.get(request, "stream") == true and status == 200 do
-        stream_chat(conn, request, decision)
+        stream_chat(conn, request, decision, Map.get(provider, :stream_chunks))
       else
         json(
           conn,
@@ -509,14 +509,21 @@ defmodule Wardwright.Router do
 
   defp provider_outcome(request, decision, false) when is_map(request) do
     if Map.get(request, "stream") == true do
+      stream_policy =
+        request
+        |> stream_chunks(decision)
+        |> Wardwright.Policy.Stream.evaluate(Wardwright.current_config()["stream_rules"] || [])
+
       %{
         content: nil,
-        status: "completed",
+        status: stream_policy.status,
         latency_ms: 0,
         error: nil,
         called_provider: false,
         mock: true,
-        structured_output: nil
+        structured_output: nil,
+        stream_chunks: stream_policy.chunks,
+        stream_policy: stream_policy
       }
     else
       structured_config = Wardwright.current_config()["structured_output"]
@@ -769,8 +776,30 @@ defmodule Wardwright.Router do
       final
       |> Map.put("status", provider.status)
       |> put_if_present("structured_output", Map.get(provider, :structured_output))
+      |> put_if_present("stream_policy", stream_policy_receipt(Map.get(provider, :stream_policy)))
+      |> put_stream_policy_summary(Map.get(provider, :stream_policy))
       |> put_if_present("provider_error", provider.error)
     end)
+  end
+
+  defp put_stream_policy_summary(final, nil), do: final
+
+  defp put_stream_policy_summary(final, stream_policy) do
+    final
+    |> Map.put("stream_trigger_count", stream_policy.trigger_count)
+    |> put_if_present("stream_policy_action", stream_policy.action)
+  end
+
+  defp stream_policy_receipt(nil), do: nil
+
+  defp stream_policy_receipt(stream_policy) do
+    %{
+      "status" => stream_policy.status,
+      "trigger_count" => stream_policy.trigger_count,
+      "action" => stream_policy.action,
+      "events" => stream_policy.events,
+      "released_to_consumer" => stream_policy.released_to_consumer
+    }
   end
 
   defp put_if_present(map, _key, nil), do: map
@@ -808,6 +837,7 @@ defmodule Wardwright.Router do
         "selected_model" => decision.selected_model,
         "status" => get_in(receipt, ["final", "status"]),
         "structured_output" => get_in(receipt, ["final", "structured_output"]),
+        "stream_policy" => get_in(receipt, ["final", "stream_policy"]),
         "alert_delivery" => get_in(receipt, ["final", "alert_delivery"])
       }
     }
@@ -820,22 +850,20 @@ defmodule Wardwright.Router do
       "provider_error" -> 502
       "exhausted_rule_budget" -> 422
       "exhausted_guard_budget" -> 422
+      "stream_policy_blocked" -> 422
+      "stream_policy_retry_required" -> 409
       _ -> 200
     end
   end
 
-  defp stream_chat(conn, request, decision) do
+  defp stream_chat(conn, request, decision, chunks) do
     conn =
       conn
       |> put_resp_header("content-type", "text/event-stream")
       |> put_resp_header("cache-control", "no-cache")
       |> send_chunked(200)
 
-    chunks = [
-      "Mock Wardwright stream ",
-      "routed to #{decision.selected_model} ",
-      "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
-    ]
+    chunks = chunks || stream_chunks(request, decision)
 
     conn =
       Enum.reduce(Enum.with_index(chunks), conn, fn {text, index}, acc ->
@@ -853,6 +881,27 @@ defmodule Wardwright.Router do
 
     {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
     conn
+  end
+
+  defp stream_chunks(request, decision) do
+    mock_chunks =
+      if allow_mock_stream_chunks?(), do: get_in(request, ["metadata", "mock_stream_chunks"])
+
+    case mock_chunks do
+      chunks when is_list(chunks) and chunks != [] ->
+        Enum.map(chunks, &metadata_string/1)
+
+      _ ->
+        [
+          "Mock Wardwright stream ",
+          "routed to #{decision.selected_model} ",
+          "for #{Map.get(request, "model")} with #{decision.estimated_prompt_tokens} estimated prompt tokens."
+        ]
+    end
+  end
+
+  defp allow_mock_stream_chunks? do
+    Application.get_env(:wardwright, :allow_mock_stream_chunks, false)
   end
 
   defp json(conn, status, payload) do

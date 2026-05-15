@@ -158,6 +158,13 @@ TTSR maps most closely to `buffered_horizon` plus actions such as
 held back, whether violating bytes were released, and which retry or rewrite
 action fired.
 
+The current BEAM prototype implements the first narrow stream-policy foothold:
+mock stream chunks can be checked against literal or regex rules before release,
+rewritten or dropped, or blocked before any SSE bytes are sent. Receipts record
+the stream policy action, trigger count, trigger events, and whether content was
+released to the consumer. Full retry orchestration, real provider stream
+holdback, and chunk-boundary spanning are still future work.
+
 ## State Scopes
 
 Some policies need history, but not all history belongs in every policy call.
