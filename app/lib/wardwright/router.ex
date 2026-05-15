@@ -46,7 +46,9 @@ defmodule Wardwright.Router do
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
+      Wardwright.Policy.History.record_request(caller, request)
       {request, policy} = apply_request_policies(request, caller)
+      {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request)
 
       record_runtime_event(model, caller, "route.selected", %{
@@ -55,19 +57,8 @@ defmodule Wardwright.Router do
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens
       })
 
-      provider =
-        if Map.get(request, "stream") == true do
-          %{
-            content: nil,
-            status: "completed",
-            latency_ms: 0,
-            error: nil,
-            called_provider: false,
-            mock: true
-          }
-        else
-          Wardwright.complete_selected_model(decision.selected_model, request)
-        end
+      provider = provider_outcome(request, decision, fail_closed?)
+      Wardwright.Policy.History.record_response(caller, provider.content)
 
       receipt =
         provider.status
@@ -88,10 +79,16 @@ defmodule Wardwright.Router do
         |> put_resp_header("x-wardwright-receipt-id", receipt["receipt_id"])
         |> put_resp_header("x-wardwright-selected-model", decision.selected_model)
 
-      if Map.get(request, "stream") == true do
+      status = response_status(receipt)
+
+      if Map.get(request, "stream") == true and status == 200 do
         stream_chat(conn, request, decision)
       else
-        json(conn, 200, chat_response(request, receipt, decision, provider.content))
+        json(
+          conn,
+          status,
+          chat_response(request, receipt, decision, provider.content)
+        )
       end
     else
       {:error, message} -> error(conn, 400, message, "invalid_request", "bad_request")
@@ -106,7 +103,9 @@ defmodule Wardwright.Router do
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
+      Wardwright.Policy.History.record_request(caller, request)
       {request, policy} = apply_request_policies(request, caller)
+      {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request)
 
       record_runtime_event(model, caller, "simulation.route_selected", %{
@@ -115,7 +114,8 @@ defmodule Wardwright.Router do
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens
       })
 
-      receipt = build_receipt("simulated", model, caller, request, decision, false, policy)
+      status = if fail_closed?, do: "policy_failed_closed", else: "simulated"
+      receipt = build_receipt(status, model, caller, request, decision, false, policy)
       Wardwright.ReceiptStore.insert(receipt)
 
       record_runtime_event(model, caller, "receipt.finalized", %{
@@ -268,8 +268,11 @@ defmodule Wardwright.Router do
           kind == "history_threshold" ->
             apply_history_threshold_rule(rule, caller, request, policy)
 
+          kind == "history_regex_threshold" ->
+            apply_history_regex_threshold_rule(rule, caller, request, policy)
+
           kind in ["request_guard", "request_transform", "receipt_annotation"] &&
-              policy_match?(text, Map.get(rule, "contains")) ->
+              policy_rule_matches?(text, rule) ->
             action = Map.get(rule, "action", "annotate")
             rule_id = Map.get(rule, "id", "policy")
 
@@ -289,12 +292,13 @@ defmodule Wardwright.Router do
             }
 
             case action do
-              "escalate" ->
+              action when action in ["escalate", "alert_async"] ->
                 event = %{
                   "type" => "policy.alert",
                   "rule_id" => rule_id,
                   "message" => message,
-                  "severity" => severity
+                  "severity" => severity,
+                  "idempotency_key" => Map.get(rule, "idempotency_key")
                 }
 
                 {request,
@@ -393,14 +397,15 @@ defmodule Wardwright.Router do
 
       policy = Map.update!(policy, "actions", &[action_record | &1])
 
-      if action == "escalate" do
+      if action in ["escalate", "alert_async"] do
         event = %{
           "type" => "policy.alert",
           "rule_id" => rule_id,
           "message" => message,
           "severity" => severity,
           "history_count" => count,
-          "threshold" => threshold
+          "threshold" => threshold,
+          "idempotency_key" => Map.get(rule, "idempotency_key")
         }
 
         {request,
@@ -413,11 +418,129 @@ defmodule Wardwright.Router do
     end
   end
 
+  defp apply_history_regex_threshold_rule(rule, caller, request, policy) do
+    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+
+    filter = %{
+      "kind" => blank_to_nil(Map.get(rule, "cache_kind")),
+      "key" => blank_to_nil(Map.get(rule, "cache_key")),
+      "scope" => cache_scope_from_caller(caller, Map.get(rule, "cache_scope", ""))
+    }
+
+    count =
+      filter
+      |> Wardwright.Policy.History.regex_count(
+        Map.get(rule, "pattern", ""),
+        Map.get(rule, "limit")
+      )
+
+    if count < threshold do
+      {request, policy}
+    else
+      action = Map.get(rule, "action", "annotate")
+      rule_id = Map.get(rule, "id", "policy")
+
+      message =
+        rule |> Map.get("message", "history regex threshold matched") |> blank_to_nil() ||
+          "history regex threshold matched"
+
+      severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
+
+      action_record = %{
+        "rule_id" => rule_id,
+        "kind" => "history_regex_threshold",
+        "action" => action,
+        "matched" => true,
+        "message" => message,
+        "severity" => severity,
+        "cache_kind" => Map.get(rule, "cache_kind", ""),
+        "cache_key" => Map.get(rule, "cache_key", ""),
+        "cache_scope" => Map.get(rule, "cache_scope", ""),
+        "pattern" => Map.get(rule, "pattern", ""),
+        "history_count" => count,
+        "threshold" => threshold
+      }
+
+      policy = Map.update!(policy, "actions", &[action_record | &1])
+
+      if action in ["escalate", "alert_async"] do
+        event = %{
+          "type" => "policy.alert",
+          "rule_id" => rule_id,
+          "message" => message,
+          "severity" => severity,
+          "history_count" => count,
+          "threshold" => threshold,
+          "idempotency_key" => Map.get(rule, "idempotency_key")
+        }
+
+        {request,
+         policy
+         |> Map.update!("events", &[event | &1])
+         |> Map.update!("alert_count", &(&1 + 1))}
+      else
+        {request, policy}
+      end
+    end
+  end
+
+  defp deliver_policy_alerts(%{"events" => events} = policy) do
+    alert_delivery = Wardwright.Policy.AlertDelivery.deliver(events)
+
+    policy =
+      policy
+      |> Map.put("alert_delivery", alert_delivery)
+      |> Map.put("failed_closed", Wardwright.Policy.AlertDelivery.fail_closed?(alert_delivery))
+
+    {policy, policy["failed_closed"]}
+  end
+
+  defp provider_outcome(_request, _decision, true) do
+    %{
+      content: nil,
+      status: "policy_failed_closed",
+      latency_ms: 0,
+      error: "policy alert delivery failed closed",
+      called_provider: false,
+      mock: true,
+      structured_output: nil
+    }
+  end
+
+  defp provider_outcome(request, decision, false) when is_map(request) do
+    if Map.get(request, "stream") == true do
+      %{
+        content: nil,
+        status: "completed",
+        latency_ms: 0,
+        error: nil,
+        called_provider: false,
+        mock: true,
+        structured_output: nil
+      }
+    else
+      structured_config = Wardwright.current_config()["structured_output"]
+
+      Wardwright.Policy.StructuredOutput.run(structured_config, fn attempt_index ->
+        request
+        |> Map.put("wardwright_attempt_index", attempt_index)
+        |> then(&Wardwright.complete_selected_model(decision.selected_model, &1))
+        |> Map.put_new(:structured_output, nil)
+      end)
+    end
+  end
+
   defp policy_match?(_text, value) when value in [nil, ""], do: false
 
   defp policy_match?(text, value) do
     String.contains?(text, value |> metadata_string() |> String.downcase())
   end
+
+  defp policy_rule_matches?(text, %{"regex" => regex}) when is_binary(regex) and regex != "" do
+    Wardwright.Policy.Regex.match?(text, regex)
+  end
+
+  defp policy_rule_matches?(text, rule), do: policy_match?(text, Map.get(rule, "contains"))
 
   defp request_text(messages) when is_list(messages) do
     Enum.map_join(messages, "\n", fn message ->
@@ -621,6 +744,7 @@ defmodule Wardwright.Router do
         "selected_model" => decision.selected_model,
         "stream_trigger_count" => 0,
         "alert_count" => policy["alert_count"],
+        "alert_delivery" => Map.get(policy, "alert_delivery", []),
         "events" => policy["events"],
         "receipt_recorded_at" =>
           DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
@@ -644,6 +768,7 @@ defmodule Wardwright.Router do
     |> update_in(["final"], fn final ->
       final
       |> Map.put("status", provider.status)
+      |> put_if_present("structured_output", Map.get(provider, :structured_output))
       |> put_if_present("provider_error", provider.error)
     end)
   end
@@ -680,9 +805,23 @@ defmodule Wardwright.Router do
       },
       "wardwright" => %{
         "receipt_id" => receipt["receipt_id"],
-        "selected_model" => decision.selected_model
+        "selected_model" => decision.selected_model,
+        "status" => get_in(receipt, ["final", "status"]),
+        "structured_output" => get_in(receipt, ["final", "structured_output"]),
+        "alert_delivery" => get_in(receipt, ["final", "alert_delivery"])
       }
     }
+  end
+
+  defp response_status(receipt) do
+    case get_in(receipt, ["final", "status"]) do
+      status when status in ["completed", "completed_after_guard"] -> 200
+      "policy_failed_closed" -> 429
+      "provider_error" -> 502
+      "exhausted_rule_budget" -> 422
+      "exhausted_guard_budget" -> 422
+      _ -> 200
+    end
   end
 
   defp stream_chat(conn, request, decision) do

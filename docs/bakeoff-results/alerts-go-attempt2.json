@@ -1,0 +1,50 @@
+{
+  "backend": "go-ingary",
+  "attempt": "attempt2",
+  "round": 1,
+  "branch": "bakeoff2/alerts-go",
+  "base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks": [
+    {
+      "command": "mise exec -- gofmt -w main.go alert_sink.go alert_sink_test.go",
+      "status": "passed"
+    },
+    {
+      "command": "mise exec -- go test ./...",
+      "status": "passed"
+    }
+  ],
+  "coverage": {
+    "core_native_scenarios": [
+      "fast sink accepts alert and records one delivered attempt",
+      "duplicate idempotency key returns duplicate status without a second physical enqueue",
+      "full queue with dead_letter records dead_lettered status and queue depth/capacity evidence",
+      "full queue with fail_closed stores a blocked receipt and returns a blocked request",
+      "receipt final state includes alert delivery status plus queue depth and capacity"
+    ],
+    "advanced_scenarios": [
+      "slow sink request path remains bounded by non-blocking enqueue",
+      "fail-then-recover sink retries and reaches delivered terminal status"
+    ],
+    "inspectability": [
+      "receipt final.alert_deliveries records enqueue-time outcome",
+      "admin /admin/policy-alerts exposes queue state, delivery attempts, dead letters, drops, blocks, and terminal records"
+    ]
+  },
+  "limitations": [
+    "The sink is an in-memory prototype and does not persist pending jobs across process restart.",
+    "Graceful shutdown/drain semantics are limited to worker close behavior during in-process config replacement, not a full HTTP server shutdown test.",
+    "Receipt records capture enqueue-time outcome; later async terminal status is inspectable through the admin alert surface rather than by mutating already stored receipts.",
+    "The prototype idempotency key is configured at sink level for bakeoff control; production policy rules would likely need per-rule or per-event keys."
+  ],
+  "mutation_check": {
+    "not_run": true,
+    "reason": "No mutation test tool is configured for the Go prototype, and the process constraints forbid running hidden/shared bakeoff evaluators."
+  },
+  "self_review": {
+    "security": "No secrets, credentials, private endpoints, prompts, or provider payloads are written to config, docs, logs, or receipts by the new alert path.",
+    "architecture": "The sink is isolated behind AlertSink and AlertSinkConfig, with non-blocking enqueue on the request path and an admin read model for async terminal state.",
+    "code_quality": "Tests exercise behavior through HTTP receipts and admin state, including queue saturation via a slow sink and queue-depth evidence.",
+    "test_quality": "Tests assert externally meaningful behavior: request status, receipt status/evidence, duplicate suppression, retry attempts, terminal delivery, and latency budget."
+  }
+}

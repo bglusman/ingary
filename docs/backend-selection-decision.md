@@ -10,9 +10,10 @@ to compare implementation cost, correctness, testability, and runtime fit
 against the same contracts. That comparison has now served its purpose. The live
 implementation should focus on **Elixir plus Gleam on the BEAM**.
 
-The project was called Wardwright during the bakeoff. Wardwright is the tentative
-product name going forward. Repository, domain, API namespace, and Elixir module
-renames are intentionally deferred to a separate compatibility migration.
+The project was called Ingary during the bakeoff. Wardwright is the tentative
+product name going forward. Repository, API namespace, and Elixir module names
+now use Wardwright; `docs/CNAME` intentionally remains on `ingary.org` until the
+domain migration is ready.
 
 ## Decision
 

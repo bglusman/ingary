@@ -507,6 +507,26 @@ Simulation should be a first-class policy authoring surface, not only a CI test.
 For each draft rule, Wardwright should generate examples and counterexamples that
 make the policy's promise visible.
 
+The current dependency choice keeps `StreamData` in the test profile, but it is
+worth an explicit production experiment. StreamData-style constrained generators
+could be useful for simulation when the operator wants bounded, reproducible
+scenario space: regex near-misses, chunk boundaries, cache-window edges,
+metadata combinations, and policy conflict cases. That is different from
+live-LLM scenario generation, which is better for realistic language and
+unexpected adversarial phrasing. Wardwright should compare three generator
+shapes before promoting any test library into production:
+
+- a small internal deterministic generator DSL for stable UI simulations
+- StreamData-backed generators available only inside a carefully bounded
+  simulation service
+- live-LLM-generated scenarios that are normalized into deterministic fixtures
+  before they become regression evidence
+
+The product constraint is that generated scenarios must be explainable,
+replayable, and pin-able. If a production generator cannot provide stable seeds,
+clear shrink/counterexample output, and bounded runtime, it should remain a
+development tool rather than part of the policy-authoring UI.
+
 For TTSR rules, generated cases should include:
 
 - trigger split across stream chunks

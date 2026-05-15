@@ -1,0 +1,101 @@
+{
+  "schema": "ingary.bakeoff.starlark_policy_result.v1",
+  "variant": "elixir-rustler",
+  "worktree": "/Users/admin/projects/ingary.starlark-elixir-rustler",
+  "branch": "spike/starlark-elixir-rustler",
+  "implementation": {
+    "backend_scope": "backends/elixir-ingary",
+    "callable_shape": {
+      "module": "ElixirIngary.StarlarkPolicy.evaluate/3",
+      "endpoint": "POST /__test/starlark-policy/evaluate",
+      "request": {
+        "name": "policy id string",
+        "source": "Starlark source defining evaluate(ctx)",
+        "ctx": "Policy ABI JSON object"
+      },
+      "response": {
+        "action": "allow | retry | block | switch_model",
+        "model": "string or null",
+        "reason": "string",
+        "trace": "list of stable policy/rule/action/result/reason entries"
+      }
+    },
+    "dependencies": {
+      "elixir": ["rustler 0.36.2"],
+      "rust": ["starlark 0.13.0", "serde_json 1", "rustler 0.36.2"]
+    },
+    "scheduler_strategy": "The NIF is declared with #[rustler::nif(schedule = \"DirtyCpu\")], so policy execution does not run on normal BEAM schedulers. The spike also rejects oversized policy/context payloads, all while loops, and range() loops before invoking the Starlark evaluator.",
+    "sandbox_strategy": "No loader is installed and Globals::standard is used. The Elixir/Rust surface injects only the JSON-compatible ctx value. The spike also fail-closes on obvious load/import/filesystem/network source attempts before evaluation.",
+    "trace_strategy": "Trace entries include stable policy id, rule id, selected action, result, and reason. Source spans were not added in the timebox."
+  },
+  "required_scenarios": {
+    "allow_default": "passed",
+    "current_session_history_literal_count_block": "passed",
+    "structured_guard_retry": "passed",
+    "dynamic_model_switch": "passed",
+    "fail_closed_on_policy_error": "passed",
+    "fail_closed_on_runaway_loop": "passed for the spike fixture and added dynamic while/range negative tests by rejecting loop constructs that need a real execution budget before eval",
+    "fail_closed_on_sandbox_import_filesystem_network": "passed for visible load/import plus explicit filesystem/network attempt tests"
+  },
+  "checks": [
+    {
+      "command": "mise trust /Users/admin/projects/ingary.starlark-elixir-rustler/mise.toml && mise exec -- mix deps.get",
+      "cwd": "backends/elixir-ingary",
+      "result": "passed",
+      "notes": "Trusted the repo mise config, resolved rustler 0.36.2 and toml 0.7.0 in addition to existing deps."
+    },
+    {
+      "command": "mise exec -- mix format --check-formatted",
+      "cwd": "backends/elixir-ingary",
+      "result": "passed"
+    },
+    {
+      "command": "mise exec -- cargo fmt --check",
+      "cwd": "backends/elixir-ingary/native/starlark_policy",
+      "result": "passed"
+    },
+    {
+      "command": "mise exec -- cargo test",
+      "cwd": "backends/elixir-ingary/native/starlark_policy",
+      "result": "passed",
+      "summary": "2 tests passed"
+    },
+    {
+      "command": "mise exec -- mix test",
+      "cwd": "backends/elixir-ingary",
+      "result": "passed",
+      "summary": "1 property, 21 tests, 0 failures"
+    },
+    {
+      "command": "gitleaks protect --staged --config .gitleaks.toml --verbose",
+      "cwd": ".",
+      "result": "passed",
+      "summary": "no leaks found"
+    }
+  ],
+  "latency_and_safety_observations": [
+    "Full ExUnit suite with release NIF compile completed in about 2 seconds after dependencies were built; endpoint test logged 8-11 ms for a simple policy request in test mode.",
+    "The Starlark Rust crate is a large dependency graph, which is material for compile time and audit surface.",
+    "Dirty CPU scheduling is the right BEAM integration shape for this spike, but production needs a real execution budget rather than static source rejection."
+  ],
+  "limitations": [
+    "No general Starlark fuel, deadline, or killable execution boundary is implemented. The spike fail-closes `while` and `range()` loop constructs before eval, which is conservative and testable but too restrictive for production policy authoring.",
+    "Context is injected by rendering JSON as a Starlark literal and appending an evaluate(ctx) call. This is deterministic for JSON-compatible ABI values, but a production bridge should prefer typed allocation or a frozen module/cache strategy.",
+    "Sandbox checks are conservative string prechecks plus no module loader; they are not a complete static security analysis.",
+    "Source span metadata is not emitted.",
+    "No production receipt integration was added; this is a prototype-only callable test surface."
+  ],
+  "viability_verdict": {
+    "status": "conditionally_viable_for_spike",
+    "summary": "Rustler can expose a deterministic Starlark evaluator to the Elixir backend with clean fail-closed tests and a simple endpoint. It is not production-viable until arbitrary expensive policies have a real interruptible budget, preferably through a sidecar/process boundary or confirmed runtime fuel support."
+  },
+  "adversarial_review": {
+    "status": "completed_after_initial_commit",
+    "notes": [
+      "Blocker found: initial runaway defense only rejected obvious while True / while 1 loops, leaving dynamic while conditions and huge range loops able to occupy a dirty scheduler indefinitely.",
+      "Follow-up fix: reject all while loops and range() loops before native evaluation, and add ExUnit plus Rust native negative tests for dynamic while and expensive range policies.",
+      "Remaining architecture concern: static loop rejection is acceptable for a spike but not a production substitute for runtime fuel, deadline, or a killable process boundary.",
+      "Test quality review: tests exercise observable ABI behavior through the Elixir callable and endpoint, include fail-closed negative cases, and now cover non-vacuous dynamic runaway patterns."
+    ]
+  }
+}

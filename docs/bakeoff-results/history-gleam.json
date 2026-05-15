@@ -1,0 +1,79 @@
+{
+  "feature": "recent-history-governor",
+  "backend": "gleam-on-beam",
+  "branch": "bakeoff2/history-gleam",
+  "base_sha": "97d6f07974c190d0d1c2f431590814ab70392a6d",
+  "checks": {
+    "elixir_tests": {
+      "command": "mise exec -- mix test",
+      "status": "pass",
+      "notes": "Ran from backends/elixir-ingary; 1 property and 19 ExUnit tests passed after the session_run review fix."
+    },
+    "gleam_tests": {
+      "command": "mise exec -- mix test",
+      "status": "pass",
+      "notes": "Gleam core is compiled by mix_gleam and covered by test/gleam_history_core_test.exs."
+    },
+    "python_oracles": {
+      "status": "not_run",
+      "notes": "Per instruction, no uv, pytest, hidden evaluator, or Python bakeoff tests were run."
+    }
+  },
+  "coverage": {
+    "manual_scope_isolation": true,
+    "irrelevant_in_session_events_do_not_count": true,
+    "deterministic_eviction": true,
+    "threshold_non_trigger_then_trigger": true,
+    "normal_chat_requests_feed_history": true,
+    "concurrent_manual_writes_visible": true,
+    "regex_and_literal_conditions": true,
+    "receipt_trace_fields": true,
+    "session_crash_isolation": true,
+    "session_run_scope": true
+  },
+  "boundary_shape": {
+    "elixir_runtime_shell": [
+      "Plug/Cowboy routing and test/admin HTTP APIs",
+      "application supervision, dynamic model/session registries, and DynamicSupervisors",
+      "session GenServer ownership for bounded event history",
+      "config ingress and receipt assembly"
+    ],
+    "gleam_core": [
+      "typed threshold decision result",
+      "pure recent-window match counting",
+      "threshold/recent_limit clamping and triggered/not_triggered classification"
+    ],
+    "ffi_or_interop": "Elixir calls the generated Erlang module :elixir_ingary@history_core directly. Regex and literal predicate evaluation remains in Elixir because Gleam regex interop would have required additional Erlang FFI for this spike."
+  },
+  "isolation_behavior": {
+    "model_runtime": "Synthetic model/version runtimes are represented by Registry-backed GenServers under ElixirIngary.ModelSupervisor.",
+    "session_runtime": "Session/run history is owned by Registry-backed GenServers under ElixirIngary.SessionSupervisor.",
+    "tested": "A test crashes one session worker and verifies another session under the same model retains history; it also starts another model runtime.",
+    "limitation": "The session supervisor is global rather than physically nested below each model runtime. The registry key still scopes by model/version/session/run, but model-subtree teardown semantics are modeled rather than fully hierarchical."
+  },
+  "sidecar_backpressure_risks": {
+    "sidecars_used": false,
+    "queue_growth": "Each session GenServer serializes writes for that session. A hot session can queue its own history calls but should not serialize unrelated sessions.",
+    "restart_storms": "A repeatedly crashing session can restart under the DynamicSupervisor; there is no explicit restart-rate telemetry or circuit breaker in this prototype.",
+    "cold_start_latency": "First event or read for a session starts a GenServer; observed in tests as local in-process startup only.",
+    "protocol_failures": "No external protocol boundary is used.",
+    "unrelated_slowdown": "Unrelated sessions use distinct GenServers; they still share BEAM schedulers and the global DynamicSupervisor."
+  },
+  "limitations": [
+    "Gleam owns the count/decision classification but not event decoding, regex compilation, or receipt assembly.",
+    "Session cache state is in-memory only and intentionally resets on test config replacement or session crash.",
+    "The model runtime hierarchy is not a full per-model nested supervisor tree.",
+    "No load/p95/p99 latency benchmark was added inside the timebox.",
+    "Invalid regex currently behaves as a non-match rather than returning a configuration error."
+  ],
+  "mutation_check_self_review": {
+    "performed": "Reasoned mutation review after test design: changing threshold comparison from >= to > would fail threshold trigger tests; removing scope filtering would fail out-of-session tests; reversing eviction sort would fail the property test; skipping chat history ingestion would fail the normal chat test.",
+    "not_performed": "No automated mutation-testing tool was run."
+  },
+  "setup_friction": [
+    "mise initially refused the repo config until mise trust was run after inspecting mise.toml.",
+    "Gleam was not pinned initially; the root mise.toml now pins gleam 1.16.0.",
+    "mix_gleam required erlc_paths, erlc_include_path, prune_code_paths: false, and a deps.get alias so generated Erlang modules are compiled and callable from Elixir.",
+    "gleam_stdlib had to be pinned consistently between mix.lock and Gleam manifest."
+  ]
+}

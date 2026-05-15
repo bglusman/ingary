@@ -1,0 +1,127 @@
+{
+  "schema": "ingary.bakeoff.starlark_policy_result.v1",
+  "variant": "rust-native-starlark",
+  "backend": "backends/rust-ingary",
+  "branch": "spike/starlark-rust-native",
+  "status": "completed_spike",
+  "dependency_choices": [
+    {
+      "crate": "starlark",
+      "version": "0.13.0",
+      "reason": "Native Rust Starlark parser and evaluator from starlark-rust."
+    },
+    {
+      "crate": "starlark_derive",
+      "version": "0.13.0",
+      "reason": "Registers the prototype regex helper as a Starlark global."
+    },
+    {
+      "crate": "anyhow",
+      "version": "1",
+      "reason": "Small error adapter for fail-closed policy evaluation paths."
+    }
+  ],
+  "callable_shape": {
+    "http_endpoint": "POST /__test/starlark-policy",
+    "request_shape": {
+      "name": "optional stable policy id",
+      "policy": {
+        "name": "optional stable policy id",
+        "source": "Starlark source defining evaluate(ctx)"
+      },
+      "source": "Starlark source defining evaluate(ctx), used when policy.source is absent",
+      "input": "Policy ABI context object from docs/bakeoff-contracts/starlark-policy-spike.md"
+    },
+    "return_shape": {
+      "action": "allow | retry | block | switch_model",
+      "model": "optional model when action is switch_model",
+      "reason": "policy or fail-closed reason",
+      "trace": [
+        {
+          "rule": "stable policy or rule id",
+          "action": "selected action",
+          "result": "selected | fail_closed | rule result",
+          "reason": "decision reason",
+          "span": "optional, not implemented in this spike"
+        }
+      ]
+    }
+  },
+  "covered_scenarios": [
+    "allow default",
+    "current-session history literal count block",
+    "current-session history regex count block through regex_match(pattern, text)",
+    "structured guard retry on json_syntax guard events",
+    "dynamic switch_model for large estimated_tokens",
+    "fail closed on policy exception",
+    "fail closed on invalid or missing policy action results",
+    "fail closed on visible runaway while policy because Standard dialect rejects while",
+    "fail closed on range(...) loop attempts before evaluation",
+    "fail closed on load/import attempts",
+    "fail closed on unavailable filesystem and network host capability attempts"
+  ],
+  "checks": [
+    {
+      "command": "cargo test starlark -- --nocapture",
+      "cwd": "backends/rust-ingary",
+      "result": "pass",
+      "notes": "9 Starlark-focused tests passed."
+    },
+    {
+      "command": "mise run check:rust",
+      "cwd": ".",
+      "result": "pass",
+      "notes": "Required one-time mise trust for this repo config, then ran cargo fmt --check and cargo test. 26 tests passed."
+    }
+  ],
+  "latency_observations": {
+    "unit_test_wall_time": "cargo test completed the Rust test binary in about 0.26s after compilation",
+    "expected_runtime_shape": "Each request parses, compiles, and evaluates the policy source in-process. This is deterministic and acceptable for a spike but should be cached or precompiled before production use."
+  },
+  "safety_observations": [
+    "The evaluator exposes only standard Starlark globals plus regex_match; no filesystem, process, or network functions are registered.",
+    "load/import attempts fail closed because no loader is configured.",
+    "Policy errors, parse failures, invalid action enums, missing switch_model target, and serialization problems return action=block.",
+    "Returned error reasons are shortened to avoid leaking host paths or internals."
+  ],
+  "limitations": [
+    "No AST/source-span trace metadata is emitted yet; traces use stable policy/rule ids.",
+    "The in-process starlark-rust API did not expose a production-grade instruction timeout/fuel hook in the timebox. A statement hook was wired, but tight range loops required a conservative range(...) preflight block.",
+    "The prototype should not run untrusted arbitrary policy source in production without a stronger execution budget or an isolated worker/process boundary.",
+    "Policy source is parsed and evaluated per call rather than cached.",
+    "Regex support is provided as a small Rust global helper instead of a full policy standard library."
+  ],
+  "viability_verdict": {
+    "verdict": "conditionally_viable_for_rust_backend",
+    "summary": "Native Rust Starlark is viable for deterministic policy semantics, JSON-like ABI handling, fail-closed result validation, and sandboxed host capability shape. Production viability depends on adding robust execution budgeting or moving evaluation behind a killable process boundary, plus policy compilation caching and source-span tracing."
+  },
+  "adversarial_review": {
+    "status": "follow_up_fix_applied",
+    "findings": [
+      {
+        "severity": "blocker",
+        "area": "sandbox execution budget",
+        "finding": "The first commit only blocked large literal range(...) calls, which left dynamic range(n) policies able to run in-process too long.",
+        "resolution": "Follow-up fix fail-closes all range(...) use in this spike surface because the required ABI examples do not need range and fail-closed behavior is the priority."
+      },
+      {
+        "severity": "non_blocking",
+        "area": "architecture",
+        "finding": "The endpoint parses and evaluates policy source per request and runs in-process.",
+        "resolution": "Recorded as a limitation; production should cache compiled policies and use a stronger instruction budget or killable worker boundary."
+      },
+      {
+        "severity": "non_blocking",
+        "area": "trace quality",
+        "finding": "Traces carry stable policy/rule ids and reasons but no source spans.",
+        "resolution": "Recorded as a limitation because core fail-closed behavior was prioritized."
+      },
+      {
+        "severity": "non_blocking",
+        "area": "test quality",
+        "finding": "Native tests cover the required behavior and invalid-result negative paths, but there is no HTTP-level test for the prototype endpoint.",
+        "resolution": "Accepted for spike scope because the deterministic callable evaluator is directly tested."
+      }
+    ]
+  }
+}

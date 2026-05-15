@@ -14,6 +14,7 @@ defmodule Wardwright.Application do
       [
         Wardwright.ReceiptStore,
         Wardwright.PolicyCache,
+        Wardwright.Policy.AlertDelivery,
         {Phoenix.PubSub, name: Wardwright.PubSub},
         {Registry, keys: :unique, name: Wardwright.Runtime.Registry},
         {DynamicSupervisor, strategy: :one_for_one, name: Wardwright.Runtime.ModelSupervisor},

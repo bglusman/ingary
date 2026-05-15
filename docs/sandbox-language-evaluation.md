@@ -95,3 +95,19 @@ Dune should advance only if it remains strong on all of these:
 Even if Dune passes, it should initially be treated as a local/trusted advanced
 policy engine. Hostile third-party policy still needs a stronger boundary such
 as a sidecar, WASM runtime, microVM, or hosted policy service.
+
+## Current Implementation Shape
+
+The BEAM prototype now has a common policy namespace for three execution paths:
+
+- primitive rules in the router and `Wardwright.Policy.Engine`
+- Dune snippets through `Wardwright.PolicySandbox.Dune`
+- WASM through `Wardwright.PolicySandbox.Wasm`
+
+The WASM path is intentionally fail-closed until a runtime dependency and fuel
+budget are enabled. That keeps the ABI visible to tests and receipts without
+pretending an untrusted-code boundary exists before it has actually been wired.
+Hybrid evaluation composes engine results and blocks if any child engine fails
+closed. Primitive, Dune, and WASM policies should continue to share the same
+bounded history/cache and regex helpers so behavior does not depend on which
+engine authored a rule.

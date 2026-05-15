@@ -1,0 +1,57 @@
+{
+  "prototype": "backends/elixir-ingary",
+  "branch": "bakeoff2/alerts-elixir",
+  "attempt": 2,
+  "round": 1,
+  "shared_base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks": [
+    {
+      "command": "mise exec -- mix format --check-formatted",
+      "cwd": "backends/elixir-ingary",
+      "status": "passed"
+    },
+    {
+      "command": "mise exec -- mix test",
+      "cwd": "backends/elixir-ingary",
+      "status": "passed",
+      "summary": "2 properties, 18 tests, 0 failures"
+    }
+  ],
+  "coverage": {
+    "core": [
+      "fast sink accepts one policy alert and records a delivered admin entry",
+      "duplicate alert idempotency keys produce one accepted delivery and one duplicate record",
+      "full queue with dead_letter records a dead-lettered alert with queue depth and capacity evidence",
+      "full queue with fail_closed returns 503 and stores a blocked receipt",
+      "receipts include alert_sink status, queue depth, queue capacity, delivery attempt counts, and terminal counts"
+    ],
+    "advanced": [
+      "slow sink keeps request latency bounded while delivery remains queued",
+      "fail_then_recover sink records two attempts and eventually delivers after retry"
+    ],
+    "property_tests": [
+      "generated duplicate idempotency keys are accepted once and duplicate thereafter"
+    ]
+  },
+  "limitations": [
+    "alert sink state is in-memory only and resets with the supervised process",
+    "slow sink behavior is simulated by delayed queue drain rather than an external network sink",
+    "graceful shutdown and drain semantics are not modeled beyond queue/admin visibility",
+    "delivery attempt history is inspectable through receipts and /admin/policy-alerts but is not persisted durably"
+  ],
+  "mutation_check": {
+    "performed": "manual self-review",
+    "notes": [
+      "changing full queue on_full from dead_letter to drop would fail the dead-letter receipt/admin assertions",
+      "removing idempotency tracking would fail the duplicate example and generated property",
+      "making slow sink drain synchronously would fail the latency budget assertion",
+      "removing retry behavior would fail the fail_then_recover attempt-count assertion"
+    ]
+  },
+  "self_review": [
+    "The implementation is intentionally scoped to the Elixir prototype and does not touch Go or Rust files.",
+    "The request path calls a bounded GenServer enqueue and never waits for slow-sink delivery.",
+    "Receipts expose both per-alert enqueue results and aggregate queue/terminal counters.",
+    "The prototype favors contract observability over production durability; durable alert storage remains future work."
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "prototype": "elixir-ingary",
+  "attempt": 2,
+  "round": 1,
+  "scope": "backends/elixir-ingary",
+  "checks": [
+    {
+      "command": "mise exec -- mix format --check-formatted",
+      "status": "passed"
+    },
+    {
+      "command": "mise exec -- mix test",
+      "status": "passed",
+      "summary": "1 property, 19 tests, 0 failures"
+    }
+  ],
+  "coverage": {
+    "manual_events_scoped_to_current_session_run": true,
+    "out_of_session_events_excluded": true,
+    "out_of_run_events_excluded": true,
+    "irrelevant_in_session_events_excluded": true,
+    "deterministic_eviction_by_created_at_then_sequence": true,
+    "recent_window_ordered_by_created_at_then_sequence": true,
+    "threshold_before_and_after_enough_matches": true,
+    "normal_chat_requests_feed_history": true,
+    "concurrent_manual_writes_visible": true,
+    "literal_match_conditions": true,
+    "regex_match_conditions": true,
+    "receipt_trace_reconstructs_scope_count_and_window": true
+  },
+  "implementation": {
+    "state": "Agent-backed in-memory policy cache",
+    "event_api": "POST /v1/policy-cache/events accepts kind, key, text, session_id, run_id, scope, created_at_unix_ms",
+    "read_api": "GET /v1/policy-cache/recent filters by kind, key, session_id, run_id and other caller scope fields",
+    "decision_api": "POST /v1/policy-cache/decision returns deterministic recent-history trace for a supplied rule and scope",
+    "normal_chat_feed": "POST /v1/chat/completions records a chat_request event scoped to session_id and run_id before policy evaluation",
+    "receipt_trace_fields": [
+      "history_scope",
+      "history_count",
+      "threshold",
+      "history_match",
+      "cache_kind",
+      "cache_key",
+      "cache_scope",
+      "recent_limit",
+      "working_set_size",
+      "matched_event_sequences"
+    ]
+  },
+  "limitations": [
+    "The cache is process-local and in-memory; restart loses history.",
+    "The prototype records chat history before policy evaluation, so the triggering chat request is included in its own recent window.",
+    "Regex matching uses Elixir Regex over stored event text and key only; it does not inspect arbitrary nested event value payloads.",
+    "No external persistence, multi-node coordination, or production admin authentication is implemented in this bakeoff slice."
+  ],
+  "mutation_check": {
+    "manual": [
+      "Changing the expected current run id in tests causes threshold assertions to stay below trigger.",
+      "Changing the literal match text causes history_count and alert_count assertions to fail.",
+      "Changing eviction order from created_at_unix_ms/sequence would retain oldest or wrong same-timestamp rows and fail the deterministic eviction test.",
+      "Changing recent_limit selection to insertion sequence only would count older matching events and fail the recent-window ordering test.",
+      "Moving chat event recording after policy evaluation would make the second chat request fail to trigger in the chat-feed test."
+    ],
+    "held_out_evaluators": "Not run per process constraint."
+  },
+  "self_review": {
+    "architecture": "Agent serialization is adequate for this prototype and gives deterministic sequence allocation under concurrent writes. A production path would need durable storage plus authenticated admin endpoints.",
+    "code_quality": "The history decision logic is concentrated in PolicyCache and Router only adapts caller scope and receipt trace. Existing cache_count remains for compatibility but new policies use history_decision.",
+    "test_quality": "Tests assert externally visible behavior through Plug routes where practical and direct PolicyCache calls for regex/concurrency edge cases. They check failure-sensitive counts, scope, trace fields, and ordering rather than private implementation details.",
+    "security": "No secrets, provider tokens, private endpoints, or raw real user content were added. Fixtures use synthetic session/run identifiers and synthetic prompt text."
+  }
+}

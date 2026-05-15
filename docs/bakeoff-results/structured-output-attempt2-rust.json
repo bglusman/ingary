@@ -1,0 +1,63 @@
+{
+  "schema": "ingary.bakeoff.result.structured_output.v1",
+  "attempt": "attempt2",
+  "round": 1,
+  "backend": "rust",
+  "branch": "bakeoff2/structured-rust",
+  "base_sha": "cd875e142cccf16fc82b16f1b6cdd7eecfedac00",
+  "checks_run": [
+    {
+      "command": "mise exec -- cargo fmt --check",
+      "cwd": "backends/rust-ingary",
+      "result": "pass"
+    },
+    {
+      "command": "mise exec -- cargo test",
+      "cwd": "backends/rust-ingary",
+      "result": "pass"
+    },
+    {
+      "command": "mise exec -- cargo test structured_output_core_repair_scenarios_classify_guards",
+      "cwd": "backends/rust-ingary",
+      "result": "expected_fail_during_mutation_check"
+    }
+  ],
+  "implemented_core": {
+    "answer_v1_schema_validation": true,
+    "json_syntax_guards": true,
+    "schema_guards": true,
+    "confidence_semantic_guard": true,
+    "retry_loop": true,
+    "global_attempt_budget": true,
+    "fail_closed_exhausted_budget": true,
+    "receipts": true,
+    "visible_core_scenarios_translated_to_rust": true
+  },
+  "implemented_advanced": {
+    "answer_v2_schema_alternative_selection": true,
+    "schema_alternative_repair": true,
+    "no_schema_alternative_matches": true,
+    "per_rule_budget_exhaustion": true
+  },
+  "native_tests": {
+    "visible_fixture_scenarios": "Translated the visible structured-output fixture expectations into Rust tests against the structured governance loop.",
+    "additional_core_table_tests": "Covers semantic repair, fenced markdown JSON, refusal text, truncated JSON, additional fields, wrong confidence type, and syntax-to-semantic overcorrection.",
+    "generated_tests": "Uses existing hegeltest property-style tests for generated valid answer_v1 objects and generated extra fields rejected by additionalProperties=false."
+  },
+  "mutation_check": {
+    "mutation": "Temporarily changed the confidence semantic comparison from number < gte to number <= gte.",
+    "expected_failure": "The boundary repair case with confidence 0.7 failed and exhausted the minimum-confidence rule budget instead of completing after guard.",
+    "restored": true
+  },
+  "known_limitations": [
+    "Structured-output governance is implemented for non-streaming chat completions only; streaming structured-output governance remains out of scope.",
+    "The JSON schema validator intentionally implements the subset needed by the bakeoff schemas: object, required, additionalProperties=false, string minLength/enum, finite number min/max, and array items of strings.",
+    "Per-rule exhaustion is applied to semantic rule failures. JSON syntax and schema validation share schema_rule_id in the visible core contract, so those failures remain governed by the global attempt budget."
+  ],
+  "self_review": {
+    "correctness": "Core and advanced visible scenarios pass in native Rust tests, including ordered guard events, rule ids, attempt counts, selected schema, parsed output on success, and exhausted rule id for semantic per-rule exhaustion.",
+    "architecture": "The implementation is scoped to the existing single-file prototype and keeps structured governance separate from stream governance. The schema validator is deliberately small rather than a general JSON Schema engine.",
+    "security": "No secrets, private endpoints, prompts, provider credentials, or raw provider credentials are added. Retry feedback is a generic validation message.",
+    "test_quality": "Tests assert public statuses, selected schemas, parsed-output presence, guard event order, rule ids, and attempt counts rather than internal helper state."
+  }
+}
