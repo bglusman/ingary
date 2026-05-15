@@ -94,6 +94,22 @@ backpressure and scaling risks: queue depth, single-worker serialization,
 protocol failures, cold starts, restart storms, pool sizing, and cross-session
 or cross-model saturation.
 
+State machines appear in several layers and should not be conflated:
+
+- policy state-machine artifacts are user-facing governance data
+- pure transition selectors can live in Gleam when exhaustiveness helps
+- Elixir runtime processes own supervision, timers, cancellation, PubSub, ETS,
+  and provider IO
+- long-lived or highly eventful machines may compile to or be hosted by
+  `gen_statem` when process lifecycle semantics matter
+
+The older `gen_fsm` mental model is useful vocabulary, but the implementation
+spike should evaluate modern `gen_statem` and ordinary GenServer-plus-pure-core
+options. Users should not need to author raw callbacks for the default path.
+If an expert mode later allows code-backed machines, the code must still expose
+a transition graph, declared effects, simulation hooks, timeout behavior, and
+receipt trace spans.
+
 ## LiveView Direction
 
 The removed TypeScript prototype was useful for shape discovery, but the next
@@ -156,7 +172,8 @@ The first goal is a dense operational workbench, not a marketing dashboard.
    called from the live Elixir path through wrapper modules. They currently own
    structured-output guard-loop arbitration, recent-history threshold
    classification, and alert enqueue/backpressure classification. Next
-   candidates are TTSR action arbitration and deterministic cache eviction.
+   candidates are TTSR action arbitration, state-machine transition selection,
+   and deterministic cache eviction.
    For now, each Gleam core should keep an Elixir equivalent behind
    `WARDWRIGHT_POLICY_CORE=elixir|gleam|compare` so the project can measure
    whether Gleam's type-safety benefit remains worth the extra boundary as

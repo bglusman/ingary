@@ -37,10 +37,9 @@ literal pattern to guarantee that the complete trigger can be detected before
 any trigger byte is released. A shorter horizon is a simulator counterexample,
 not an acceptable production policy.
 
-Regex rules are simulated with Python regular expressions for shared tests, but
-production implementations should use a bounded regex engine or an equivalent
-validated subset. Regex authoring should reject or warn on patterns whose
-future-match intent cannot fit inside the configured horizon.
+Regex rules are simulated with the same validated regex subset exposed by the
+native BEAM policy engine. Regex authoring should reject or warn on patterns
+whose future-match intent cannot fit inside the configured horizon.
 
 ## Retry And Block Semantics
 
@@ -60,8 +59,31 @@ model retry success or retry violation deterministically.
 The production runtime must sit behind a supervised provider boundary with
 explicit timeouts before live streaming replaces mock attempt streams.
 Non-streaming provider timeout failures surface as `provider_error` receipts.
-Streaming TTSR still needs provider-specific holdback, cancellation, and restart
-support before live provider streams can share these retry semantics.
+The current BEAM evaluator supports opt-in bounded holdback through
+`horizon_bytes` or `holdback_bytes` on stream rules. When every active stream
+rule declares a horizon, old safe bytes can be released while the most recent
+window stays available for split-boundary matching. If any active rule omits a
+horizon, the evaluator keeps the older full-buffer behavior so it does not
+pretend an unbounded rule is safe to stream past.
+
+The evaluator also exposes an incremental arbiter API: initialize policy state,
+consume one normalized provider chunk, receive the newly releasable text chunks,
+and finish the stream to flush any remaining held suffix. That API is the
+contract boundary used by the router/runtime streaming state machine.
+
+The BEAM runtime now drives that arbiter while provider chunks arrive. Bounded
+horizon rules may release safe prefixes over SSE before the full provider stream
+finishes. If a later chunk trips a block rule, Wardwright cancels the provider
+attempt, sends a terminal stream-policy SSE event when headers have already been
+sent, and records the held/blocked bytes in the receipt. If no bytes have been
+released yet, Wardwright can still return fail-closed JSON with the policy
+status.
+
+Retry semantics remain intentionally conservative. A `retry` or
+`retry_with_reminder` action may restart an attempt before any bytes are sent to
+the client. Once bytes have been released, Wardwright cannot invisibly rewind the
+client stream; the runtime records the terminal policy event instead of
+pretending the failed attempt can be erased.
 
 ## Generated Simulation Cases
 

@@ -209,8 +209,33 @@ Split chunk boundaries are treated cautiously. Terminal block/retry checks and
 rewrite checks inspect the buffered stream window, so a pattern such as
 `OldClient(` is still caught if a provider emits `Old` and `Client(` in separate
 events. Non-native streaming provider fallbacks are treated as one held response
-unit rather than artificially chunked output. Mid-stream policy cancellation,
-latency budgets, and raw provider-event offsets are still future work.
+unit rather than artificially chunked output.
+
+Rules may opt into bounded horizon semantics by setting `horizon_bytes` or
+`holdback_bytes`. When every active stream rule declares a horizon, the evaluator
+can release UTF-8-safe safe prefixes while retaining the recent overlap window
+needed to detect split literal or regex matches. If any active stream rule omits
+a horizon, the evaluator keeps the older full-buffer behavior so an unbounded
+rule cannot accidentally miss a cross-chunk trigger.
+
+The evaluator now exposes the same behavior as an incremental arbiter:
+initialize state for a ruleset, consume one normalized provider chunk, receive
+the newly releasable output chunks for that step, and finish the stream to flush
+the held suffix. This gives the router a deterministic policy boundary for a
+runtime implementation that sends SSE while continuing to enforce the holdback
+window.
+
+The HTTP route now uses that boundary for live streaming. Provider transports
+emit normalized chunks into the router as they arrive. Bounded-horizon policies
+can release safe prefixes, keep the recent match window held, and cancel the
+provider attempt when a later trigger fires. If the response has already started,
+the client receives a terminal Wardwright SSE event and the receipt records the
+policy status. If no bytes have been sent, Wardwright can still fail closed with
+JSON.
+
+Remaining stream-runtime work includes explicit latency budgets, richer raw
+provider-event offsets in receipts, provider-specific pools, and a clearer
+operator-facing model for retries after any bytes have reached the client.
 
 ## State Scopes
 
@@ -436,7 +461,7 @@ being backed by unbounded historical storage.
 
 For example:
 
-```python
+```starlark
 ctx.receipts.list(
     scope = "session",
     where = {"event_type": "tool_call.finished", "tool_name": "browser"},
@@ -553,6 +578,92 @@ Validation should classify rule interactions before activation:
 The UI should surface those classes directly. If a policy can run detectors in
 parallel and arbitrate safely, it should say so. If a policy depends on order,
 priority, or conflict resolution, the user should see that before activation.
+
+## Policy State Machines
+
+State machines should be a first-class authoring shape, not only an internal
+runtime concern. Many governance behaviors are clearer when described as named
+states, event-driven transitions, guard conditions, and entry/exit actions:
+
+- TTSR retry loops that move from `streaming` to `violated`, `retrying`, or
+  `blocked`
+- structured-output repair attempts with retry budgets and parser feedback
+- model-switching policies that escalate after repeated route or quality
+  failures
+- approval workflows that pause, resume, expire, or roll back a request
+- session-level cooldowns or one-shot rules that should not retrigger until a
+  reset condition is observed
+
+The product shape should be a deterministic state-machine artifact that can be
+edited directly by advanced users, constructed visually by most users, and
+reviewed through simulations. It should not require users to write BEAM process
+callbacks for normal policy work.
+
+Example shape:
+
+```yaml
+state_machine:
+  id: deprecated-client-stream-guard
+  scope: run
+  initial: streaming
+  states:
+    streaming:
+      on:
+        stream.rule_matched:
+          when:
+            rule_id: deprecated-client
+          transition: retrying
+          actions:
+            - retry_with_reminder
+    retrying:
+      budgets:
+        max_retries: 1
+      on:
+        stream.rule_matched:
+          transition: blocked
+          actions:
+            - block_final
+        stream.completed:
+          transition: completed
+    blocked:
+      terminal: true
+    completed:
+      terminal: true
+```
+
+That authoring model is different from arbitrary programmable policy:
+
+- the graph is statically inspectable before simulation
+- transition guards declare their event inputs and state reads
+- transition actions reuse the same normalized action contract as other policy
+  engines
+- conflicts can be detected by comparing state writes and emitted actions
+- simulations can show the exact path a request took through the graph
+
+It is still compatible with BEAM runtime machinery. The compiler may choose to
+interpret a small machine inside a policy arbiter, compile a long-lived
+session/run machine into a `gen_statem` process, or generate a pure Gleam core
+for transition selection and have Elixir own the process lifecycle. Those are
+implementation choices behind the artifact. The activation validator should not
+accept arbitrary `gen_statem` callback modules as the default policy surface,
+because raw process code is much harder to diff, sandbox, simulate, and
+visualize. A future expert mode could import or attach code-backed machines, but
+only if they expose the same transition graph, effect declarations, simulator
+hooks, timeouts, and receipt trace spans.
+
+The authoring UI should therefore treat state machines as a structured policy
+builder:
+
+- list states and terminal states
+- show transitions grouped by triggering event
+- attach detectors, guards, and actions to transitions
+- flag unreachable states, missing terminal paths, retry loops without budgets,
+  and transitions whose actions conflict with other active policies
+- run scenario simulations and highlight the visited path, emitted actions,
+  held/released stream bytes, and receipt events
+
+This gives policy authors a local way to reduce complexity without forcing the
+entire governance system into one monolithic workflow engine.
 
 ## AI-Assisted Authoring
 
@@ -676,9 +787,6 @@ Implementation options should be chosen for the layer being tested:
   Rust owns policy execution.
 - `tree-sitter-starlark` is useful for editor-grade concrete syntax,
   highlighting, source spans, and incremental UI feedback.
-- Python `ast` can be a fast exploratory parser for a Starlark-like subset, but
-  it must reject unsupported Python nodes and must not become the activation
-  validator because Python accepts syntax and semantics Starlark should reject.
 
 The decisive comparison is not expressiveness. Programmable policy will always
 be more expressive. The product question is whether a technical policy author

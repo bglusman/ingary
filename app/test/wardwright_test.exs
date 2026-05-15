@@ -5,25 +5,30 @@ defmodule WardwrightTest.StreamingProvider do
   plug(:dispatch)
 
   post "/ollama/api/chat" do
-    {:ok, _body, conn} = Plug.Conn.read_body(conn)
+    {:ok, body, conn} = Plug.Conn.read_body(conn)
+
+    chunks =
+      if body =~ "safe prefix" do
+        ["safe prefix that can release ", "Old", "Client(arg) now"]
+      else
+        ["use Old", "Client(arg) now"]
+      end
 
     conn =
       conn
       |> Plug.Conn.put_resp_content_type("application/x-ndjson")
       |> Plug.Conn.send_chunked(200)
 
-    {:ok, conn} =
-      Plug.Conn.chunk(
-        conn,
-        Jason.encode!(%{"message" => %{"content" => "use Old"}, "done" => false}) <> "\n"
-      )
+    conn =
+      Enum.reduce(chunks, conn, fn chunk, conn ->
+        {:ok, conn} =
+          Plug.Conn.chunk(
+            conn,
+            Jason.encode!(%{"message" => %{"content" => chunk}, "done" => false}) <> "\n"
+          )
 
-    {:ok, conn} =
-      Plug.Conn.chunk(
-        conn,
-        Jason.encode!(%{"message" => %{"content" => "Client(arg) now"}, "done" => false}) <>
-          "\n"
-      )
+        conn
+      end)
 
     {:ok, conn} = Plug.Conn.chunk(conn, Jason.encode!(%{"done" => true}) <> "\n")
     conn
@@ -50,7 +55,8 @@ defmodule WardwrightTest.StreamingProvider do
         {:ok, conn} =
           Plug.Conn.chunk(
             conn,
-            "data: " <>
+            "event: completion.delta\n" <>
+              "data:" <>
               Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "world"}}]}) <>
               "\n\n"
           )
@@ -1583,6 +1589,225 @@ defmodule WardwrightTest do
            ] = stream_policy["attempts"]
   end
 
+  test "stream policy bounded horizon releases old safe bytes while retaining split triggers" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["safe prefix that can release ", "Old", "Client(arg) now"],
+        [
+          %{
+            "id" => "bounded-deprecated-client",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "stream_policy_blocked"
+    assert result.released_bytes > 0
+    assert result.held_bytes > byte_size("OldClient(")
+    assert result.blocked_bytes == result.held_bytes
+
+    released = Enum.join(result.chunks)
+    assert released != ""
+    refute released =~ "Old"
+    refute released =~ "Client("
+
+    assert [
+             %{
+               "rule_id" => "bounded-deprecated-client",
+               "action" => "block",
+               "match_scope" => "stream_window"
+             }
+           ] = result.events
+  end
+
+  test "stream policy bounded horizon releases remaining held bytes on completion" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["alpha ", "beta ", "gamma"],
+        [
+          %{
+            "id" => "never-matches",
+            "contains" => "OldClient(",
+            "action" => "block",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "alpha beta gamma"
+    assert result.generated_bytes == byte_size("alpha beta gamma")
+    assert result.released_bytes == result.generated_bytes
+    assert result.held_bytes == 0
+    assert result.stream_buffer == ""
+    assert result.max_held_bytes <= byte_size("OldClient(")
+  end
+
+  test "stream policy bounded horizon never splits utf8 codepoints" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["ééé", "abc"],
+        [
+          %{
+            "id" => "unicode-near-miss",
+            "contains" => "missing",
+            "action" => "block",
+            "horizon_bytes" => 3
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "éééabc"
+    assert Enum.all?(result.chunks, &String.valid?/1)
+    assert result.released_bytes == byte_size("éééabc")
+  end
+
+  test "stream policy bounded horizon rewrites without duplicating held prefixes" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["abc ", "OldClient(", " done"],
+        [
+          %{
+            "id" => "bounded-rewrite",
+            "contains" => "OldClient(",
+            "action" => "rewrite_chunk",
+            "replacement" => "NewClient(",
+            "horizon_bytes" => byte_size("OldClient(")
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "abc NewClient( done"
+    refute Enum.join(result.chunks) =~ "OldClient("
+    assert result.rewritten_bytes > 0
+  end
+
+  test "stream policy bounded horizon never flushes dropped chunks at completion" do
+    result =
+      Wardwright.Policy.Stream.evaluate(
+        ["keep ", "DROP", " done"],
+        [
+          %{
+            "id" => "bounded-drop",
+            "contains" => "DROP",
+            "action" => "drop_chunk",
+            "horizon_bytes" => 5
+          }
+        ]
+      )
+
+    assert result.status == "completed"
+    assert Enum.join(result.chunks) == "keep  done"
+    refute Enum.join(result.chunks) =~ "DROP"
+    assert result.generated_bytes == byte_size("keep DROP done")
+    assert result.released_bytes == byte_size("keep  done")
+  end
+
+  test "stream policy incremental arbiter emits safe prefixes before a later block" do
+    state =
+      Wardwright.Policy.Stream.start([
+        %{
+          "id" => "incremental-block",
+          "contains" => "OldClient(",
+          "action" => "block",
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    {:cont, state, first_release} =
+      Wardwright.Policy.Stream.consume(state, "safe prefix that can release ")
+
+    {:cont, state, second_release} = Wardwright.Policy.Stream.consume(state, "Old")
+    {:halt, state, terminal_release} = Wardwright.Policy.Stream.consume(state, "Client(arg)")
+
+    released = Enum.join(first_release ++ second_release ++ terminal_release)
+
+    assert released != ""
+    refute released =~ "Old"
+    refute released =~ "Client("
+    assert terminal_release == []
+    assert state.status == "stream_policy_blocked"
+    assert state.released_bytes == byte_size(released)
+    assert state.held_bytes > byte_size("OldClient(")
+
+    assert {:halt, ^state, []} = Wardwright.Policy.Stream.consume(state, " ignored")
+  end
+
+  test "stream policy incremental arbiter flushes held suffix on finish" do
+    state =
+      Wardwright.Policy.Stream.start([
+        %{
+          "id" => "incremental-finish",
+          "contains" => "OldClient(",
+          "action" => "block",
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    {:cont, state, first_release} = Wardwright.Policy.Stream.consume(state, "alpha ")
+    {:cont, state, second_release} = Wardwright.Policy.Stream.consume(state, "beta ")
+    {:cont, state, third_release} = Wardwright.Policy.Stream.consume(state, "gamma")
+    {state, final_release} = Wardwright.Policy.Stream.finish(state)
+
+    assert state.status == "completed"
+
+    assert Enum.join(first_release ++ second_release ++ third_release ++ final_release) ==
+             "alpha beta gamma"
+
+    assert state.stream_buffer == ""
+    assert state.held_bytes == 0
+  end
+
+  test "stream policy incremental arbiter handles bounded rewrite and drop actions" do
+    rewrite_state =
+      Wardwright.Policy.Stream.start([
+        %{
+          "id" => "incremental-rewrite",
+          "contains" => "OldClient(",
+          "action" => "rewrite_chunk",
+          "replacement" => "NewClient(",
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    {:cont, rewrite_state, first_release} =
+      Wardwright.Policy.Stream.consume(rewrite_state, "abc ")
+
+    {:cont, rewrite_state, second_release} =
+      Wardwright.Policy.Stream.consume(rewrite_state, "OldClient(")
+
+    {rewrite_state, final_release} = Wardwright.Policy.Stream.finish(rewrite_state)
+    rewritten = Enum.join(first_release ++ second_release ++ final_release)
+
+    assert rewrite_state.status == "completed"
+    assert rewritten == "abc NewClient("
+    refute rewritten =~ "OldClient("
+
+    drop_state =
+      Wardwright.Policy.Stream.start([
+        %{
+          "id" => "incremental-drop",
+          "contains" => "DROP",
+          "action" => "drop_chunk",
+          "horizon_bytes" => 5
+        }
+      ])
+
+    {:cont, drop_state, first_release} = Wardwright.Policy.Stream.consume(drop_state, "keep ")
+    {:cont, drop_state, second_release} = Wardwright.Policy.Stream.consume(drop_state, "DROP")
+    {:cont, drop_state, third_release} = Wardwright.Policy.Stream.consume(drop_state, " done")
+    {drop_state, final_release} = Wardwright.Policy.Stream.finish(drop_state)
+    dropped = Enum.join(first_release ++ second_release ++ third_release ++ final_release)
+
+    assert drop_state.status == "completed"
+    assert dropped == "keep  done"
+    refute dropped =~ "DROP"
+  end
+
   test "stream policy retry_with_reminder restarts generation before release" do
     config =
       unit_policy_config()
@@ -1710,7 +1935,7 @@ defmodule WardwrightTest do
                "status" => "stream_policy_retry_required",
                "called_provider" => true,
                "mock" => false,
-               "provider_status" => "completed",
+               "provider_status" => "cancelled",
                "released_to_consumer" => false
              },
              %{
@@ -1736,7 +1961,7 @@ defmodule WardwrightTest do
                       "type" => "provider.attempt.finished",
                       "provider_id" => "canned",
                       "model" => "canned/model",
-                      "status" => "completed"
+                      "status" => "cancelled"
                     }}
 
     assert_receive {:wardwright_runtime_event, "runtime:models",
@@ -1754,6 +1979,152 @@ defmodule WardwrightTest do
                       "model" => "canned/model",
                       "status" => "completed"
                     }}
+  end
+
+  test "bounded stream runtime releases safe provider bytes before a later block" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["safe prefix that can release ", "Old", "Client(arg) now"]
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "bounded-runtime-block",
+          "contains" => "OldClient(",
+          "action" => "block",
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "safe prefix"
+    assert conn.resp_body =~ "stream_policy_blocked"
+    refute conn.resp_body =~ "Old"
+    refute conn.resp_body =~ "Client("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "stream_policy_blocked"
+    assert stream_policy["released_to_consumer"] == false
+    assert stream_policy["released_bytes"] > 0
+    assert stream_policy["held_bytes"] > 0
+
+    assert [
+             %{
+               "status" => "stream_policy_blocked",
+               "released_bytes" => released_bytes,
+               "called_provider" => true,
+               "mock" => false
+             }
+           ] = stream_policy["attempts"]
+
+    assert released_bytes > 0
+  end
+
+  test "bounded stream runtime terminates SSE when provider fails after safe release" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "canned/model",
+          "context_window" => 256,
+          "provider_kind" => "canned_sequence",
+          "canned_stream_chunks" => ["safe prefix before provider error "],
+          "canned_stream_error" => "synthetic stream failure"
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "bounded-runtime-pass-through",
+          "contains" => "OldClient(",
+          "action" => "block",
+          "horizon_bytes" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "safe prefix"
+    assert conn.resp_body =~ "provider_error"
+    assert conn.resp_body =~ "data: [DONE]"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["final", "status"]) == "provider_error"
+    assert get_in(receipt, ["final", "provider_error"]) == "synthetic stream failure"
+  end
+
+  test "provider runtime drains queued chunks after policy halt" do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        target = %{"model" => "test/provider", "provider_timeout_ms" => 1_000}
+
+        result =
+          Wardwright.ProviderRuntime.stream_each(
+            target,
+            %{},
+            fn emit ->
+              Enum.each(1..50, fn index -> emit.("chunk #{index}") end)
+              send(parent, :provider_emitted_chunks)
+              Process.sleep(50)
+              {:ok, :done}
+            end,
+            0,
+            fn _chunk, acc -> {:halt, acc + 1} end
+          )
+
+        Process.sleep(10)
+        {result, Process.info(self(), :messages)}
+      end)
+
+    assert {{{:halted, :cancelled}, 1}, {:messages, []}} = Task.await(task)
+    assert_receive :provider_emitted_chunks
+  end
+
+  test "mock stream cancellation is recorded as mock without provider call" do
+    request = %{"model" => "unit-model", "stream" => true}
+
+    {provider, acc} =
+      Wardwright.stream_selected_model_each("missing/model", request, [], fn chunk, acc ->
+        {:halt, acc ++ [chunk]}
+      end)
+
+    assert provider.status == "cancelled"
+    assert provider.called_provider == false
+    assert provider.mock == true
+    assert acc == ["Mock Wardwright stream "]
   end
 
   test "stream rewrite rules can match across provider chunk boundaries" do
@@ -1924,7 +2295,7 @@ defmodule WardwrightTest do
                "status" => "stream_policy_retry_required",
                "called_provider" => true,
                "mock" => false,
-               "provider_status" => "completed"
+               "provider_status" => "cancelled"
              }
            ] = stream_policy["attempts"]
 
@@ -1934,6 +2305,62 @@ defmodule WardwrightTest do
                "match_scope" => "stream_window"
              }
            ] = stream_policy["events"]
+  end
+
+  test "ollama stream targets release bounded safe bytes before cancelling on a later trigger" do
+    base_url = streaming_provider_base_url("/ollama")
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "ollama/live-test",
+          "context_window" => 256,
+          "provider_base_url" => base_url
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "ollama-bounded-stream-block",
+          "contains" => "OldClient(",
+          "action" => "block",
+          "horizon_bytes" => byte_size("OldClient(")
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream safe prefix code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "safe prefix"
+    assert conn.resp_body =~ "stream_policy_blocked"
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["status"] == "stream_policy_blocked"
+    assert stream_policy["released_bytes"] > 0
+
+    assert [
+             %{
+               "called_provider" => true,
+               "mock" => false,
+               "provider_status" => provider_status
+             }
+           ] = stream_policy["attempts"]
+
+    assert provider_status in ["cancelled", "provider_error", "completed"]
   end
 
   test "openai-compatible stream targets parse SSE deltas from provider HTTP chunks" do
@@ -1973,6 +2400,16 @@ defmodule WardwrightTest do
     assert get_resp_header(conn, "content-type") == ["text/event-stream"]
     assert conn.resp_body =~ "hello "
     assert conn.resp_body =~ "world"
+
+    indexes =
+      conn.resp_body
+      |> String.split("\n\n", trim: true)
+      |> Enum.map(&(&1 |> String.trim_leading("data:") |> String.trim()))
+      |> Enum.reject(&(&1 == "[DONE]"))
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.map(&get_in(&1, ["choices", Access.at(0), "index"]))
+
+    assert indexes == [0, 0]
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
     receipt = Wardwright.ReceiptStore.get(receipt_id)

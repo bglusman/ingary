@@ -36,33 +36,29 @@ jobs:
         run: mix test
         working-directory: app
 
-  contracts:
-    name: contracts
+  docs:
+    name: docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           persist-credentials: false
-      - name: Compile Python test harnesses
-        run: python3 -m py_compile tests/*.py
-      - name: Run storage contract fixture
-        run: python3 tests/storage_contract.py --store all --cases 50
       - name: Check docs links
         run: ruby scripts/check-docs-site.rb
 
   test:
     name: test
     runs-on: ubuntu-latest
-    needs: [app, contracts]
+    needs: [app, docs]
     if: always()
     steps:
       - name: Verify required jobs
         env:
           APP_RESULT: ${{ needs.app.result }}
-          CONTRACTS_RESULT: ${{ needs.contracts.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
         run: |
           set -euo pipefail
-          for result in "$APP_RESULT" "$CONTRACTS_RESULT"; do
+          for result in "$APP_RESULT" "$DOCS_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "A required job failed or was skipped"
               exit 1

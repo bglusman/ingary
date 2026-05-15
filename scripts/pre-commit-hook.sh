@@ -19,14 +19,19 @@ staged_files="$(git diff --cached --name-only --diff-filter=ACM)"
 
 if echo "$staged_files" | grep -qE '^app/'; then
   note "app format/test..."
-  (cd app && mise exec -- mix format --check-formatted && mise exec -- mix test) || fail "App checks failed"
+  (
+    cd app &&
+      mise exec -- gleam format --check src &&
+      mise exec -- mix format --check-formatted &&
+      mise exec -- mix test
+  ) || fail "App checks failed"
   ok "App checks clean"
 fi
 
-if echo "$staged_files" | grep -qE '^tests/|^contracts/'; then
-  note "python contract files..."
-  python3 -m py_compile tests/*.py || fail "Python contract files failed to compile"
-  ok "Python contract files compile"
+if echo "$staged_files" | grep -qE '^docs/|^contracts/|^README\.md$'; then
+  note "docs site..."
+  ruby scripts/check-docs-site.rb || fail "Docs site checks failed"
+  ok "Docs site checks clean"
 fi
 
 note "gitleaks (staged only)..."

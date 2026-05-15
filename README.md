@@ -23,38 +23,10 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 
 - `contracts/openapi.yaml` - draft HTTP/OpenAI-compatible contract.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
-- `tests/contract_probe.py` - dependency-free cross-backend HTTP probe.
-- `tests/storage_contract.py` - executable storage/sink behavior fixture.
 - `app` - active Elixir/Phoenix LiveView application, including Gleam policy
   core modules under `app/src/wardwright`.
 - `docs/rfcs/wardwright-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `wardwright.dev`.
-
-## Shared Contract Probe
-
-Run the app on `127.0.0.1:8791`, then:
-
-```bash
-python3 tests/contract_probe.py \
-  --base-url http://127.0.0.1:8791 \
-  --fuzz-runs 50
-```
-
-The probe checks the common OpenAI-compatible and Wardwright-specific surface:
-
-- `GET /v1/models`
-- `GET /v1/synthetic/models`
-- `POST /v1/chat/completions`
-- `POST /v1/synthetic/simulate`
-- `GET /v1/receipts`
-- `GET /v1/receipts/{receipt_id}`
-- `GET /admin/providers`
-- `GET /admin/storage`
-- `GET /admin/runtime`
-- `GET /admin/synthetic-models`
-- flat and `wardwright/` model namespace variants
-- caller provenance and receipt fields
-- basic latency percentiles
 
 ## Current Test State
 
@@ -63,10 +35,10 @@ Dynamic generated model properties require the prototype-only
 is still being designed, but it is disabled by default outside tests. Enable it
 only for controlled local runs with `WARDWRIGHT_ALLOW_TEST_CONFIG=1`.
 
-Run the storage/sink reference fixture with:
+Run the active native suite with:
 
 ```bash
-python3 tests/storage_contract.py --store all --cases 50
+(cd app && mise exec -- mix format --check-formatted && mise exec -- mix test)
 ```
 
 ## Local Development
