@@ -62,6 +62,11 @@ into Wardwright-specific constraints.
   attempt sequence, stream offset, receipt event sequence.
 - If optionality matters, model it in the type or schema rather than relying on
   missing map keys deep in the call stack.
+- `mise run check:maps` enforces the current string-keyed/deep-map baseline for
+  Elixir core modules. New map access should usually be removed, moved to a
+  boundary adapter, or converted into structs/Gleam values. If the baseline must
+  increase, update it only with an explicit review note explaining why the shape
+  is intentionally open.
 
 ## Scope Rules
 
