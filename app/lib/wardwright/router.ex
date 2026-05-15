@@ -826,6 +826,8 @@ defmodule Wardwright.Router do
 
       policy.status == "stream_policy_retry_required" and
         retry_count < retry_budget and not stream_acc.sent? ->
+        {retry_request, reminder_injected?} = stream_retry_request(request, trigger_event)
+
         retry_event = %{
           "type" => "attempt.retry_requested",
           "attempt_index" => attempt_index,
@@ -833,11 +835,12 @@ defmodule Wardwright.Router do
           "retry_count" => retry_count + 1,
           "max_retries" => retry_budget,
           "rule_id" => Map.get(trigger_event, "rule_id"),
-          "reminder" => Map.get(trigger_event, "reminder")
+          "reminder" => Map.get(trigger_event, "reminder"),
+          "reminder_injected" => reminder_injected?
         }
 
         run_stream_runtime_attempt(
-          request,
+          retry_request,
           decision,
           rules,
           retry_budget,
@@ -1038,6 +1041,31 @@ defmodule Wardwright.Router do
   end
 
   defp stream_retry_budget(_trigger_event, active_retry_budget), do: active_retry_budget
+
+  defp stream_retry_request(request, %{"action" => "retry_with_reminder", "reminder" => reminder})
+       when is_binary(reminder) do
+    reminder = String.trim(reminder)
+
+    if reminder == "" do
+      {request, false}
+    else
+      message = %{
+        "role" => "system",
+        "name" => "wardwright_stream_policy_reminder",
+        "content" => reminder
+      }
+
+      request =
+        Map.update(request, "messages", [message], fn
+          messages when is_list(messages) -> messages ++ [message]
+          _other -> [message]
+        end)
+
+      {request, true}
+    end
+  end
+
+  defp stream_retry_request(request, _trigger_event), do: {request, false}
 
   defp provider_error_stream_policy(provider, retry_count, max_retries, attempts) do
     attempts =

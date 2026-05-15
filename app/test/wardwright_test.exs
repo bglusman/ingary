@@ -8,10 +8,15 @@ defmodule WardwrightTest.StreamingProvider do
     {:ok, body, conn} = Plug.Conn.read_body(conn)
 
     chunks =
-      if body =~ "safe prefix" do
-        ["safe prefix that can release ", "Old", "Client(arg) now"]
-      else
-        ["use Old", "Client(arg) now"]
+      cond do
+        body =~ "Use NewClient instead." ->
+          ["use NewClient(", "arg) now"]
+
+        body =~ "safe prefix" ->
+          ["safe prefix that can release ", "Old", "Client(arg) now"]
+
+        true ->
+          ["use Old", "Client(arg) now"]
       end
 
     conn =
@@ -2305,6 +2310,64 @@ defmodule WardwrightTest do
                "match_scope" => "stream_window"
              }
            ] = stream_policy["events"]
+  end
+
+  test "ollama stream retry_with_reminder injects the reminder into the next provider request" do
+    base_url = streaming_provider_base_url("/ollama")
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "ollama/live-test",
+          "context_window" => 256,
+          "provider_base_url" => base_url
+        }
+      ])
+      |> Map.put("governance", [])
+      |> Map.put("stream_rules", [
+        %{
+          "id" => "ollama-stream-reminder-retry",
+          "contains" => "OldClient(",
+          "action" => "retry_with_reminder",
+          "reminder" => "Use NewClient instead.",
+          "max_retries" => 1
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        stream: true,
+        messages: [%{role: "user", content: "stream code"}]
+      })
+
+    assert conn.status == 200
+    assert get_resp_header(conn, "content-type") == ["text/event-stream"]
+    assert conn.resp_body =~ "NewClient("
+    refute conn.resp_body =~ "OldClient("
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+
+    stream_policy =
+      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+
+    assert stream_policy["retry_count"] == 1
+    assert stream_policy["released_to_consumer"] == true
+
+    assert [
+             %{"status" => "stream_policy_retry_required", "released_to_consumer" => false},
+             %{"status" => "completed", "released_to_consumer" => true}
+           ] = stream_policy["attempts"]
+
+    assert Enum.any?(stream_policy["events"], fn event ->
+             event["type"] == "attempt.retry_requested" and
+               event["rule_id"] == "ollama-stream-reminder-retry" and
+               event["reminder"] == "Use NewClient instead." and
+               event["reminder_injected"] == true
+           end)
   end
 
   test "ollama stream targets release bounded safe bytes before cancelling on a later trigger" do
