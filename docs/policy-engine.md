@@ -68,6 +68,9 @@ needs unless the synthetic model asks for more.
    - Inputs: request facts, candidate routes, provider health, scoped counters.
    - Useful for route gates, budget-aware routing, model capability checks.
    - May return route overrides or approval requirements.
+   - Current implementation supports `restrict_routes`, `switch_model`, and
+     `reroute` as planner constraints recorded in receipts as
+     `policy_route_constraints`.
 
 3. **response.streaming**
    - Inputs: normalized stream events plus bounded ring buffer.
@@ -390,6 +393,8 @@ Initial actions should be small and composable:
 - `inject_reminder`
 - `retry_with_reminder`
 - `reroute`
+- `restrict_routes`
+- `switch_model`
 - `block_final`
 - `require_human_approval`
 

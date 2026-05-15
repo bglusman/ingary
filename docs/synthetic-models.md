@@ -58,6 +58,24 @@ Expected behavior:
 - prompt estimate above `32768` and below `262144`: select `managed/kimi`, record
   that `local/qwen` was skipped for context fit
 
+## Policy Control
+
+The route graph is the baseline model definition. Route policy runs before
+provider selection and can narrow or override that baseline:
+
+- `restrict_routes` adds an `allowed_targets` constraint. Entries may be concrete
+  model IDs such as `local/qwen` or provider prefixes such as `local`.
+- `switch_model` and `reroute` add a `forced_model` constraint.
+- receipts include both the base route decision and `policy_route_constraints`,
+  so the UI can show "what the model definition allowed" separately from "what
+  policy removed or forced for this request."
+- if policy removes every provider candidate, Wardwright fails closed and records
+  `route_blocked` in the receipt instead of falling through to an arbitrary
+  provider.
+
+Built-in declarative route gates and Dune-backed policy snippets can both emit
+these actions. WASM remains fail-closed until the runtime is enabled.
+
 ## Cascade
 
 Cascades are reliability plans. They preserve declaration order and skip

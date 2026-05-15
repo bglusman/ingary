@@ -11,12 +11,26 @@ defmodule Wardwright.RoutePlanner do
   """
 
   def select(config, estimated_prompt_tokens, attrs \\ %{}) when is_map(config) do
-    targets = target_index(Map.get(config, "targets", []))
+    targets =
+      config
+      |> Map.get("targets", [])
+      |> filter_targets(Map.get(attrs, "allowed_targets"))
+      |> target_index()
 
-    config
-    |> root_selector()
-    |> select_selector(config, targets, max(1, estimated_prompt_tokens), attrs)
+    forced_model = Map.get(attrs, "forced_model")
+
+    decision =
+      if forced_model in [nil, ""] do
+        config
+        |> root_selector()
+        |> select_selector(config, targets, max(1, estimated_prompt_tokens), attrs)
+      else
+        select_forced_model(forced_model, targets, max(1, estimated_prompt_tokens))
+      end
+
+    decision
     |> Map.put(:estimated_prompt_tokens, max(1, estimated_prompt_tokens))
+    |> Map.put(:policy_route_constraints, route_constraints(attrs))
   end
 
   def validate(config) when is_map(config) do
@@ -87,6 +101,44 @@ defmodule Wardwright.RoutePlanner do
       skipped: skipped,
       reason: dispatcher_reason(skipped, selected),
       rule: "select the smallest configured context window that fits the estimated prompt"
+    })
+  end
+
+  defp select_forced_model(model, targets, estimated) do
+    selected = Map.get(targets, model)
+    skipped = targets |> Map.delete(model) |> Map.values() |> Enum.map(&policy_skip/1)
+
+    selected =
+      cond do
+        selected == nil -> largest_known_model(targets)
+        selected["context_window"] < estimated -> largest_known_model(targets)
+        true -> selected
+      end
+
+    reason =
+      cond do
+        Map.has_key?(targets, model) and selected["model"] == model ->
+          "policy forced selected model"
+
+        Map.has_key?(targets, model) ->
+          "policy forced model was too small for estimated prompt"
+
+        true ->
+          "policy forced model was not in the allowed route set"
+      end
+
+    selected_models = selected_models(selected, if(selected, do: [selected], else: []))
+
+    decision(selected, %{
+      route_type: "policy_override",
+      route_id: "policy.forced_model",
+      combine_strategy: "policy_forced_model",
+      selected_models: selected_models,
+      fallback_models: [],
+      skipped: skipped,
+      fallback_used: selected == nil or selected["model"] != model,
+      reason: reason,
+      rule: "apply policy route override before provider selection"
     })
   end
 
@@ -246,6 +298,14 @@ defmodule Wardwright.RoutePlanner do
     }
   end
 
+  defp policy_skip(model) do
+    %{
+      "target" => model["model"],
+      "reason" => "policy_route_gate",
+      "context_window" => model["context_window"]
+    }
+  end
+
   defp selected_models(nil, eligible), do: Enum.map(eligible, & &1["model"])
   defp selected_models(selected, []), do: [selected["model"]]
   defp selected_models(_selected, eligible), do: Enum.map(eligible, & &1["model"])
@@ -257,6 +317,7 @@ defmodule Wardwright.RoutePlanner do
     |> Map.put(:selected_model, selected_model)
     |> Map.put(:selected_provider, selected_model |> String.split("/", parts: 2) |> List.first())
     |> Map.put_new(:fallback_used, false)
+    |> Map.put(:route_blocked, selected == nil)
   end
 
   defp dispatcher_reason([], _selected), do: "estimated prompt fits selected context window"
@@ -300,6 +361,40 @@ defmodule Wardwright.RoutePlanner do
 
   defp target_index(targets) do
     Map.new(targets, fn target -> {target["model"], target} end)
+  end
+
+  defp filter_targets(targets, allowed_targets) when is_list(allowed_targets) do
+    allowed_targets =
+      allowed_targets
+      |> Enum.map(&to_string/1)
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if allowed_targets == [] do
+      targets
+    else
+      Enum.filter(targets, &target_allowed?(&1, allowed_targets))
+    end
+  end
+
+  defp filter_targets(targets, _allowed_targets), do: targets
+
+  defp target_allowed?(target, allowed_targets) do
+    model = target["model"]
+    provider = model |> String.split("/", parts: 2) |> List.first()
+
+    Enum.any?(allowed_targets, fn allowed ->
+      allowed == model or allowed == provider or String.starts_with?(model, allowed <> "/")
+    end)
+  end
+
+  defp route_constraints(attrs) do
+    %{
+      "allowed_targets" => Map.get(attrs, "allowed_targets"),
+      "forced_model" => Map.get(attrs, "forced_model")
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+    |> Map.new()
   end
 
   defp models_for(selector, targets, key) do

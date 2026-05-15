@@ -296,6 +296,197 @@ defmodule WardwrightTest do
            ] = get_in(body, ["receipt", "decision", "policy_actions"])
   end
 
+  test "route gate policy constrains planner candidates before provider selection" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "local/qwen", "context_window" => 32},
+        %{"model" => "managed/kimi", "context_window" => 256}
+      ])
+      |> Map.put("governance", [
+        %{
+          "id" => "private-local-only",
+          "kind" => "route_gate",
+          "action" => "restrict_routes",
+          "contains" => "private",
+          "allowed_targets" => ["local"],
+          "message" => "private context must stay local"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "private notes, summarize briefly"}]
+        }
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "decision", "selected_model"]) == "local/qwen"
+
+    assert get_in(body, ["receipt", "decision", "policy_route_constraints"]) == %{
+             "allowed_targets" => ["local"]
+           }
+
+    assert [
+             %{
+               "rule_id" => "private-local-only",
+               "kind" => "route_gate",
+               "action" => "restrict_routes",
+               "allowed_targets" => ["local"]
+             }
+           ] = get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "route gate policy fails closed when it removes every provider candidate" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "impossible-route",
+          "kind" => "route_gate",
+          "action" => "restrict_routes",
+          "contains" => "private",
+          "allowed_targets" => ["nonexistent-provider"]
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "private"}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["wardwright", "status"]) == "policy_failed_closed"
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert get_in(receipt, ["decision", "route_blocked"]) == true
+    assert get_in(receipt, ["decision", "selected_model"]) == "unconfigured/no-target"
+
+    assert get_in(receipt, ["decision", "policy_route_constraints"]) == %{
+             "allowed_targets" => ["nonexistent-provider"]
+           }
+  end
+
+  test "route gate policy can force a specific model through a route override" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "deep-reasoning",
+          "kind" => "route_gate",
+          "action" => "switch_model",
+          "contains" => "hard proof",
+          "target_model" => "large/model",
+          "message" => "use the strongest configured model"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "hard proof"}]
+        }
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "decision", "route_type"]) == "policy_override"
+    assert get_in(body, ["receipt", "decision", "selected_model"]) == "large/model"
+
+    assert get_in(body, ["receipt", "decision", "policy_route_constraints"]) == %{
+             "forced_model" => "large/model"
+           }
+  end
+
+  test "Dune policy engine can return route constraints used by the planner" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "local/qwen", "context_window" => 32},
+        %{"model" => "managed/kimi", "context_window" => 256}
+      ])
+      |> Map.put("governance", [
+        %{
+          "id" => "dune-route-gate",
+          "kind" => "route_gate",
+          "engine" => "dune",
+          "source" =>
+            ~s(%{"action" => "restrict_routes", "allowed_targets" => ["local"], "reason" => "private route gate"})
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/synthetic/simulate", %{
+        request: %{
+          model: "unit-model",
+          messages: [%{role: "user", content: "small request"}]
+        }
+      })
+
+    assert conn.status == 200
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "decision", "selected_model"]) == "local/qwen"
+
+    assert get_in(body, ["receipt", "decision", "policy_route_constraints"]) == %{
+             "allowed_targets" => ["local"]
+           }
+
+    assert [%{"rule_id" => "dune-route-gate", "action" => "restrict_routes"}] =
+             get_in(body, ["receipt", "decision", "policy_actions"])
+  end
+
+  test "policy engine errors fail closed before provider invocation" do
+    config =
+      unit_policy_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "unavailable-wasm-policy",
+          "kind" => "route_gate",
+          "engine" => "wasm"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        messages: [%{role: "user", content: "hello"}]
+      })
+
+    assert conn.status == 429
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["wardwright", "status"]) == "policy_failed_closed"
+    receipt = body |> get_in(["wardwright", "receipt_id"]) |> Wardwright.ReceiptStore.get()
+
+    assert [
+             %{
+               "rule_id" => "unavailable-wasm-policy",
+               "kind" => "route_gate",
+               "action" => "block"
+             }
+           ] = get_in(receipt, ["decision", "policy_actions"])
+  end
+
   test "structured output guard retries canned provider outputs and records guard receipts" do
     config =
       structured_policy_config(
