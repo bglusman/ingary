@@ -1,6 +1,6 @@
 # Wardwright
 
-Wardwright is an experimental synthetic model platform extracted from Calciforge's
+Wardwright is an experimental synthetic model platform generalized and extended from related ideas in Calciforge's
 model-gateway work.
 
 The core idea: clients call stable model names such as `coding-balanced` or
@@ -28,7 +28,7 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `app` - active Elixir/Phoenix LiveView application, including Gleam policy
   core modules under `app/src/wardwright`.
 - `docs/rfcs/wardwright-extraction.md` - product and architecture draft.
-- `docs/` - public docs site for `wardwright.org`.
+- `docs/` - public docs site for `wardwright.dev`.
 
 ## Shared Contract Probe
 
@@ -57,10 +57,6 @@ The probe checks the common OpenAI-compatible and Wardwright-specific surface:
 - basic latency percentiles
 
 ## Current Test State
-
-The old Go and Rust backend prototypes remain available in git history, but
-they are no longer part of the live tree or local verification gate. The active
-backend is `app`.
 
 Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. It exists while the production configuration API
