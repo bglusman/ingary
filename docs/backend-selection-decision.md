@@ -12,8 +12,7 @@ implementation should focus on **Elixir plus Gleam on the BEAM**.
 
 The project was called Ingary during the bakeoff. Wardwright is the tentative
 product name going forward. Repository, API namespace, and Elixir module names
-now use Wardwright; `docs/CNAME` intentionally remains on `ingary.org` until the
-domain migration is ready.
+now use Wardwright; GitHub Pages is configured for `wardwright.dev`.
 
 ## Decision
 

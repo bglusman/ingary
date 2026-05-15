@@ -95,5 +95,5 @@ Near-term work:
 
 Wardwright is the tentative product name. The old working name, Ingary, was easy
 to confuse and hard to remember. Code identifiers, protocol examples, and the
-repository name now use `wardwright`; `docs/CNAME` intentionally remains on
-`ingary.org` until the domain migration is ready.
+repository name now use `wardwright`; public project pages now use
+`wardwright.dev`.
