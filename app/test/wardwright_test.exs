@@ -560,6 +560,29 @@ defmodule WardwrightTest do
            ] = get_in(receipt, ["decision", "policy_actions"])
   end
 
+  test "hybrid policy reports policy blocks separately from engine failures" do
+    assert %{
+             "engine" => "hybrid",
+             "status" => "ok",
+             "action" => "block",
+             "actions" => [%{"rule_id" => "primitive-deny", "action" => "block"}]
+           } =
+             Wardwright.Policy.Engine.evaluate(
+               %{
+                 "engine" => "hybrid",
+                 "engines" => [
+                   %{
+                     "engine" => "primitive",
+                     "rules" => [
+                       %{"id" => "primitive-deny", "contains" => "deny me", "action" => "block"}
+                     ]
+                   }
+                 ]
+               },
+               %{"request_text" => "please deny me"}
+             )
+  end
+
   test "policy engine errors fail closed before provider invocation" do
     config =
       unit_policy_config()

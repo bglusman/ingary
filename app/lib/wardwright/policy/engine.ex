@@ -19,16 +19,18 @@ defmodule Wardwright.Policy.Engine do
   def evaluate(%{"engine" => "hybrid", "engines" => engines}, context) when is_list(engines) do
     results = Enum.map(engines, &evaluate(&1, context))
 
-    blocking =
-      Enum.find(results, fn result ->
-        Map.get(result, "action") == "block" or Map.get(result, "status") == "error" or
+    engine_failed? = Enum.any?(results, &(Map.get(&1, "status") == "error"))
+
+    blocking? =
+      Enum.any?(results, fn result ->
+        Map.get(result, "action") == "block" or
           Enum.any?(result_actions(result), &(Map.get(&1, "action") == "block"))
       end)
 
     %{
       "engine" => "hybrid",
-      "status" => if(blocking, do: "error", else: "ok"),
-      "action" => if(blocking, do: "block", else: "allow"),
+      "status" => if(engine_failed?, do: "error", else: "ok"),
+      "action" => if(engine_failed? or blocking?, do: "block", else: "allow"),
       "actions" => Enum.flat_map(results, &result_actions/1),
       "results" => results
     }
