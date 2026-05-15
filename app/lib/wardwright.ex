@@ -28,6 +28,16 @@ defmodule Wardwright do
         %{"model" => @local_model, "context_window" => @local_context_window},
         %{"model" => @managed_model, "context_window" => @managed_context_window}
       ],
+      "route_root" => "dispatcher.prompt_length",
+      "dispatchers" => [
+        %{
+          "id" => "dispatcher.prompt_length",
+          "name" => "Use local until prompt length requires managed context",
+          "models" => [@local_model, @managed_model]
+        }
+      ],
+      "cascades" => [],
+      "alloys" => [],
       "stream_rules" => [%{"id" => "mock_noop", "pattern" => "", "action" => "pass"}],
       "prompt_transforms" => %{},
       "structured_output" => nil,
@@ -77,47 +87,11 @@ defmodule Wardwright do
   def normalize_model(_), do: {:error, "model is required"}
 
   def select_route(estimated_prompt_tokens) do
-    targets =
-      current_config()
-      |> Map.get("targets", [])
-      |> Enum.sort_by(fn target -> {target["context_window"], target["model"]} end)
+    Wardwright.RoutePlanner.select(current_config(), estimated_prompt_tokens)
+  end
 
-    {selected, skipped} =
-      Enum.reduce_while(targets, {List.last(targets), []}, fn target, {_selected, skipped} ->
-        if target["context_window"] >= estimated_prompt_tokens do
-          {:halt, {target, skipped}}
-        else
-          skipped = [
-            %{
-              "target" => target["model"],
-              "reason" => "context_window_too_small",
-              "context_window" => target["context_window"]
-            }
-            | skipped
-          ]
-
-          {:cont, {target, skipped}}
-        end
-      end)
-
-    selected_model =
-      case selected do
-        %{"model" => model} -> model
-        _ -> "unconfigured/no-target"
-      end
-
-    %{
-      selected_model: selected_model,
-      selected_provider: selected_model |> String.split("/", parts: 2) |> List.first(),
-      estimated_prompt_tokens: estimated_prompt_tokens,
-      skipped: Enum.reverse(skipped),
-      reason:
-        if skipped == [] do
-          "estimated prompt fits selected context window"
-        else
-          "estimated prompt exceeded smaller configured context windows"
-        end
-    }
+  def select_route(estimated_prompt_tokens, attrs) when is_map(attrs) do
+    Wardwright.RoutePlanner.select(current_config(), estimated_prompt_tokens, attrs)
   end
 
   def estimate_prompt_tokens(messages) when is_list(messages) do
@@ -156,14 +130,7 @@ defmodule Wardwright do
     target_ids = Enum.map(targets, &node_id(&1["model"]))
 
     nodes =
-      [
-        %{
-          "id" => "dispatcher.prompt_length",
-          "type" => "dispatcher",
-          "targets" => target_ids,
-          "strategy" => "estimated_prompt_length"
-        }
-      ] ++
+      selector_nodes(config, target_ids) ++
         Enum.map(targets, fn target ->
           %{
             "id" => node_id(target["model"]),
@@ -178,15 +145,15 @@ defmodule Wardwright do
       "id" => config["synthetic_model"],
       "public_model_id" => config["synthetic_model"],
       "active_version" => config["version"],
-      "description" => "Mock coding assistant synthetic model with prompt-length dispatch.",
+      "description" => "Mock coding assistant synthetic model with composable route selectors.",
       "public_namespace" => "flat",
-      "route_type" => "dispatcher",
+      "route_type" => root_route_type(config),
       "status" => "active",
       "traffic_24h" => 0,
       "fallback_rate" => 0.0,
       "stream_trigger_count_24h" => 0,
       "route_graph" => %{
-        "root" => "dispatcher.prompt_length",
+        "root" => Map.get(config, "route_root", "dispatcher.prompt_length"),
         "nodes" => nodes
       },
       "stream_policy" => %{
@@ -198,6 +165,71 @@ defmodule Wardwright do
       "structured_output" => Map.get(config, "structured_output"),
       "governance" => Map.get(config, "governance", [])
     }
+  end
+
+  defp selector_nodes(config, default_target_ids) do
+    dispatchers =
+      config
+      |> Map.get("dispatchers", [])
+      |> case do
+        [] -> [%{"id" => "dispatcher.prompt_length", "models" => default_target_ids}]
+        configured -> configured
+      end
+      |> Enum.map(fn dispatcher ->
+        %{
+          "id" => dispatcher["id"],
+          "type" => "dispatcher",
+          "targets" => selector_target_ids(dispatcher, "models"),
+          "strategy" => "smallest_context_window"
+        }
+      end)
+
+    cascades =
+      config
+      |> Map.get("cascades", [])
+      |> Enum.map(fn cascade ->
+        %{
+          "id" => cascade["id"],
+          "type" => "cascade",
+          "targets" => selector_target_ids(cascade, "models"),
+          "strategy" => "ordered_fallback"
+        }
+      end)
+
+    alloys =
+      config
+      |> Map.get("alloys", [])
+      |> Enum.map(fn alloy ->
+        %{
+          "id" => alloy["id"],
+          "type" => "alloy",
+          "targets" => selector_target_ids(alloy, "constituents"),
+          "strategy" => Map.get(alloy, "strategy", "weighted"),
+          "partial_context" => Map.get(alloy, "partial_context", false)
+        }
+      end)
+
+    dispatchers ++ cascades ++ alloys
+  end
+
+  defp selector_target_ids(selector, key) do
+    selector
+    |> Map.get(key, Map.get(selector, "targets", []))
+    |> Enum.map(fn
+      model when is_binary(model) -> node_id(model)
+      %{"model" => model} -> node_id(model)
+      other -> node_id(to_string(other))
+    end)
+  end
+
+  defp root_route_type(config) do
+    root = Map.get(config, "route_root", "dispatcher.prompt_length")
+
+    cond do
+      Enum.any?(Map.get(config, "alloys", []), &(&1["id"] == root)) -> "alloy"
+      Enum.any?(Map.get(config, "cascades", []), &(&1["id"] == root)) -> "cascade"
+      true -> "dispatcher"
+    end
   end
 
   def providers do
@@ -310,6 +342,18 @@ defmodule Wardwright do
           |> Enum.reject(fn {_key, value} -> value == "" or value == [] end)
           |> Map.new()
         end),
+      "route_root" =>
+        config
+        |> Map.get("route_root", "dispatcher.prompt_length")
+        |> to_string()
+        |> String.trim()
+        |> then(fn
+          "" -> "dispatcher.prompt_length"
+          route_root -> route_root
+        end),
+      "dispatchers" => normalize_selectors(Map.get(config, "dispatchers", []), "models"),
+      "cascades" => normalize_selectors(Map.get(config, "cascades", []), "models"),
+      "alloys" => normalize_selectors(Map.get(config, "alloys", []), "constituents"),
       "stream_rules" => Map.get(config, "stream_rules", []),
       "prompt_transforms" => Map.get(config, "prompt_transforms", %{}),
       "structured_output" => Map.get(config, "structured_output"),
@@ -323,6 +367,49 @@ defmodule Wardwright do
     do: Enum.map(outputs, &to_string/1)
 
   defp normalize_canned_outputs(_), do: []
+
+  defp normalize_selectors(selectors, model_key) when is_list(selectors) do
+    Enum.map(selectors, fn selector ->
+      %{
+        "id" => selector |> Map.get("id", "") |> to_string() |> String.trim(),
+        "name" => selector |> Map.get("name", "") |> to_string() |> String.trim(),
+        "strategy" => selector |> Map.get("strategy", "") |> to_string() |> String.trim(),
+        "partial_context" => Map.get(selector, "partial_context", false) == true,
+        "min_context_window" => integer_value(Map.get(selector, "min_context_window")),
+        "fallback_model" =>
+          selector |> Map.get("fallback_model", "") |> to_string() |> String.trim(),
+        model_key =>
+          normalize_selector_models(
+            Map.get(selector, model_key, Map.get(selector, "targets", []))
+          )
+      }
+      |> Enum.reject(fn {_key, value} -> value in ["", nil, []] end)
+      |> Map.new()
+    end)
+  end
+
+  defp normalize_selectors(_selectors, _model_key), do: []
+
+  defp normalize_selector_models(models) when is_list(models) do
+    Enum.map(models, fn
+      model when is_binary(model) ->
+        String.trim(model)
+
+      model when is_map(model) ->
+        %{
+          "model" => model |> Map.get("model", "") |> to_string() |> String.trim(),
+          "context_window" => integer_value(Map.get(model, "context_window")),
+          "weight" => integer_value(Map.get(model, "weight"))
+        }
+        |> Enum.reject(fn {_key, value} -> value in ["", nil] end)
+        |> Map.new()
+
+      model ->
+        to_string(model)
+    end)
+  end
+
+  defp normalize_selector_models(_models), do: []
 
   defp normalize_alert_delivery(config) when is_map(config) do
     %{
@@ -346,7 +433,7 @@ defmodule Wardwright do
 
   defp normalize_policy_cache(_), do: %{"max_entries" => 64, "recent_limit" => 20}
 
-  defp validate_config(%{"synthetic_model" => synthetic_model, "targets" => targets}) do
+  defp validate_config(config = %{"synthetic_model" => synthetic_model, "targets" => targets}) do
     cond do
       synthetic_model == "" ->
         {:error, "synthetic_model must not be empty"}
@@ -358,7 +445,9 @@ defmodule Wardwright do
         {:error, "targets must not be empty"}
 
       true ->
-        validate_targets(targets)
+        with :ok <- validate_targets(targets) do
+          Wardwright.RoutePlanner.validate(config)
+        end
     end
   end
 

@@ -727,13 +727,18 @@ defmodule Wardwright.Router do
         "structured_output" => Wardwright.current_config()["structured_output"]
       },
       "decision" => %{
-        "strategy" => "estimated_prompt_length",
+        "strategy" => decision.combine_strategy,
+        "route_type" => decision.route_type,
+        "route_id" => decision.route_id,
         "selected_provider" => decision.selected_provider,
         "selected_model" => decision.selected_model,
+        "selected_models" => decision.selected_models,
+        "fallback_models" => decision.fallback_models,
+        "fallback_used" => decision.fallback_used,
         "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
         "skipped" => decision.skipped,
         "reason" => decision.reason,
-        "rule" => "select the smallest configured context window that fits the estimated prompt",
+        "rule" => decision.rule,
         "governance" => Wardwright.current_config()["governance"],
         "policy_actions" => policy["actions"]
       },

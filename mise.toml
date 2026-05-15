@@ -24,6 +24,7 @@ run = [
   "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/structured_output.ex' --test-paths 'test/wardwright_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
   "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy/stream.ex' --test-paths 'test/wardwright_test.exs' --fail-at 100",
   "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/policy_cache.ex' --test-paths 'test/wardwright_test.exs,test/bakeoff_oracle_property_test.exs' --fail-at 100",
+  "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/route_planner.ex' --test-paths 'test/wardwright_test.exs' --fail-at 100",
   "cd app && MIX_ENV=test mix muex --files 'lib/wardwright/router.ex' --test-paths 'test/wardwright_test.exs,test/runtime_visibility_test.exs' --max-mutations 40 --fail-at 100",
 ]
 

@@ -8,6 +8,11 @@ The core idea: clients call stable model names such as `coding-balanced` or
 provider selection, context-window fit checks, fallback policy, stream
 governance, caller traceability, and receipts explaining every decision.
 
+The product is explicitly inspired by model-alloy work on alternating multiple
+LLMs inside one agent context, plus oh-my-pi's TTSR pattern of stream-triggered
+rule injection. Wardwright's first composition primitives are dispatchers,
+cascades, and alloys; see `docs/synthetic-models.md`.
+
 This repository used to keep multiple backend prototypes alive while Wardwright
 selected a production foundation through shared contracts and measurable
 behavior. The active implementation direction is now BEAM-first: Elixir owns

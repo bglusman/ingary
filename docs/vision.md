@@ -35,6 +35,14 @@ as shareable artifacts:
 The key distinction is that the public model name is not just an alias for one
 provider model. It is a governed contract.
 
+Wardwright has two major inspirations. XBOW's model-alloy idea motivates
+synthetic models that can combine multiple LLMs into one coherent agent-facing
+behavior instead of treating "model" as a single provider ID. oh-my-pi's
+Time Traveling Streamed Rules motivate output-stream governance that starts with
+zero prompt-context cost, then aborts and retries only when the model begins to
+emit a triggering pattern. See [Synthetic Model Composition](synthetic-models.html)
+for the route primitives and source links.
+
 ## Requirements Direction
 
 The first product audience is technical policy authors: people who can reason
