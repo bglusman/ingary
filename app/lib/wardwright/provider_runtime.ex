@@ -102,6 +102,7 @@ defmodule Wardwright.ProviderRuntime do
             send(task.pid, {stream_ref, :cancel})
 
             Task.yield(task, 500) || Task.shutdown(task, :brutal_kill)
+            drain_stream_messages(stream_ref, task.ref)
 
             {{:halted, :cancelled}, acc}
         end
@@ -113,16 +114,34 @@ defmodule Wardwright.ProviderRuntime do
           0 -> :ok
         end
 
+        drain_stream_messages(stream_ref, task.ref)
         {result, acc}
 
       {:DOWN, ref, :process, _pid, reason} when ref == task.ref ->
+        drain_stream_messages(stream_ref, task.ref)
         {{:error, "provider task exited: #{inspect(reason)}"}, acc}
     after
       timeout_ms ->
         result = Task.shutdown(task, :brutal_kill)
+        drain_stream_messages(stream_ref, task.ref)
 
         {normalize_task_result(result) || {:error, "provider timed out after #{timeout_ms}ms"},
          acc}
+    end
+  end
+
+  defp drain_stream_messages(stream_ref, task_ref) do
+    receive do
+      {^stream_ref, :chunk, _chunk} ->
+        drain_stream_messages(stream_ref, task_ref)
+
+      {^task_ref, _result} ->
+        drain_stream_messages(stream_ref, task_ref)
+
+      {:DOWN, ^task_ref, :process, _pid, _reason} ->
+        drain_stream_messages(stream_ref, task_ref)
+    after
+      0 -> :ok
     end
   end
 

@@ -55,7 +55,8 @@ defmodule WardwrightTest.StreamingProvider do
         {:ok, conn} =
           Plug.Conn.chunk(
             conn,
-            "data: " <>
+            "event: completion.delta\n" <>
+              "data:" <>
               Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "world"}}]}) <>
               "\n\n"
           )
@@ -2083,6 +2084,49 @@ defmodule WardwrightTest do
     assert get_in(receipt, ["final", "provider_error"]) == "synthetic stream failure"
   end
 
+  test "provider runtime drains queued chunks after policy halt" do
+    parent = self()
+
+    task =
+      Task.async(fn ->
+        target = %{"model" => "test/provider", "provider_timeout_ms" => 1_000}
+
+        result =
+          Wardwright.ProviderRuntime.stream_each(
+            target,
+            %{},
+            fn emit ->
+              Enum.each(1..50, fn index -> emit.("chunk #{index}") end)
+              send(parent, :provider_emitted_chunks)
+              Process.sleep(50)
+              {:ok, :done}
+            end,
+            0,
+            fn _chunk, acc -> {:halt, acc + 1} end
+          )
+
+        Process.sleep(10)
+        {result, Process.info(self(), :messages)}
+      end)
+
+    assert {{{:halted, :cancelled}, 1}, {:messages, []}} = Task.await(task)
+    assert_receive :provider_emitted_chunks
+  end
+
+  test "mock stream cancellation is recorded as mock without provider call" do
+    request = %{"model" => "unit-model", "stream" => true}
+
+    {provider, acc} =
+      Wardwright.stream_selected_model_each("missing/model", request, [], fn chunk, acc ->
+        {:halt, acc ++ [chunk]}
+      end)
+
+    assert provider.status == "cancelled"
+    assert provider.called_provider == false
+    assert provider.mock == true
+    assert acc == ["Mock Wardwright stream "]
+  end
+
   test "stream rewrite rules can match across provider chunk boundaries" do
     config =
       unit_policy_config()
@@ -2356,6 +2400,16 @@ defmodule WardwrightTest do
     assert get_resp_header(conn, "content-type") == ["text/event-stream"]
     assert conn.resp_body =~ "hello "
     assert conn.resp_body =~ "world"
+
+    indexes =
+      conn.resp_body
+      |> String.split("\n\n", trim: true)
+      |> Enum.map(&(&1 |> String.trim_leading("data:") |> String.trim()))
+      |> Enum.reject(&(&1 == "[DONE]"))
+      |> Enum.map(&Jason.decode!/1)
+      |> Enum.map(&get_in(&1, ["choices", Access.at(0), "index"]))
+
+    assert indexes == [0, 0]
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
     receipt = Wardwright.ReceiptStore.get(receipt_id)

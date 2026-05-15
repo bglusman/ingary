@@ -330,7 +330,7 @@ defmodule Wardwright do
             chunk_fun
           )
 
-        stream_each_outcome(acc, result, started)
+        stream_each_outcome(acc, result, started, false, true)
 
       target ->
         {result, acc} =
@@ -342,7 +342,13 @@ defmodule Wardwright do
             chunk_fun
           )
 
-        stream_each_outcome(acc, result, started)
+        stream_each_outcome(
+          acc,
+          result,
+          started,
+          provider_kind(target) != "mock",
+          provider_kind(target) == "mock"
+        )
     end
   end
 
@@ -1059,8 +1065,7 @@ defmodule Wardwright do
     Enum.each(events, fn event ->
       event
       |> String.split(["\r\n", "\n"], trim: true)
-      |> Enum.filter(&String.starts_with?(&1, "data: "))
-      |> Enum.map(fn "data: " <> data -> String.trim(data) end)
+      |> Enum.flat_map(&sse_data_values/1)
       |> Enum.each(fn
         "[DONE]" ->
           :ok
@@ -1082,6 +1087,9 @@ defmodule Wardwright do
 
     {:sse, pending}
   end
+
+  defp sse_data_values("data:" <> data), do: [String.trim(data)]
+  defp sse_data_values(_line), do: []
 
   defp split_stream_lines(buffer) do
     parts = String.split(buffer, ["\r\n", "\n"])
@@ -1263,14 +1271,23 @@ defmodule Wardwright do
     end)
   end
 
-  defp stream_each_outcome(acc, result, started) do
+  defp stream_each_outcome(acc, result, started, called_provider, mock) do
     provider =
       case result do
-        {:ok, _} -> provider_outcome(nil, "completed", started, nil, true, false)
-        {:mock, _} -> provider_outcome(nil, "completed", started, nil, false, true)
-        {:halted, _} -> provider_outcome(nil, "cancelled", started, nil, true, false)
-        {:error, reason} -> provider_outcome(nil, "provider_error", started, reason, true, false)
-        _ -> provider_outcome(nil, "provider_error", started, inspect(result), true, false)
+        {:ok, _} ->
+          provider_outcome(nil, "completed", started, nil, true, false)
+
+        {:mock, _} ->
+          provider_outcome(nil, "completed", started, nil, false, true)
+
+        {:halted, _} ->
+          provider_outcome(nil, "cancelled", started, nil, called_provider, mock)
+
+        {:error, reason} ->
+          provider_outcome(nil, "provider_error", started, reason, called_provider, mock)
+
+        _ ->
+          provider_outcome(nil, "provider_error", started, inspect(result), called_provider, mock)
       end
 
     {provider, acc}

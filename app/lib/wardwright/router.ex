@@ -963,7 +963,7 @@ defmodule Wardwright.Router do
         "object" => "chat.completion.chunk",
         "created" => System.system_time(:second),
         "model" => Map.get(acc.request, "model"),
-        "choices" => [%{"index" => length(acc.chunks), "delta" => %{"content" => text}}]
+        "choices" => [%{"index" => 0, "delta" => %{"content" => text}}]
       }
 
       {:ok, conn} = chunk(acc.conn, "data: #{Jason.encode!(payload)}\n\n")
