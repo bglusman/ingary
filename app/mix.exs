@@ -29,6 +29,7 @@ defmodule Wardwright.MixProject do
       {:phoenix_live_view, "~> 1.0"},
       {:plug_cowboy, "~> 2.7"},
       {:lazy_html, ">= 0.1.0", only: :test},
+      {:muex, "~> 0.6.1", only: :test},
       {:stream_data, "~> 1.3", only: :test}
     ]
   end

@@ -8,19 +8,15 @@ run = "cd app && mix format --check-formatted && mix test"
 
 [tasks."check:contracts"]
 description = "Run shared Python contract/storage checks that do not need live servers"
-run = "uv run python -m py_compile tests/*.py && uv run python tests/storage_contract.py --store all --cases 50 && uv run pytest -m 'not backend and not live_llm' tests/test_bakeoff_*.py"
-
-[tasks."bakeoff:test:pure"]
-description = "Run shared bakeoff BDD/property tests that do not need live backends"
-run = "uv run pytest -m 'not backend and not live_llm' tests/test_bakeoff_*.py"
-
-[tasks."bakeoff:test:backend"]
-description = "Run shared bakeoff BDD/property tests against a live backend"
-run = "uv run pytest -m 'backend and not live_llm' tests/test_bakeoff_*.py"
+run = "uv run python -m py_compile tests/*.py && uv run python tests/storage_contract.py --store all --cases 50"
 
 [tasks.check]
 description = "Run all baseline checks"
 depends = ["check:app", "check:contracts"]
+
+[tasks."mutation:app"]
+description = "Run a bounded Muex mutation sample for the Wardwright app"
+run = "cd app && MIX_ENV=test mix muex --max-mutations 30 --fail-at 0"
 
 [tasks."run:app"]
 description = "Run app on 127.0.0.1:8791"

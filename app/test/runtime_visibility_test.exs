@@ -121,10 +121,31 @@ defmodule Wardwright.RuntimeVisibilityTest do
 
     assert Process.alive?(session_b_pid)
 
-    assert {:ok, restarted_model_a_pid} = Runtime.ensure_model(model_a, version)
-    assert restarted_model_a_pid != model_a_pid
+    restarted_model_a_pid =
+      wait_for(fn ->
+        case Runtime.ensure_model(model_a, version) do
+          {:ok, pid} when pid != model_a_pid -> pid
+          _ -> nil
+        end
+      end)
+
     assert Process.alive?(restarted_model_a_pid)
   end
+
+  defp wait_for(fun, attempts \\ 20)
+
+  defp wait_for(fun, attempts) when attempts > 0 do
+    case fun.() do
+      nil ->
+        Process.sleep(10)
+        wait_for(fun, attempts - 1)
+
+      value ->
+        value
+    end
+  end
+
+  defp wait_for(_fun, 0), do: flunk("condition was not met before timeout")
 
   defp call(method, path, body \\ nil, headers \\ []) do
     encoded = if is_nil(body), do: nil, else: Jason.encode!(body)

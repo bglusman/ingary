@@ -134,64 +134,56 @@ serially. `POST /__test/config` intentionally mutates prototype state, so
 parallel probes against the same process can invalidate each other's model
 namespace assumptions.
 
-## Bakeoff BDD And Property Tests
+## Native Bakeoff Oracle Properties
 
-The bakeoff suites use `uv`, `pytest`, `hypothesis`, and `jsonschema`.
+The old Python/Hypothesis bakeoff suites were retired after the repository chose
+the BEAM-first Wardwright app direction. Their useful pure oracles now live in
+native StreamData tests under `app/test/bakeoff_oracle_property_test.exs`.
 
-Bakeoff evaluation has two layers:
-
-- visible contract packs under `docs/bakeoff-contracts/`, which agents may read
-  and translate into native tests
-- held-out Python backend oracles, which are run externally after an agent
-  finishes and must not be available inside the implementation worktree
-
-Pure oracle/property tests:
-
-```bash
-uv run pytest -m 'not backend and not live_llm' tests/test_bakeoff_*.py
-```
-
-Backend contract tests against a running prototype:
-
-```bash
-uv run pytest -m 'backend and not live_llm' tests/test_bakeoff_*.py \
-  --base-url http://127.0.0.1:8787
-```
-
-The first bakeoff suites cover:
+Those native properties cover:
 
 - structured-output governance as a non-terminal guard loop, including guard
   count, guard type, attempt budget, eventual success, and budget exhaustion
 - recent-history governance scoped to a single session/run, including
   out-of-scope isolation, irrelevant in-scope non-matches, deterministic
-  eviction, concurrent writes within one session, and normal request traffic
-  feeding history policies without manual cache insertion
+  eviction, and generated retained-event counts
 - async alert sink behavior, including queue capacity, idempotency, dead-letter
-  behavior, fail-closed full queues, and receipt-level delivery evidence
+  behavior, drop behavior, and fail-closed full queues
 
-Live-LLM realism tests should be marked `live_llm` and excluded from default CI.
-When a live run finds a useful counterexample, pin the prompt, model/config, and
-observed output as a deterministic mocked-model regression fixture.
-
-Optional live-LLM smoke tests:
+Run them with the normal app suite:
 
 ```bash
-WARDWRIGHT_LIVE_LLM=1 \
-WARDWRIGHT_LIVE_LLM_BASE_URL=http://127.0.0.1:11434/v1 \
-WARDWRIGHT_LIVE_LLM_MODEL=<local-or-remote-model> \
-uv run pytest -m live_llm tests/test_bakeoff_live_llm_smoke.py
+cd app
+mix test
 ```
 
-Set `WARDWRIGHT_LIVE_LLM_API_KEY` when the target endpoint requires bearer auth.
+The backend-facing Python bakeoff tests were not carried forward because they
+were designed to judge separate Go/Rust/Elixir bakeoff worktrees. New
+Wardwright app behavior should be specified directly in ExUnit/StreamData tests,
+with external Python kept for lightweight probes such as `contract_probe.py` and
+`storage_contract.py`.
 
-Bakeoff agents may run or adapt optional live-LLM discovery tests during
-implementation, but they must not run the held-out Python backend oracle. The
-required development loop is native-first: translate the visible contract into
-the backend's native test framework, implement until native tests pass, and
-reduce useful live-LLM failures into deterministic native regression fixtures.
-The held-out Python backend oracle is an external final judge, not a development
-tool. Extra native tests are encouraged when a live LLM run, mutation test, or
-code review exposes a vacuous pass or untested branch.
+Mutation testing is available through Muex:
+
+```bash
+mise run mutation:app
+```
+
+Use mutation failures or surviving mutants to decide where native tests are too
+shallow before treating a policy feature as complete.
+
+Initial bounded sample result after adding Muex:
+
+- 30 sampled mutants
+- 12 killed
+- 13 survived
+- 5 invalid
+- 48.0% mutation score
+
+The first survivors clustered around policy-cache matching, route-selection
+fallbacks, caller metadata fallback precedence, history-threshold receipt fields,
+and a few broad router statement deletions. Treat those as the first under-tested
+areas to harden, not as a merge blocker for the prototype rename.
 
 ## BDD Scenarios
 
@@ -212,20 +204,12 @@ Current scenarios:
   `POST /__test/config`
 - recording an asynchronous policy alert event when a request guard matches
 
-## Native Backend Tests
+## Native App Tests
 
-The visible contracts are intentionally backend-neutral. Each prototype also
-needs local tests for its own route, policy, and receipt implementation:
+The visible contracts are intentionally backend-neutral. The active app needs
+local tests for its own route, policy, and receipt implementation:
 
-- Go: storage behavior, model normalization, route selection, prompt
-  transforms, request-policy actions, config validation, and a minimal
-  `httptest` chat/receipt flow.
-- Rust: model normalization, route selection, prompt transforms,
-  request-policy actions, caller precedence, receipt filtering, and config
-  validation.
-- Elixir: endpoint behavior, receipt store behavior, policy alert/transform
+- endpoint behavior, receipt store behavior, policy alert/transform
   receipts, receipt filters, and invalid dynamic route configs.
 
-CI should run these native tests before the Python contract probes. Go is run
-with `-count=1` so cached local output does not hide whether tests actually
-executed.
+CI should run these native tests before the Python contract probes.
