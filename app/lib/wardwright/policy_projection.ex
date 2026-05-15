@@ -33,16 +33,18 @@ defmodule Wardwright.PolicyProjection do
 
   def projection(pattern_id, config \\ Wardwright.current_config()) do
     pattern = pattern(pattern_id)
+    phases = phases(pattern["id"], config)
 
     %{
       "projection_schema" => "wardwright.policy_projection.v1",
       "artifact" => artifact(pattern, config),
-      "engine" => engine(pattern["id"]),
-      "phases" => phases(pattern["id"], config),
-      "effects" => effects(pattern["id"]),
-      "conflicts" => conflicts(pattern["id"]),
-      "opaque_regions" => opaque_regions(pattern["id"]),
-      "warnings" => warnings(pattern["id"])
+      "engine" => engine(pattern["id"], config),
+      "compiled_plan" => compiled_plan(pattern["id"], config, phases),
+      "phases" => phases,
+      "effects" => effects(pattern["id"], config),
+      "conflicts" => conflicts(pattern["id"], config),
+      "opaque_regions" => opaque_regions(pattern["id"], config),
+      "warnings" => warnings(pattern["id"], config)
     }
   end
 
@@ -50,7 +52,7 @@ defmodule Wardwright.PolicyProjection do
     artifact_hash = artifact(pattern(pattern_id), config)["artifact_hash"]
 
     pattern_id
-    |> simulation_cases()
+    |> simulation_cases(config)
     |> Enum.map(&Map.put(&1, "artifact_hash", artifact_hash))
   end
 
@@ -76,23 +78,26 @@ defmodule Wardwright.PolicyProjection do
     }
   end
 
-  defp engine("route-privacy") do
+  defp engine("route-privacy", config) do
+    route_rules = route_governance_rules(config)
+    language = route_engine_language(route_rules)
+
     %{
-      "engine_id" => "starlark-route-gate",
-      "display_name" => "Starlark route gate",
-      "language" => "starlark",
+      "engine_id" => "request-route-plan",
+      "display_name" => "Request route plan",
+      "language" => language,
       "version" => "0.1",
       "capabilities" => %{
-        "phases" => ["route.selecting", "receipt.finalized"],
-        "can_static_analyze" => true,
+        "phases" => ["route.selecting", "request.routing", "receipt.finalized"],
+        "can_static_analyze" => language != "opaque",
         "can_generate_scenarios" => true,
         "can_explain_trace" => true,
-        "can_emit_source_spans" => true
+        "can_emit_source_spans" => Enum.any?(route_rules, &is_map(&1["source_span"]))
       }
     }
   end
 
-  defp engine("ambiguous-success") do
+  defp engine("ambiguous-success", _config) do
     %{
       "engine_id" => "hybrid-output-review",
       "display_name" => "Hybrid output review",
@@ -108,7 +113,7 @@ defmodule Wardwright.PolicyProjection do
     }
   end
 
-  defp engine(_pattern_id) do
+  defp engine(_pattern_id, _config) do
     %{
       "engine_id" => "structured-stream-primitives",
       "display_name" => "Structured stream primitives",
@@ -158,38 +163,22 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
-  defp phases("route-privacy", _config) do
+  defp phases("route-privacy", config) do
+    nodes =
+      config
+      |> route_governance_rules()
+      |> Enum.map(&request_governance_node/1)
+      |> case do
+        [] -> [no_route_gate_node()]
+        configured -> configured
+      end
+
     [
       %{
         "id" => "route.selecting",
         "title" => "Route",
-        "description" => "Constrain route candidates before provider selection.",
-        "nodes" => [
-          node(
-            "privacy.private-risk-branch",
-            "private risk branch",
-            "function",
-            "route.selecting",
-            "Starlark branch checks private-data-risk and cloud escalation approval.",
-            "inferred",
-            ["request.annotations", "caller.approvals", "route.candidates"],
-            ["route.allowed_targets"],
-            ["restrict_routes"],
-            %{"file" => "policy.star", "start_line" => 4, "end_line" => 11}
-          ),
-          node(
-            "privacy.opaque-helper",
-            "risk helper",
-            "opaque_region",
-            "route.selecting",
-            "Helper logic is declared pure but cannot be fully classified by the projection adapter.",
-            "opaque",
-            ["request.annotations"],
-            [],
-            ["classify_risk"],
-            %{"file" => "policy.star", "start_line" => 13, "end_line" => 19}
-          )
-        ]
+        "description" => "Project configured request governance before provider selection.",
+        "nodes" => nodes
       }
     ]
   end
@@ -276,6 +265,140 @@ defmodule Wardwright.PolicyProjection do
     |> Map.new()
   end
 
+  defp compiled_plan(pattern_id, config, phases) do
+    %{
+      "planner" => "Wardwright.Policy.Plan",
+      "pattern_id" => pattern_id,
+      "request_rule_count" => length(Map.get(config, "governance", [])),
+      "stream_rule_count" => length(Map.get(config, "stream_rules", [])),
+      "node_count" => phases |> Enum.flat_map(& &1["nodes"]) |> length(),
+      "source" => "current_config"
+    }
+  end
+
+  defp route_governance_rules(config) do
+    config
+    |> Map.get("governance", [])
+    |> Enum.filter(fn rule ->
+      action = Map.get(rule, "action")
+      kind = Map.get(rule, "kind")
+
+      kind == "route_gate" or action in ["restrict_routes", "switch_model", "reroute"] or
+        Map.get(rule, "engine") in ["starlark", "dune", "wasm", "hybrid"]
+    end)
+  end
+
+  defp route_engine_language([]), do: "structured"
+
+  defp route_engine_language(rules) do
+    rules
+    |> Enum.map(&Map.get(&1, "engine"))
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.uniq()
+    |> case do
+      [] -> "structured"
+      [language] -> language
+      _many -> "hybrid"
+    end
+  end
+
+  defp request_governance_node(rule) do
+    action = request_governance_action(rule)
+    action_name = Map.get(action, "action", "annotate")
+
+    node(
+      "request-policy.#{safe_id(Map.get(rule, "id", action_name))}",
+      Map.get(rule, "label", Map.get(rule, "id", action_name)),
+      request_governance_kind(rule),
+      "route.selecting",
+      request_governance_summary(rule, action),
+      request_governance_confidence(rule),
+      request_governance_reads(rule),
+      request_governance_writes(action),
+      [action_name],
+      Map.get(rule, "source_span")
+    )
+  end
+
+  defp request_governance_action(rule) do
+    %{
+      "rule_id" => Map.get(rule, "id", "route-policy"),
+      "kind" => Map.get(rule, "kind", "route_gate"),
+      "action" => Map.get(rule, "action", default_projected_action(rule)),
+      "message" => Map.get(rule, "message", "route governance rule"),
+      "allowed_targets" => Map.get(rule, "allowed_targets"),
+      "target_model" => Map.get(rule, "target_model", Map.get(rule, "model"))
+    }
+    |> Wardwright.Policy.Action.normalize(rule: rule)
+  end
+
+  defp default_projected_action(%{"engine" => engine}) when engine not in [nil, ""],
+    do: "engine_result"
+
+  defp default_projected_action(_rule), do: "restrict_routes"
+
+  defp request_governance_kind(%{"engine" => engine}) when engine not in [nil, ""],
+    do: "policy_engine"
+
+  defp request_governance_kind(rule), do: Map.get(rule, "kind", "route_gate")
+
+  defp request_governance_summary(rule, action) do
+    message = Map.get(rule, "message", Map.get(action, "message", "route governance rule"))
+    "#{Map.get(action, "action", "annotate")} when #{rule_match_summary(rule)}: #{message}"
+  end
+
+  defp rule_match_summary(rule) do
+    cond do
+      is_binary(rule["contains"]) and rule["contains"] != "" ->
+        "request contains #{inspect(rule["contains"])}"
+
+      is_binary(rule["regex"]) and rule["regex"] != "" ->
+        "request matches #{inspect(rule["regex"])}"
+
+      is_binary(rule["pattern"]) and rule["pattern"] != "" ->
+        "request contains #{inspect(rule["pattern"])}"
+
+      true ->
+        "rule matches"
+    end
+  end
+
+  defp request_governance_confidence(%{"engine" => engine}) when engine not in [nil, ""] do
+    if is_map(engine) or engine == "hybrid", do: "inferred", else: "opaque"
+  end
+
+  defp request_governance_confidence(_rule), do: "exact"
+
+  defp request_governance_reads(%{"kind" => "history_threshold"}),
+    do: ["request.messages", "policy_cache.session"]
+
+  defp request_governance_reads(%{"kind" => "history_regex_threshold"}),
+    do: ["request.messages", "policy_cache.session"]
+
+  defp request_governance_reads(_rule), do: ["request.messages", "caller", "route.candidates"]
+
+  defp request_governance_writes(%{"action" => "restrict_routes"}), do: ["route.allowed_targets"]
+
+  defp request_governance_writes(%{"action" => action})
+       when action in ["switch_model", "reroute"], do: ["route.forced_model"]
+
+  defp request_governance_writes(%{"action" => "block"}), do: ["decision.blocked"]
+  defp request_governance_writes(_action), do: ["policy.actions"]
+
+  defp no_route_gate_node do
+    node(
+      "request-policy.no-route-gate",
+      "no route gate configured",
+      "plan_gap",
+      "route.selecting",
+      "No route-affecting governance rule is present in the active configuration.",
+      "exact",
+      ["governance"],
+      [],
+      []
+    )
+  end
+
   defp stream_summary([]), do: "Match prohibited output inside the unreleased stream horizon."
 
   defp stream_summary(rules) do
@@ -287,7 +410,19 @@ defmodule Wardwright.PolicyProjection do
     "Project configured stream rules into a holdback detector: #{ids}."
   end
 
-  defp effects("ambiguous-success") do
+  defp safe_id(value) do
+    value
+    |> to_string()
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9_-]+/, "-")
+    |> String.trim("-")
+    |> case do
+      "" -> "policy"
+      safe -> safe
+    end
+  end
+
+  defp effects("ambiguous-success", _config) do
     [
       effect(
         "effect.alert",
@@ -308,20 +443,24 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
-  defp effects("route-privacy") do
-    [
+  defp effects("route-privacy", config) do
+    config
+    |> route_governance_rules()
+    |> Enum.map(&request_governance_action/1)
+    |> Enum.with_index()
+    |> Enum.map(fn {action, index} ->
       effect(
-        "effect.restrict",
-        "privacy.private-risk-branch",
+        "effect.route-policy-#{index + 1}",
+        "request-policy.#{safe_id(Map.get(action, "rule_id", "route-policy"))}",
         "route.selecting",
-        "restrict_routes",
-        "route",
-        "inferred"
+        Map.get(action, "action", "annotate"),
+        route_effect_target(action),
+        Map.get(action, "source", %{}) |> Map.get("type") |> effect_confidence()
       )
-    ]
+    end)
   end
 
-  defp effects(_pattern_id) do
+  defp effects(_pattern_id, _config) do
     [
       effect(
         "effect.abort",
@@ -358,6 +497,17 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
+  defp route_effect_target(%{"action" => "restrict_routes"}), do: "route"
+
+  defp route_effect_target(%{"action" => action}) when action in ["switch_model", "reroute"],
+    do: "route"
+
+  defp route_effect_target(%{"action" => "block"}), do: "request"
+  defp route_effect_target(_action), do: "policy"
+
+  defp effect_confidence("primitive"), do: "exact"
+  defp effect_confidence(_source_type), do: "inferred"
+
   defp effect(id, node_id, phase, effect, target, confidence) do
     %{
       "id" => id,
@@ -369,7 +519,7 @@ defmodule Wardwright.PolicyProjection do
     }
   end
 
-  defp conflicts("ambiguous-success") do
+  defp conflicts("ambiguous-success", _config) do
     [
       %{
         "id" => "conflict.block-alert-choice",
@@ -382,20 +532,27 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
-  defp conflicts("route-privacy") do
-    [
+  defp conflicts("route-privacy", config) do
+    config
+    |> route_governance_rules()
+    |> Enum.map(&request_governance_action/1)
+    |> Wardwright.Policy.Action.conflicts()
+    |> Enum.map(fn conflict ->
+      rule_ids = Map.get(conflict, "rule_ids", [])
+
       %{
-        "id" => "conflict.route-starvation",
-        "class" => "ordered",
-        "node_ids" => ["privacy.private-risk-branch"],
-        "summary" =>
-          "Local-only restriction must run before fallback selection or cloud fallback could win.",
-        "required_resolution" => "route gate priority precedes provider fallback"
+        "id" => "conflict.#{Map.get(conflict, "key", "policy")}",
+        "class" => Map.get(conflict, "class", "ordered"),
+        "node_ids" => Enum.map(rule_ids, &"request-policy.#{safe_id(&1)}"),
+        "summary" => Map.get(conflict, "summary"),
+        "required_resolution" => Map.get(conflict, "required_resolution")
       }
-    ]
+      |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
+      |> Map.new()
+    end)
   end
 
-  defp conflicts(_pattern_id) do
+  defp conflicts(_pattern_id, _config) do
     [
       %{
         "id" => "conflict.retry-block-order",
@@ -408,36 +565,42 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
-  defp opaque_regions("route-privacy") do
-    [
+  defp opaque_regions("route-privacy", config) do
+    config
+    |> route_governance_rules()
+    |> Enum.filter(fn rule -> request_governance_confidence(rule) == "opaque" end)
+    |> Enum.map(fn rule ->
       %{
-        "id" => "opaque.risk-helper",
-        "node_id" => "privacy.opaque-helper",
+        "id" => "opaque.#{safe_id(Map.get(rule, "id", "route-policy"))}",
+        "node_id" => "request-policy.#{safe_id(Map.get(rule, "id", "route-policy"))}",
         "reason" =>
-          "Static adapter cannot prove all helper branches return only deterministic booleans.",
+          "Sandboxed route policy is represented through its action contract; static adapter cannot prove every internal branch.",
         "review_requirement" =>
-          "Require scenario coverage for approved cloud override and private-risk denial."
+          "Require scenario coverage for route denial, allowed fallback, and no-match cases."
       }
-    ]
+    end)
   end
 
-  defp opaque_regions(_pattern_id), do: []
+  defp opaque_regions(_pattern_id, _config), do: []
 
-  defp warnings("route-privacy") do
-    [
-      "Projection is partly inferred from Starlark host API calls; source span review remains required."
-    ]
+  defp warnings("route-privacy", config) do
+    if route_governance_rules(config) == [] do
+      ["No route-affecting governance rule is configured for this projection."]
+    else
+      []
+    end
   end
 
-  defp warnings("ambiguous-success") do
+  defp warnings("ambiguous-success", _config) do
     [
       "Classifier wording can drift; pin generated false-positive examples as regression fixtures."
     ]
   end
 
-  defp warnings(_pattern_id), do: ["Adds stream latency up to the configured holdback horizon."]
+  defp warnings(_pattern_id, _config),
+    do: ["Adds stream latency up to the configured holdback horizon."]
 
-  defp simulation_cases("ambiguous-success") do
+  defp simulation_cases("ambiguous-success", _config) do
     [
       %{
         "simulation_schema" => "wardwright.policy_simulation.v1",
@@ -484,50 +647,16 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
-  defp simulation_cases("route-privacy") do
-    [
-      %{
-        "simulation_schema" => "wardwright.policy_simulation.v1",
-        "scenario_id" => "cloud-denied",
-        "title" => "Private context blocks cloud fallback",
-        "engine_id" => "starlark-route-gate",
-        "input_summary" =>
-          "Request has private-data-risk annotation and no cloud escalation approval.",
-        "expected_behavior" => "Managed cloud route is removed before fallback selection.",
-        "verdict" => "inconclusive",
-        "trace" => [
-          trace(
-            "p1",
-            "route.selecting",
-            "privacy.opaque-helper",
-            "warning",
-            "opaque helper",
-            "risk helper result is accepted from declared host API behavior",
-            "warn",
-            %{"file" => "policy.star", "start_line" => 13, "end_line" => 19}
-          ),
-          trace(
-            "p2",
-            "route.selecting",
-            "privacy.private-risk-branch",
-            "action",
-            "route restricted",
-            "allowed targets reduced to local providers",
-            "pass",
-            %{"file" => "policy.star", "start_line" => 4, "end_line" => 11}
-          )
-        ],
-        "receipt_preview" => %{
-          "decision" => %{
-            "skipped" => [%{"node" => "managed-safe", "reason" => "policy_route_gate"}]
-          },
-          "final_status" => "simulated"
-        }
-      }
-    ]
+  defp simulation_cases("route-privacy", config) do
+    rules = route_governance_rules(config)
+
+    case rules do
+      [] -> no_route_gate_simulation()
+      _configured -> [route_governance_simulation(config, rules)]
+    end
   end
 
-  defp simulation_cases(_pattern_id) do
+  defp simulation_cases(_pattern_id, _config) do
     [
       %{
         "simulation_schema" => "wardwright.policy_simulation.v1",
@@ -603,6 +732,107 @@ defmodule Wardwright.PolicyProjection do
         }
       }
     ]
+  end
+
+  defp no_route_gate_simulation do
+    [
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "no-route-gate-configured",
+        "title" => "No route governance configured",
+        "engine_id" => "request-route-plan",
+        "input_summary" => "Active config has no route-affecting governance rules.",
+        "expected_behavior" => "Route selection proceeds without policy constraints.",
+        "verdict" => "inconclusive",
+        "trace" => [
+          trace(
+            "p1",
+            "route.selecting",
+            "request-policy.no-route-gate",
+            "warning",
+            "no route policy",
+            "No configured route-governance node could affect this scenario.",
+            "warn"
+          )
+        ],
+        "receipt_preview" => %{
+          "decision" => %{"policy_actions" => []},
+          "final_status" => "simulated"
+        }
+      }
+    ]
+  end
+
+  defp route_governance_simulation(config, rules) do
+    text = route_simulation_text(rules)
+    request = %{"messages" => [%{"role" => "user", "content" => text}]}
+
+    {_request, policy} =
+      Wardwright.Policy.Plan.evaluate_request(request, %{"source" => "projection"}, config)
+
+    actions = Map.get(policy, "actions", [])
+
+    %{
+      "simulation_schema" => "wardwright.policy_simulation.v1",
+      "scenario_id" => "configured-route-policy",
+      "title" => "Configured route governance path",
+      "engine_id" => "request-route-plan",
+      "input_summary" => "Synthetic request chosen to exercise the first configured route rule.",
+      "expected_behavior" => "Policy.Plan emits route constraints or an explicit no-match trace.",
+      "verdict" => if(actions == [], do: "inconclusive", else: "passed"),
+      "trace" => route_policy_trace(actions, rules),
+      "receipt_preview" => %{
+        "decision" => %{
+          "policy_actions" => actions,
+          "route_constraints" => Map.get(policy, "route_constraints", %{}),
+          "policy_conflicts" => Map.get(policy, "conflicts", [])
+        },
+        "final_status" => "simulated"
+      }
+    }
+  end
+
+  defp route_simulation_text([rule | _rules]) do
+    cond do
+      is_binary(rule["contains"]) and rule["contains"] != "" ->
+        "projection simulation #{rule["contains"]}"
+
+      is_binary(rule["pattern"]) and rule["pattern"] != "" ->
+        "projection simulation #{rule["pattern"]}"
+
+      true ->
+        "projection simulation route governance request"
+    end
+  end
+
+  defp route_policy_trace([], [rule | _rules]) do
+    [
+      trace(
+        "p1",
+        "route.selecting",
+        "request-policy.#{safe_id(Map.get(rule, "id", "route-policy"))}",
+        "warning",
+        "rule did not match",
+        "The configured policy plan produced no route action for the generated scenario.",
+        "warn"
+      )
+    ]
+  end
+
+  defp route_policy_trace(actions, _rules) do
+    actions
+    |> Enum.with_index()
+    |> Enum.map(fn {action, index} ->
+      trace(
+        "p#{index + 1}",
+        "route.selecting",
+        "request-policy.#{safe_id(Map.get(action, "rule_id", "route-policy"))}",
+        "action",
+        Map.get(action, "action", "policy action"),
+        Map.get(action, "message", "configured policy action matched"),
+        "pass"
+      )
+    end)
   end
 
   defp trace(id, phase, node_id, kind, label, detail, severity, source_span \\ nil) do
