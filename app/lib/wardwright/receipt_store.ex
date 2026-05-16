@@ -5,6 +5,21 @@ defmodule Wardwright.ReceiptStore do
 
   @contract_version "storage-contract-v0"
   @migration_version 1
+  @decision_key "decision"
+  @name_key "name"
+  @namespace_key "namespace"
+  @phase_key "phase"
+  @primary_tool_key "primary_tool"
+  @risk_class_key "risk_class"
+  @source_key "source"
+  @tool_call_id_key "tool_call_id"
+  @tool_context_key "tool_context"
+  @tool_name_key "tool_name"
+  @tool_namespace_key "tool_namespace"
+  @tool_phase_key "tool_phase"
+  @tool_policy_status_key "tool_policy_status"
+  @tool_risk_class_key "tool_risk_class"
+  @tool_source_key "tool_source"
 
   def start_link(_opts) do
     Agent.start_link(fn -> %{receipts: %{}} end, name: __MODULE__)
@@ -75,6 +90,9 @@ defmodule Wardwright.ReceiptStore do
   def metadata, do: health()
 
   def summary(receipt) do
+    tool_context = tool_context(receipt)
+    primary_tool = primary_tool(tool_context)
+
     %{
       "receipt_id" => receipt["receipt_id"],
       "created_at" => receipt["created_at"],
@@ -94,6 +112,16 @@ defmodule Wardwright.ReceiptStore do
       "simulation" => receipt["simulation"] || false,
       "stream_policy_action" => get_in(receipt, ["final", "stream_policy_action"])
     }
+    |> put_if_present(@tool_namespace_key, Map.get(primary_tool, @namespace_key))
+    |> put_if_present(@tool_name_key, Map.get(primary_tool, @name_key))
+    |> put_if_present(@tool_phase_key, Map.get(tool_context, @phase_key))
+    |> put_if_present(@tool_risk_class_key, Map.get(primary_tool, @risk_class_key))
+    |> put_if_present(@tool_source_key, Map.get(primary_tool, @source_key))
+    |> put_if_present(@tool_call_id_key, Map.get(tool_context, @tool_call_id_key))
+    |> put_if_present(
+      @tool_policy_status_key,
+      get_in(receipt, ["final", "tool_policy", "status"])
+    )
   end
 
   defp matches?(receipt, filters) do
@@ -129,7 +157,14 @@ defmodule Wardwright.ReceiptStore do
              "selected_provider",
              "selected_model",
              "status",
-             "stream_policy_action"
+             "stream_policy_action",
+             @tool_namespace_key,
+             @tool_name_key,
+             @tool_phase_key,
+             @tool_policy_status_key,
+             @tool_risk_class_key,
+             @tool_source_key,
+             @tool_call_id_key
            ] ->
         summary[key] == value
 
@@ -153,6 +188,20 @@ defmodule Wardwright.ReceiptStore do
   defp selected_provider(receipt) do
     get_in(receipt, ["decision", "selected_provider"]) ||
       get_in(receipt, ["decision", "selected_model"]) |> provider_from_model()
+  end
+
+  defp tool_context(receipt) when is_map(receipt) do
+    case get_in(receipt, [@decision_key, @tool_context_key]) do
+      context when is_map(context) -> context
+      _context -> %{}
+    end
+  end
+
+  defp primary_tool(tool_context) when is_map(tool_context) do
+    case Map.get(tool_context, @primary_tool_key) do
+      tool when is_map(tool) -> tool
+      _tool -> %{}
+    end
   end
 
   defp provider_from_model(model) when is_binary(model) do
@@ -187,4 +236,8 @@ defmodule Wardwright.ReceiptStore do
   defp boolean_value("true"), do: true
   defp boolean_value("false"), do: false
   defp boolean_value(_), do: nil
+
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, _key, ""), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
 end

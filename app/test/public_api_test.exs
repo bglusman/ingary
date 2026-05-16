@@ -51,6 +51,325 @@ defmodule Wardwright.PublicApiTest do
     assert is_map(model["route_graph"])
   end
 
+  test "protected policy authoring API exposes projection and tool contracts" do
+    rejected = call(:get, "/v1/policy-authoring/tools", nil, [], {203, 0, 113, 10})
+    assert rejected.status == 403
+
+    tools = call(:get, "/v1/policy-authoring/tools")
+    assert tools.status == 200
+
+    tool_names =
+      tools.resp_body |> Jason.decode!() |> Map.fetch!("data") |> Enum.map(& &1["name"])
+
+    assert "explain_projection" in tool_names
+    assert "simulate_policy" in tool_names
+    assert "record_scenario" in tool_names
+    assert "import_receipt_scenario" in tool_names
+    assert "export_regression_pack" in tool_names
+    assert "apply_scenario_retention" in tool_names
+    assert "propose_rule_change" in tool_names
+    assert "validate_policy_artifact" in tool_names
+
+    projection = call(:get, "/v1/policy-authoring/projections/tts-retry")
+    assert projection.status == 200
+
+    body = Jason.decode!(projection.resp_body)
+    assert get_in(body, ["projection", "state_machine", "initial_state"]) == "observing"
+
+    simulations = call(:get, "/v1/policy-authoring/simulations/tts-retry")
+    assert simulations.status == 200
+
+    assert [%{"artifact_hash" => "sha256:" <> _hash}] =
+             Jason.decode!(simulations.resp_body)["data"]
+
+    missing = call(:get, "/v1/policy-authoring/projections/not-real")
+    assert missing.status == 404
+  end
+
+  test "protected policy authoring API persists scenarios for simulation evidence" do
+    rejected =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{}, [], {203, 0, 113, 10})
+
+    assert rejected.status == 403
+
+    scenario = %{
+      "scenario_id" => "api-reviewed-trigger",
+      "title" => "API reviewed trigger",
+      "source" => "user",
+      "pinned" => true,
+      "input_summary" => "A reviewed stream scenario stores the split trigger.",
+      "expected_behavior" => "The stream retry rule fires before release.",
+      "verdict" => "passed",
+      "trace" => [
+        %{
+          "id" => "api-1",
+          "phase" => "response.streaming",
+          "node_id" => "tts.no-old-client",
+          "kind" => "match",
+          "label" => "persisted trace",
+          "detail" => "scenario came from the authoring API",
+          "severity" => "pass",
+          "state_id" => "guarding"
+        }
+      ],
+      "receipt_preview" => %{"final_status" => "simulated"}
+    }
+
+    created = call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => scenario})
+    assert created.status == 201
+
+    created_body = Jason.decode!(created.resp_body)
+    assert get_in(created_body, ["scenario", "scenario_id"]) == "api-reviewed-trigger"
+    assert get_in(created_body, ["scenario", "scenario_source"]) == "persisted"
+
+    listed = call(:get, "/v1/policy-authoring/scenarios/tts-retry")
+    assert listed.status == 200
+    assert [%{"scenario_id" => "api-reviewed-trigger"}] = Jason.decode!(listed.resp_body)["data"]
+
+    simulations = call(:get, "/v1/policy-authoring/simulations/tts-retry")
+    assert simulations.status == 200
+
+    assert [
+             %{
+               "scenario_id" => "api-reviewed-trigger",
+               "scenario_source" => "persisted",
+               "artifact_hash" => "sha256:" <> _hash
+             }
+           ] = Jason.decode!(simulations.resp_body)["data"]
+
+    malformed = call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"trace" => []})
+    assert malformed.status == 400
+
+    invalid_state =
+      put_in(scenario, ["trace", Access.at(0), "state_id"], "not-a-state")
+
+    invalid_state_conn =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => invalid_state})
+
+    assert invalid_state_conn.status == 400
+    assert get_in(Jason.decode!(invalid_state_conn.resp_body), ["error", "message"]) =~ "state_id"
+
+    invalid_trace =
+      put_in(scenario, ["trace", Access.at(0), "label"], "")
+
+    invalid_trace_conn =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => invalid_trace})
+
+    assert invalid_trace_conn.status == 400
+
+    assert get_in(Jason.decode!(invalid_trace_conn.resp_body), ["error", "message"]) =~
+             "trace event"
+
+    invalid_source =
+      Map.put(scenario, "source", "not-reviewed")
+
+    invalid_source_conn =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => invalid_source})
+
+    assert invalid_source_conn.status == 400
+
+    assert get_in(Jason.decode!(invalid_source_conn.resp_body), ["error", "message"]) =~
+             "source"
+
+    missing = call(:post, "/v1/policy-authoring/scenarios/not-real", %{"scenario" => scenario})
+    assert missing.status == 404
+  end
+
+  test "protected policy authoring API imports receipts as live replay scenarios" do
+    receipt = %{
+      "receipt_id" => "receipt_import_1",
+      "created_at" => 1_800_000_123,
+      "synthetic_model" => "unit-model",
+      "synthetic_version" => "2026-05-13.mock",
+      "final" => %{
+        "status" => "completed",
+        "stream_policy" => %{
+          "status" => "completed",
+          "retry_count" => 1,
+          "released_to_consumer" => true,
+          "events" => [
+            %{
+              "type" => "stream_policy.triggered",
+              "rule_id" => "tts.no-old-client",
+              "action" => "retry_with_reminder"
+            },
+            %{
+              "type" => "attempt.retry_requested",
+              "rule_id" => "tts.retry-arbiter",
+              "retry_count" => 1
+            }
+          ]
+        }
+      }
+    }
+
+    Wardwright.ReceiptStore.insert(receipt)
+
+    rejected =
+      call(
+        :post,
+        "/v1/policy-authoring/scenarios/tts-retry/from-receipt/receipt_import_1",
+        %{},
+        [],
+        {203, 0, 113, 10}
+      )
+
+    assert rejected.status == 403
+
+    imported =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/from-receipt/receipt_import_1", %{
+        "source" => "assistant",
+        "title" => "Imported retry receipt"
+      })
+
+    assert imported.status == 201
+
+    scenario = Jason.decode!(imported.resp_body)["scenario"]
+    assert scenario["scenario_id"] == "receipt-receipt_import_1"
+    assert scenario["source"] == "live_replay"
+    assert scenario["pinned"] == true
+    assert get_in(scenario, ["receipt_preview", "receipt_id"]) == "receipt_import_1"
+
+    assert Enum.map(scenario["trace"], & &1["state_id"]) == [
+             "guarding",
+             "retrying"
+           ]
+
+    missing_receipt =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/from-receipt/not-real", %{})
+
+    assert missing_receipt.status == 404
+  end
+
+  test "protected policy authoring API exports pinned scenarios and prunes unpinned records" do
+    pinned = scenario_fixture("pinned-regression", true)
+    old_unpinned = scenario_fixture("old-unpinned", false, "2026-05-01T00:00:00Z")
+    new_unpinned = scenario_fixture("new-unpinned", false, "2026-05-02T00:00:00Z")
+
+    assert call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => pinned}).status ==
+             201
+
+    assert call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => old_unpinned}).status ==
+             201
+
+    assert call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => new_unpinned}).status ==
+             201
+
+    rejected_export =
+      call(
+        :get,
+        "/v1/policy-authoring/scenarios/tts-retry/regression-export",
+        nil,
+        [],
+        {203, 0, 113, 10}
+      )
+
+    assert rejected_export.status == 403
+
+    export = call(:get, "/v1/policy-authoring/scenarios/tts-retry/regression-export")
+    assert export.status == 200
+
+    export_body = Jason.decode!(export.resp_body)
+    assert export_body["schema"] == "wardwright.policy_regression_pack.v1"
+    assert export_body["scenario_count"] == 1
+    assert [%{"scenario_id" => "pinned-regression", "pinned" => true}] = export_body["scenarios"]
+
+    exunit_export =
+      call(:get, "/v1/policy-authoring/scenarios/tts-retry/regression-export?format=exunit")
+
+    assert exunit_export.status == 200
+    assert [content_type] = get_resp_header(exunit_export, "content-type")
+    assert content_type =~ "text/plain"
+    assert {:ok, _quoted} = Code.string_to_quoted(exunit_export.resp_body)
+    assert [{module, _bytecode}] = Code.compile_string(exunit_export.resp_body)
+    assert module.regression_pack()["scenario_count"] == 1
+    assert :ok = module.validate_pack!()
+
+    unsupported_export =
+      call(:get, "/v1/policy-authoring/scenarios/tts-retry/regression-export?format=stream_data")
+
+    assert unsupported_export.status == 400
+
+    assert get_in(Jason.decode!(unsupported_export.resp_body), ["error", "code"]) ==
+             "invalid_regression_export_format"
+
+    retention =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/retention", %{
+        "max_unpinned" => 1
+      })
+
+    assert retention.status == 200
+
+    retention_body = Jason.decode!(retention.resp_body)
+    assert retention_body["schema"] == "wardwright.policy_scenario_retention.v1"
+    assert retention_body["pruned_count"] == 1
+    assert retention_body["remaining_unpinned_count"] == 1
+    assert retention_body["pruned_scenario_ids"] == ["old-unpinned"]
+
+    listed = call(:get, "/v1/policy-authoring/scenarios/tts-retry")
+    assert listed.status == 200
+
+    scenario_ids =
+      listed.resp_body
+      |> Jason.decode!()
+      |> Map.fetch!("data")
+      |> Enum.map(& &1["scenario_id"])
+
+    assert scenario_ids == ["new-unpinned", "pinned-regression"]
+
+    invalid_retention =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/retention", %{
+        "max_unpinned" => -1
+      })
+
+    assert invalid_retention.status == 400
+  end
+
+  test "protected policy validation reports errors and explicit review gaps" do
+    rejected =
+      call(:post, "/v1/policy-authoring/validate", %{}, [], {203, 0, 113, 10})
+
+    assert rejected.status == 403
+
+    current = call(:post, "/v1/policy-authoring/validate", %{})
+    assert current.status == 200
+
+    current_body = Jason.decode!(current.resp_body)
+    assert current_body["schema"] == "wardwright.policy_validation.v1"
+    assert current_body["source"] == "current_config"
+    assert current_body["verdict"] in ["valid", "needs_review"]
+    assert Enum.any?(current_body["coverage_gaps"], &(&1["path"] == "scenarios"))
+
+    invalid_artifact =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "tiny/model", "context_window" => 8},
+        %{"model" => "tiny/model", "context_window" => 32}
+      ])
+      |> Map.put("dispatchers", [%{"id" => "dispatcher.good", "models" => ["tiny/model"]}])
+      |> Map.put("route_root", "missing.selector")
+
+    invalid = call(:post, "/v1/policy-authoring/validate", %{"artifact" => invalid_artifact})
+    assert invalid.status == 200
+
+    body = Jason.decode!(invalid.resp_body)
+    assert body["source"] == "submitted"
+    assert body["verdict"] == "invalid"
+    assert Enum.any?(body["errors"], &(&1["message"] =~ "duplicate target tiny/model"))
+    assert Enum.any?(body["errors"], &(&1["path"] == "route_root"))
+
+    malformed_selector =
+      unit_policy_config()
+      |> Map.put("dispatchers", "not-a-list")
+
+    malformed = call(:post, "/v1/policy-authoring/validate", %{"artifact" => malformed_selector})
+    assert malformed.status == 200
+
+    malformed_body = Jason.decode!(malformed.resp_body)
+    assert malformed_body["verdict"] == "invalid"
+    assert Enum.any?(malformed_body["errors"], &(&1["path"] == "dispatchers"))
+  end
+
   test "chat completion records caller headers and selected model" do
     request = %{
       model: "wardwright/coding-balanced",
@@ -87,5 +406,33 @@ defmodule Wardwright.PublicApiTest do
 
     body = Jason.decode!(conn.resp_body)
     assert get_in(body, ["receipt", "decision", "selected_model"]) == "managed/kimi-k2.6"
+  end
+
+  defp scenario_fixture(id, pinned, created_at \\ nil) do
+    [
+      {"scenario_id", id},
+      {"title", "Scenario #{id}"},
+      {"source", "user"},
+      {"pinned", pinned},
+      {"input_summary", "Input for #{id}."},
+      {"expected_behavior", "The stream retry rule remains linked to guarding."},
+      {"verdict", "passed"},
+      {"trace",
+       [
+         %{
+           "id" => "#{id}-trace",
+           "phase" => "response.streaming",
+           "node_id" => "tts.no-old-client",
+           "kind" => "match",
+           "label" => "persisted trace",
+           "detail" => "scenario fixture",
+           "severity" => "pass",
+           "state_id" => "guarding"
+         }
+       ]},
+      {"created_at", created_at}
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
 end

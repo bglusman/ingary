@@ -98,11 +98,18 @@ defmodule Wardwright.StreamProviderTransportTest do
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
 
-    stream_policy =
-      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
 
     assert stream_policy["retry_count"] == 1
     assert stream_policy["released_to_consumer"] == true
+    assert get_in(receipt, ["final", "provider_metadata", "stream_format"]) == "ollama_ndjson"
+    assert get_in(receipt, ["final", "provider_metadata", "done"]) == true
+    assert get_in(receipt, ["final", "provider_metadata", "done_reason"]) == "stop"
+    assert get_in(receipt, ["final", "provider_metadata", "prompt_eval_count"]) == 4
+
+    assert get_in(receipt, ["attempts", Access.at(0), "provider_metadata", "done_reason"]) ==
+             "stop"
 
     assert [
              %{"status" => "stream_policy_retry_required", "released_to_consumer" => false},
@@ -227,5 +234,102 @@ defmodule Wardwright.StreamProviderTransportTest do
     assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == true
     assert get_in(receipt, ["attempts", Access.at(0), "mock"]) == false
     assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == true
+    assert get_in(receipt, ["final", "provider_metadata", "stream_format"]) == "openai_sse"
+    assert get_in(receipt, ["final", "provider_metadata", "finish_reason"]) == "stop"
+    assert get_in(receipt, ["final", "provider_metadata", "done"]) == true
+    assert get_in(receipt, ["final", "provider_metadata", "usage", "total_tokens"]) == 5
+
+    assert get_in(receipt, ["attempts", Access.at(0), "provider_metadata", "finish_reason"]) ==
+             "stop"
+  end
+
+  test "openai-compatible targets fail loudly instead of dropping tool request fields" do
+    System.put_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS", "1")
+
+    on_exit(fn ->
+      System.delete_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS")
+    end)
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "openai-compatible/live-test",
+          "context_window" => 256,
+          "provider_kind" => "openai-compatible",
+          "provider_base_url" => "http://127.0.0.1:9",
+          "credential_env" => "WARDWRIGHT_TEST_OPENAI_KEY"
+        }
+      ])
+      |> Map.put("governance", [])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        tools: [
+          %{
+            type: "function",
+            function: %{name: "create_pull_request", parameters: %{type: "object"}}
+          }
+        ],
+        tool_choice: "auto",
+        messages: [
+          %{role: "user", content: "prepare a pull request"},
+          %{
+            role: "assistant",
+            content: nil,
+            tool_calls: [
+              %{
+                id: "call_1",
+                type: "function",
+                function: %{name: "create_pull_request", arguments: "{}"}
+              }
+            ]
+          },
+          %{role: "tool", tool_call_id: "call_1", content: "created"}
+        ]
+      })
+
+    assert conn.status == 502
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "provider_error"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "does not support request fields"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "tools"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "tool_choice"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "message.tool_calls"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "message.tool_call_id"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "message.role:tool"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == false
+
+    assert get_in(receipt, ["decision", "tool_context", "schema"]) ==
+             "wardwright.tool_context.v1"
+
+    assert get_in(receipt, ["decision", "tool_context", "phase"]) == "result_interpretation"
+    assert get_in(receipt, ["decision", "tool_context", "tool_call_id"]) == "call_1"
+    assert get_in(receipt, ["decision", "tool_context", "confidence"]) == "exact"
+
+    assert get_in(receipt, [
+             "decision",
+             "tool_context",
+             "primary_tool",
+             "name"
+           ]) == "create_pull_request"
+
+    assert get_in(receipt, [
+             "decision",
+             "tool_context",
+             "primary_tool",
+             "source"
+           ]) == "assistant_tool_call"
+
+    assert get_in(receipt, ["attempts", Access.at(0), "provider_error"]) =~
+             "does not support request fields"
   end
 end
