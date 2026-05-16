@@ -35,7 +35,18 @@ defmodule Wardwright.Test.StreamingProvider do
         conn
       end)
 
-    {:ok, conn} = Plug.Conn.chunk(conn, Jason.encode!(%{"done" => true}) <> "\n")
+    {:ok, conn} =
+      Plug.Conn.chunk(
+        conn,
+        Jason.encode!(%{
+          "done" => true,
+          "done_reason" => "stop",
+          "total_duration" => 123,
+          "prompt_eval_count" => 4,
+          "eval_count" => 2
+        }) <> "\n"
+      )
+
     conn
   end
 
@@ -63,6 +74,17 @@ defmodule Wardwright.Test.StreamingProvider do
             "event: completion.delta\n" <>
               "data:" <>
               Jason.encode!(%{"choices" => [%{"delta" => %{"content" => "world"}}]}) <>
+              "\n\n"
+          )
+
+        {:ok, conn} =
+          Plug.Conn.chunk(
+            conn,
+            "data: " <>
+              Jason.encode!(%{
+                "choices" => [%{"delta" => %{}, "finish_reason" => "stop", "index" => 0}],
+                "usage" => %{"prompt_tokens" => 3, "completion_tokens" => 2, "total_tokens" => 5}
+              }) <>
               "\n\n"
           )
 
@@ -98,6 +120,7 @@ defmodule Wardwright.RouterCase do
   setup do
     Wardwright.reset_config()
     Wardwright.ReceiptStore.clear()
+    Wardwright.PolicyScenarioStore.clear()
     Wardwright.PolicyCache.reset()
     :ok
   end

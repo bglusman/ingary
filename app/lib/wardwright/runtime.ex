@@ -77,7 +77,9 @@ defmodule Wardwright.Runtime do
         |> Registry.select([
           {{{:"$1", :"$2", :"$3"}, :"$4", :_}, [{:==, :"$1", :model}], [{{:"$2", :"$3", :"$4"}}]}
         ])
-        |> Enum.map(fn {_model_id, _version, pid} -> ModelRuntime.status(pid) end)
+        |> Enum.flat_map(fn {_model_id, _version, pid} ->
+          safe_status(pid, &ModelRuntime.status/1)
+        end)
         |> Enum.sort_by(&{&1["model_id"], &1["version"]}),
       "sessions" =>
         Wardwright.Runtime.Registry
@@ -85,7 +87,9 @@ defmodule Wardwright.Runtime do
           {{{:"$1", :"$2", :"$3", :"$4"}, :"$5", :_}, [{:==, :"$1", :session}],
            [{{:"$2", :"$3", :"$4", :"$5"}}]}
         ])
-        |> Enum.map(fn {_model_id, _version, _session_id, pid} -> SessionRuntime.status(pid) end)
+        |> Enum.flat_map(fn {_model_id, _version, _session_id, pid} ->
+          safe_status(pid, &SessionRuntime.status/1)
+        end)
         |> Enum.sort_by(&{&1["model_id"], &1["version"], &1["session_id"]}),
       @providers_key => Map.get(provider_runtime, @providers_key, []),
       @provider_attempts_key => Map.get(provider_runtime, @provider_attempts_key, [])
@@ -103,5 +107,15 @@ defmodule Wardwright.Runtime do
       "" -> @anonymous_session
       session_id -> session_id
     end
+  end
+
+  defp safe_status(pid, status_fun) do
+    if Process.alive?(pid) do
+      [status_fun.(pid)]
+    else
+      []
+    end
+  catch
+    :exit, _reason -> []
   end
 end

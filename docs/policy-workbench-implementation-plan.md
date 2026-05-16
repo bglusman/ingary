@@ -98,6 +98,9 @@ engine.
 
 Deliverables:
 
+- Protected HTTP tool endpoints for external agents and future MCP adapters:
+  `explain_projection`, `simulate_policy`, `propose_rule_change`, and
+  `validate_policy_artifact`.
 - Tool schemas for `explain_projection`, `simulate_policy`,
   `propose_rule_change`, `inspect_receipt`, `inspect_route_plan`, and
   `validate_policy_artifact`.
@@ -158,6 +161,9 @@ operator workflow is clear.
 
 These should be answered through spikes, not long debate:
 
+- Should MCP be served through an existing Elixir library such as Hermes, or is
+  a small adapter over the protected authoring API enough for the first external
+  agent workflows?
 - Does native LiveView remain usable once route+policy graphs exceed roughly
   40 nodes?
 - Should assistant scenarios become Python/StreamData-style shared oracle

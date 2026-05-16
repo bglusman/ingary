@@ -3,7 +3,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   use Phoenix.LiveView
 
-  @modes ["phase_map", "effect_matrix", "trace_overlay"]
+  @modes ["phase_map", "state_machine", "effect_matrix", "trace_overlay"]
 
   @impl true
   def mount(params, _session, socket) do
@@ -121,6 +121,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <small><%= @projection_stats.trace_event_count %> trace events</small>
         </article>
         <article>
+          <span>State model</span>
+          <strong><%= @projection_stats.state_count %> states</strong>
+          <small><%= @projection_stats.transition_count %> transitions</small>
+        </article>
+        <article>
           <span>Review load</span>
           <strong><%= @projection_stats.review_count %></strong>
           <small>conflicts, warnings, opaque regions</small>
@@ -151,7 +156,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <%= if @mode == "trace_overlay" do %>
             <.trace_overlay projection={@projection} simulation={@selected_simulation} />
           <% else %>
-            <.phase_map projection={@projection} />
+            <%= if @mode == "state_machine" do %>
+              <.state_machine_view projection={@projection} />
+            <% else %>
+              <.phase_map projection={@projection} />
+            <% end %>
           <% end %>
         <% end %>
       </section>
@@ -307,6 +316,75 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   attr(:projection, :map, required: true)
 
+  def state_machine_view(assigns) do
+    ~H"""
+    <div class="state_machine">
+      <div class="state_machine_summary">
+        <div>
+          <strong><%= @projection["state_machine"]["schema"] %></strong>
+          <span><%= @projection["state_machine"]["summary"] %></span>
+        </div>
+        <.badge value={if @projection["state_machine"]["default_projection"], do: "default one-state", else: "explicit stateful"} />
+      </div>
+
+      <div class="state_grid">
+        <article :for={state <- @projection["state_machine"]["states"]} class={"state_card #{if state["terminal"], do: "terminal", else: ""}"}>
+          <div>
+            <strong><%= state["label"] %></strong>
+            <.badge value={if state["id"] == @projection["state_machine"]["initial_state"], do: "initial", else: "state"} />
+          </div>
+          <span><%= state["summary"] %></span>
+          <small><%= Enum.join(state["node_ids"], ", ") %></small>
+        </article>
+      </div>
+
+      <div class="state_columns">
+        <section>
+          <h3>Transitions</h3>
+          <div class="transition_list">
+            <article :for={transition <- @projection["state_machine"]["transitions"]} class="transition_row">
+              <span><%= transition["id"] %>: <%= transition["from"] %> -> <%= transition["to"] %></span>
+              <strong><%= transition["trigger"] %></strong>
+              <small><%= transition["action"] %> via <%= transition["node_id"] %></small>
+            </article>
+            <article :if={@projection["state_machine"]["transitions"] == []} class="transition_row empty">
+              <span>active</span>
+              <strong>No explicit transitions</strong>
+              <small>This policy projects as a single active state until the artifact defines stateful control flow.</small>
+            </article>
+          </div>
+        </section>
+
+        <section>
+          <h3>Simulation Path</h3>
+          <div class="state_steps">
+            <article :for={step <- @projection["state_machine"]["simulation_steps"]} class={"state_step #{step["severity"]}"}>
+              <span><%= step["step"] %></span>
+              <strong><%= step["state"] %></strong>
+              <small><%= step["summary"] %></small>
+            </article>
+          </div>
+        </section>
+      </div>
+
+      <div class="assistant_boundary">
+        <div>
+          <strong>Assistant boundary</strong>
+          <span>Natural-language authoring can attach here as proposed tool calls, but this view is currently deterministic projection data only.</span>
+        </div>
+        <div class="chips">
+          <span class="chip">explain_projection</span>
+          <span class="chip">simulate_policy</span>
+          <span class="chip">propose_rule_change</span>
+          <span class="chip">validate_policy_artifact</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:projection, :map, required: true)
+
   def phase_map(assigns) do
     ~H"""
     <div class="phase_grid">
@@ -436,7 +514,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .panel_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
     .engine_card { display: grid; gap: 6px; min-width: 260px; padding: 12px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; }
     .engine_card span:last-child { color: #66727c; font-size: 12px; }
-    .scan_strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .scan_strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
     .scan_strip article { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgb(16 24 40 / 4%); }
     .scan_strip span { color: #66727c; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .scan_strip strong { color: #17202a; font-size: 18px; line-height: 1.2; }
@@ -445,9 +523,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .mode_tabs a { border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; }
     .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; }
     .phase_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-    .phase_column, .node_stack, .timeline, .finding_list, .trace_overlay, .effect_matrix, .chips { display: grid; gap: 9px; }
-    .phase_header, .node_card, .finding, .trace_event, .trace_summary, .effect_row { padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
-    .phase_header span, .node_card span, .trace_summary span, .finding span, .trace_event small { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .phase_column, .node_stack, .timeline, .finding_list, .trace_overlay, .effect_matrix, .chips, .state_machine, .transition_list, .state_steps { display: grid; gap: 9px; }
+    .phase_header, .node_card, .finding, .trace_event, .trace_summary, .effect_row, .state_machine_summary, .state_card, .transition_row, .state_step, .assistant_boundary { padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .phase_header span, .node_card span, .trace_summary span, .finding span, .trace_event small, .state_machine_summary span, .state_card span, .state_card small, .transition_row small, .assistant_boundary span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
     .node_card { display: grid; gap: 8px; min-height: 116px; }
     .node_card div { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px; }
     .node_card.executed, .node_card.exact { border-color: #94c7b5; background: #f0faf6; }
@@ -470,6 +548,21 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .effect_row.header { color: #66727c; background: #f3f6f8; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .trace_summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: start; }
     .trace_summary span { grid-column: 2; }
+    .state_machine_summary, .assistant_boundary { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .state_machine_summary > div, .assistant_boundary > div:first-child { display: grid; gap: 4px; min-width: 0; }
+    .state_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+    .state_card { display: grid; gap: 8px; min-height: 126px; }
+    .state_card div { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .state_card.terminal { border-color: #94c7b5; background: #f0faf6; }
+    .state_columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr); gap: 14px; }
+    .transition_row { display: grid; gap: 4px; }
+    .transition_row > span { color: #66727c; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .transition_row.empty { border-style: dashed; }
+    .state_step { display: grid; grid-template-columns: 32px minmax(0, 0.6fr) minmax(0, 1fr); gap: 9px; align-items: center; }
+    .state_step > span { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 999px; color: #fff; background: #506170; font-size: 12px; font-weight: 800; }
+    .state_step.pass { border-color: #94c7b5; background: #f0faf6; }
+    .state_step.warn { border-color: #d9bd72; background: #fffaf0; }
+    .state_step.block { border-color: #df9a9a; background: #fff5f5; }
     .badge { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; padding: 3px 8px; border: 1px solid #cad4dc; border-radius: 999px; color: #33414c; background: #f5f7f9; font-size: 12px; font-weight: 800; line-height: 1.2; white-space: nowrap; }
     .schema_badge { overflow-wrap: normal; }
     .badge.exact, .badge.executed, .badge.passed, .badge.pass { border-color: #94c7b5; color: #1c654f; background: #edf8f3; }
@@ -477,7 +570,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .badge.opaque, .badge.failed, .badge.block, .badge.conflicting { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
     pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
-    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
+    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary { display: grid; } .effect_row, .trace_event, .state_step { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
     """
   end
 
@@ -488,6 +581,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
       node_count: length(nodes),
       exact_count: Enum.count(nodes, &(&1["confidence"] == "exact")),
       opaque_count: Enum.count(nodes, &(&1["confidence"] == "opaque")),
+      state_count: length(projection["state_machine"]["states"]),
+      transition_count: length(projection["state_machine"]["transitions"]),
       simulation_count: length(simulations),
       trace_event_count: simulations |> Enum.flat_map(& &1["trace"]) |> length(),
       review_count:
@@ -549,6 +644,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp path(pattern_id, mode), do: "/policies/#{pattern_id}/#{mode}"
 
   defp mode_label("phase_map"), do: "Phase map"
+  defp mode_label("state_machine"), do: "State machine"
   defp mode_label("effect_matrix"), do: "Effect matrix"
   defp mode_label("trace_overlay"), do: "Trace overlay"
 

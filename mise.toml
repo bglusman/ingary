@@ -19,6 +19,11 @@ run = "ruby scripts/check-elixir-map-boundaries.rb"
 description = "Run all baseline checks"
 depends = ["check:app", "check:docs", "check:maps"]
 
+[tasks."test:live-providers"]
+description = "Run skipped-by-default live provider smoke tests against configured Ollama/OpenAI-compatible targets"
+env = { WARDWRIGHT_ALLOW_TEST_CREDENTIALS = "1" }
+run = "cd app && MIX_ENV=test mix test --include live_provider --only live_provider"
+
 [tasks."mutation:app"]
 description = "Run a bounded Muex mutation sample for the Wardwright app"
 run = "cd app && MIX_ENV=test mix muex --max-mutations 30 --fail-at 0 && mix clean"

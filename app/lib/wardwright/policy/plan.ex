@@ -8,19 +8,78 @@ defmodule Wardwright.Policy.Plan do
   events.
   """
 
-  def evaluate_request(request, caller, config \\ Wardwright.current_config()) do
+  @action_key "action"
+  @actions_key "actions"
+  @after_key "after"
+  @alert_count_key "alert_count"
+  @before_key "before"
+  @cache_scope_key "cache_scope"
+  @created_at_key "created_at_unix_ms"
+  @events_key "events"
+  @id_key "id"
+  @key_key "key"
+  @kind_key "kind"
+  @matched_key "matched"
+  @message_key "message"
+  @phase_key "phase"
+  @policy_state_kind "policy_state"
+  @primary_tool_key "primary_tool"
+  @rule_id_key "rule_id"
+  @scope_key "scope"
+  @sequence_after_event_id_key "sequence_after_event_id"
+  @sequence_after_key_key "sequence_after_key"
+  @sequence_inspected_count_key "sequence_inspected_count"
+  @sequence_key "sequence"
+  @severity_key "severity"
+  @state_key "state"
+  @state_scope_key "state_scope"
+  @state_transition_key "state_transition"
+  @then_key "then"
+  @tool_call_kind "tool_call"
+  @tool_context_key "tool_context"
+  @tool_key "tool"
+  @tool_sequence_kind "tool_sequence"
+  @transition_to_key "transition_to"
+  @until_key "until"
+  @value_key "value"
+  @within_key "within"
+  @type_key "type"
+  @idempotency_key "idempotency_key"
+  @route_constraints_key "route_constraints"
+  @blocked_key "blocked"
+  @active_state "active"
+  @alert_async_action "alert_async"
+  @annotate_action "annotate"
+  @block_action "block"
+  @default_cache_scope "session_id"
+  @default_info_severity "info"
+  @default_tool_sequence_id "tool-sequence"
+  @escalate_action "escalate"
+  @events_window_key "events"
+  @milliseconds_window_key "milliseconds"
+  @ms_window_key "ms"
+  @restrict_routes_action "restrict_routes"
+  @reroute_action "reroute"
+  @schema_key "schema"
+  @switch_model_action "switch_model"
+  @tool_context_schema "wardwright.tool_context.v1"
+  @turns_window_key "turns"
+
+  def evaluate_request(request, caller, config \\ Wardwright.current_config(), opts \\ []) do
     text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
+    tool_context = Wardwright.ToolContext.normalize(request, opts)
 
     config
     |> Map.get("governance", [])
-    |> Enum.reduce({request, empty_policy()}, fn rule, {request, policy} ->
-      apply_rule(rule, text, caller, request, policy)
+    |> Enum.reduce({request, empty_policy(tool_context)}, fn rule, {request, policy} ->
+      apply_rule(rule, text, caller, request, policy, opts)
     end)
     |> then(fn {request, policy} ->
       policy =
         policy
         |> Map.update!("actions", &Enum.reverse/1)
         |> Map.update!("events", &Enum.reverse/1)
+        |> Map.update!("tool_policy_selectors", &Enum.reverse/1)
         |> then(fn policy ->
           Map.put(policy, "conflicts", Wardwright.Policy.Action.conflicts(policy["actions"]))
         end)
@@ -29,20 +88,27 @@ defmodule Wardwright.Policy.Plan do
     end)
   end
 
-  def empty_policy,
+  def empty_policy, do: empty_policy(nil)
+
+  def empty_policy(tool_context),
     do: %{
       "actions" => [],
       "events" => [],
       "alert_count" => 0,
       "route_constraints" => %{},
       "blocked" => false,
-      "conflicts" => []
+      "conflicts" => [],
+      "tool_context" => tool_context,
+      "tool_policy_selectors" => []
     }
 
-  defp apply_rule(rule, text, caller, request, policy) do
+  defp apply_rule(rule, text, caller, request, policy, opts) do
     kind = Map.get(rule, "kind", "")
 
     cond do
+      not state_scope_matches?(rule, caller) ->
+        {request, policy}
+
       Map.has_key?(rule, "engine") ->
         apply_engine_governance_rule(rule, caller, request, policy)
 
@@ -51,6 +117,15 @@ defmodule Wardwright.Policy.Plan do
 
       kind == "history_regex_threshold" ->
         apply_history_regex_threshold_rule(rule, caller, request, policy)
+
+      kind == "tool_selector" ->
+        apply_tool_selector_rule(rule, request, policy, opts)
+
+      kind == "tool_loop_threshold" ->
+        apply_tool_loop_threshold_rule(rule, caller, request, policy, opts)
+
+      kind == "tool_sequence" ->
+        apply_tool_sequence_rule(rule, caller, request, policy, opts)
 
       kind in ["request_guard", "request_transform", "receipt_annotation", "route_gate"] &&
           policy_rule_matches?(text, rule) ->
@@ -445,6 +520,459 @@ defmodule Wardwright.Policy.Plan do
     end
   end
 
+  defp apply_tool_selector_rule(rule, request, policy, opts) do
+    tool_context = request_tool_context(request, policy, opts)
+
+    if Wardwright.ToolContext.matches?(tool_context, Map.get(rule, "tool", %{})) do
+      policy = record_tool_selector(policy, rule, true)
+      apply_primitive_governance_rule(rule, "tool_selector", request, policy)
+    else
+      {request, record_tool_selector(policy, rule, false)}
+    end
+  end
+
+  defp apply_tool_loop_threshold_rule(rule, caller, request, policy, opts) do
+    tool_context = request_tool_context(request, policy, opts)
+    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+    tool_matcher = Map.get(rule, "tool", %{})
+
+    cache_key =
+      Map.get(rule, "cache_key") |> blank_to_nil() ||
+        Wardwright.ToolContext.cache_key(tool_context)
+
+    cache_kind = Map.get(rule, "cache_kind") |> blank_to_nil() || "tool_call"
+    cache_scope = Map.get(rule, "cache_scope", "session_id")
+
+    filter = %{
+      "kind" => cache_kind,
+      "key" => cache_key,
+      "scope" => cache_scope_from_caller(caller, cache_scope)
+    }
+
+    count = if cache_key, do: Wardwright.PolicyCache.count(filter), else: 0
+
+    if cache_key == nil or
+         not Wardwright.ToolContext.matches?(tool_context, tool_matcher) or
+         not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
+      {request, policy}
+    else
+      action = Map.get(rule, "action", "annotate")
+      rule_id = Map.get(rule, "id", "tool-loop-threshold")
+
+      message =
+        rule |> Map.get("message", "tool policy threshold matched") |> blank_to_nil() ||
+          "tool policy threshold matched"
+
+      severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
+
+      action_record =
+        %{
+          "rule_id" => rule_id,
+          "kind" => "tool_loop_threshold",
+          "action" => action,
+          "matched" => true,
+          "message" => message,
+          "severity" => severity,
+          "cache_kind" => cache_kind,
+          "cache_key" => cache_key,
+          "cache_scope" => cache_scope,
+          "history_count" => count,
+          "threshold" => threshold,
+          "tool_context" => tool_context
+        }
+        |> put_route_action_fields(rule)
+        |> Wardwright.Policy.Action.normalize(rule: rule)
+
+      policy =
+        policy
+        |> Map.update!("actions", &[action_record | &1])
+        |> put_tool_policy_status(action, rule_id, count, threshold, cache_key, cache_scope)
+        |> apply_tool_loop_action_policy(action, action_record)
+
+      if action in ["escalate", "alert_async"] do
+        event = %{
+          "type" => "policy.alert",
+          "rule_id" => rule_id,
+          "message" => message,
+          "severity" => severity,
+          "history_count" => count,
+          "threshold" => threshold,
+          "tool_context" => tool_context,
+          "idempotency_key" => Map.get(rule, "idempotency_key")
+        }
+
+        {request,
+         policy
+         |> Map.update!("events", &[event | &1])
+         |> Map.update!("alert_count", &(&1 + 1))}
+      else
+        {request, policy}
+      end
+    end
+  end
+
+  defp apply_tool_loop_action_policy(policy, action, action_record)
+       when action in ["restrict_routes", "switch_model", "reroute"] do
+    route_constraints = merge_route_constraints(policy["route_constraints"], action_record)
+    Map.put(policy, "route_constraints", route_constraints)
+  end
+
+  defp apply_tool_loop_action_policy(policy, "block", _action_record),
+    do: Map.put(policy, "blocked", true)
+
+  defp apply_tool_loop_action_policy(policy, _action, _action_record), do: policy
+
+  defp apply_tool_sequence_rule(rule, caller, request, policy, opts) do
+    tool_context = request_tool_context(request, policy, opts)
+
+    cond do
+      transition_to = blank_to_nil(Map.get(rule, @transition_to_key)) ->
+        apply_tool_sequence_transition(rule, caller, request, policy, tool_context, transition_to)
+
+      then_rule = Map.get(rule, @then_key) ->
+        apply_tool_sequence_then_rule(rule, caller, request, policy, tool_context, then_rule)
+
+      true ->
+        {request, policy}
+    end
+  end
+
+  defp apply_tool_sequence_transition(rule, caller, request, policy, tool_context, transition_to) do
+    after_matcher = rule |> Map.get(@after_key, %{}) |> Map.get(@tool_key, %{})
+
+    if Wardwright.ToolContext.matches?(tool_context, after_matcher) do
+      cache_scope = Map.get(rule, @cache_scope_key, @default_cache_scope)
+      :ok = record_policy_state(caller, cache_scope, transition_to, rule, tool_context)
+
+      rule_id = Map.get(rule, @id_key, @default_tool_sequence_id)
+
+      action_record =
+        %{
+          @rule_id_key => rule_id,
+          @kind_key => @tool_sequence_kind,
+          @action_key => @state_transition_key,
+          @matched_key => true,
+          @message_key =>
+            rule
+            |> Map.get(@message_key, "tool sequence state transition matched")
+            |> blank_to_nil() ||
+              "tool sequence state transition matched",
+          @severity_key =>
+            rule |> Map.get(@severity_key, @default_info_severity) |> blank_to_nil() ||
+              @default_info_severity,
+          @state_transition_key => transition_to,
+          @cache_scope_key => cache_scope,
+          @tool_context_key => tool_context
+        }
+        |> Wardwright.Policy.Action.normalize(rule: rule)
+
+      event = %{
+        @type_key => "policy.state_transition",
+        @rule_id_key => rule_id,
+        @state_key => transition_to,
+        @tool_context_key => tool_context
+      }
+
+      {request,
+       policy
+       |> Map.update!(@actions_key, &[action_record | &1])
+       |> Map.update!(@events_key, &[event | &1])}
+    else
+      {request, policy}
+    end
+  end
+
+  defp apply_tool_sequence_then_rule(rule, caller, request, policy, tool_context, then_rule)
+       when is_map(then_rule) do
+    current_matcher =
+      Map.get(
+        then_rule,
+        @tool_key,
+        Map.get(rule, @tool_key, get_in(rule, [@before_key, @tool_key]) || %{})
+      )
+
+    after_matcher = rule |> Map.get(@after_key, %{}) |> Map.get(@tool_key, %{})
+
+    with true <- Wardwright.ToolContext.matches?(tool_context, current_matcher),
+         {:ok, prior_event, inspected_count} <- sequence_prior_event(rule, caller, after_matcher),
+         false <- sequence_reset_after?(rule, caller, prior_event) do
+      action = Map.get(then_rule, @action_key, Map.get(rule, @action_key, @annotate_action))
+      rule_id = Map.get(rule, @id_key, @default_tool_sequence_id)
+
+      action_record =
+        %{
+          @rule_id_key => rule_id,
+          @kind_key => @tool_sequence_kind,
+          @action_key => action,
+          @matched_key => true,
+          @message_key =>
+            then_rule
+            |> Map.get(@message_key, Map.get(rule, @message_key, "tool sequence matched"))
+            |> blank_to_nil() || "tool sequence matched",
+          @severity_key =>
+            then_rule
+            |> Map.get(@severity_key, Map.get(rule, @severity_key, @default_info_severity))
+            |> blank_to_nil() || @default_info_severity,
+          @cache_scope_key => Map.get(rule, @cache_scope_key, @default_cache_scope),
+          @sequence_after_event_id_key => Map.get(prior_event, @id_key),
+          @sequence_after_key_key => Map.get(prior_event, @key_key),
+          @sequence_inspected_count_key => inspected_count,
+          @tool_context_key => tool_context
+        }
+        |> put_route_action_fields(Map.merge(rule, then_rule))
+        |> Wardwright.Policy.Action.normalize(rule: rule)
+
+      policy =
+        policy
+        |> Map.update!(@actions_key, &[action_record | &1])
+        |> apply_tool_sequence_action_policy(action, action_record)
+
+      if action in [@escalate_action, @alert_async_action] do
+        event = %{
+          @type_key => "policy.alert",
+          @rule_id_key => rule_id,
+          @message_key => action_record[@message_key],
+          @severity_key => action_record[@severity_key],
+          @tool_context_key => tool_context,
+          @idempotency_key => Map.get(rule, @idempotency_key)
+        }
+
+        {request,
+         policy
+         |> Map.update!(@events_key, &[event | &1])
+         |> Map.update!(@alert_count_key, &(&1 + 1))}
+      else
+        {request, policy}
+      end
+    else
+      _ -> {request, policy}
+    end
+  end
+
+  defp apply_tool_sequence_then_rule(_rule, _caller, request, policy, _tool_context, _then_rule),
+    do: {request, policy}
+
+  defp apply_tool_sequence_action_policy(policy, action, action_record)
+       when action in [@restrict_routes_action, @switch_model_action, @reroute_action] do
+    route_constraints = merge_route_constraints(policy[@route_constraints_key], action_record)
+    Map.put(policy, @route_constraints_key, route_constraints)
+  end
+
+  defp apply_tool_sequence_action_policy(policy, @block_action, _action_record),
+    do: Map.put(policy, @blocked_key, true)
+
+  defp apply_tool_sequence_action_policy(policy, _action, _action_record), do: policy
+
+  defp sequence_prior_event(rule, caller, after_matcher) do
+    cache_scope = Map.get(rule, @cache_scope_key, @default_cache_scope)
+    limit = sequence_window_limit(rule)
+
+    events =
+      Wardwright.PolicyCache.recent(
+        %{
+          @kind_key => @tool_call_kind,
+          @scope_key => cache_scope_from_caller(caller, cache_scope)
+        },
+        limit
+      )
+
+    current_event = List.first(events)
+
+    events
+    |> Enum.drop(1)
+    |> Enum.find(&tool_event_matches?(&1, after_matcher))
+    |> case do
+      nil -> nil
+      event -> if within_wall_clock_window?(rule, current_event, event), do: event
+    end
+    |> case do
+      nil -> :error
+      event -> {:ok, event, length(events)}
+    end
+  end
+
+  defp sequence_window_limit(rule) do
+    within = Map.get(rule, @within_key, %{})
+
+    turn_limit =
+      integer_value(Map.get(within, @turns_window_key)) ||
+        integer_value(Map.get(within, @events_window_key))
+
+    max(2, (turn_limit || 20) + 1)
+  end
+
+  defp within_wall_clock_window?(rule, current_event, prior_event) do
+    within = Map.get(rule, @within_key, %{})
+
+    max_ms =
+      integer_value(Map.get(within, @milliseconds_window_key)) ||
+        integer_value(Map.get(within, @ms_window_key))
+
+    if max_ms do
+      current_ms =
+        case current_event do
+          %{@created_at_key => created_at} when is_integer(created_at) -> created_at
+          _ -> System.system_time(:millisecond)
+        end
+
+      current_ms - Map.get(prior_event, @created_at_key, 0) <= max_ms
+    else
+      true
+    end
+  end
+
+  defp sequence_reset_after?(rule, caller, prior_event) do
+    until_rule = Map.get(rule, @until_key, %{})
+
+    cond do
+      not is_map(until_rule) or map_size(until_rule) == 0 ->
+        false
+
+      state = blank_to_nil(Map.get(until_rule, @state_key)) ->
+        state_event_after?(rule, caller, state, prior_event)
+
+      tool_matcher = Map.get(until_rule, @tool_key) ->
+        tool_event_after?(rule, caller, tool_matcher, prior_event)
+
+      true ->
+        false
+    end
+  end
+
+  defp state_scope_matches?(rule, caller) do
+    case blank_to_nil(Map.get(rule, @state_scope_key)) do
+      nil ->
+        true
+
+      @active_state ->
+        current_policy_state(caller, Map.get(rule, @cache_scope_key, @default_cache_scope)) ==
+          @active_state
+
+      state ->
+        current_policy_state(caller, Map.get(rule, @cache_scope_key, @default_cache_scope)) ==
+          state
+    end
+  end
+
+  defp current_policy_state(caller, cache_scope) do
+    Wardwright.PolicyCache.recent(
+      %{
+        @kind_key => @policy_state_kind,
+        @scope_key => cache_scope_from_caller(caller, cache_scope)
+      },
+      1
+    )
+    |> case do
+      [%{@key_key => state} | _] when is_binary(state) and state != "" -> state
+      _ -> @active_state
+    end
+  end
+
+  defp record_policy_state(caller, cache_scope, state, rule, tool_context) do
+    case Wardwright.PolicyCache.add(%{
+           @kind_key => @policy_state_kind,
+           @key_key => state,
+           @scope_key => cache_scope_from_caller(caller, cache_scope),
+           @value_key =>
+             %{
+               @rule_id_key => Map.get(rule, @id_key, @default_tool_sequence_id),
+               @tool_context_key => tool_context
+             }
+             |> reject_blank(),
+           @created_at_key => System.system_time(:millisecond)
+         }) do
+      {:ok, _event} -> :ok
+      {:error, _message} -> :ok
+    end
+  end
+
+  defp tool_event_after?(rule, caller, tool_matcher, prior_event) when is_map(tool_matcher) do
+    rule
+    |> scoped_recent_after(caller, @tool_call_kind, prior_event)
+    |> Enum.any?(&tool_event_matches?(&1, tool_matcher))
+  end
+
+  defp tool_event_after?(_rule, _caller, _tool_matcher, _prior_event), do: false
+
+  defp state_event_after?(rule, caller, state, prior_event) do
+    rule
+    |> scoped_recent_after(caller, @policy_state_kind, prior_event)
+    |> Enum.any?(&(Map.get(&1, @key_key) == state))
+  end
+
+  defp scoped_recent_after(rule, caller, kind, prior_event) do
+    Wardwright.PolicyCache.recent(
+      %{
+        @kind_key => kind,
+        @scope_key =>
+          cache_scope_from_caller(caller, Map.get(rule, @cache_scope_key, @default_cache_scope))
+      },
+      sequence_window_limit(rule)
+    )
+    |> Enum.filter(&(event_order(&1) > event_order(prior_event)))
+  end
+
+  defp tool_event_matches?(
+         %{@value_key => %{@primary_tool_key => primary_tool, @phase_key => phase}},
+         matcher
+       )
+       when is_map(primary_tool) and is_map(matcher) do
+    tool_context =
+      %{
+        @schema_key => @tool_context_schema,
+        @phase_key => phase,
+        @primary_tool_key => primary_tool
+      }
+      |> reject_blank()
+
+    Wardwright.ToolContext.matches?(tool_context, matcher)
+  end
+
+  defp tool_event_matches?(_event, _matcher), do: false
+
+  defp event_order(event) do
+    {Map.get(event, @created_at_key, 0), Map.get(event, @sequence_key, 0)}
+  end
+
+  defp record_tool_selector(policy, rule, matched) do
+    selector =
+      %{
+        "id" => Map.get(rule, "id", "tool-selector"),
+        "matched" => matched,
+        "tool" => Map.get(rule, "tool", %{}),
+        "attached_policy_bundle" => Map.get(rule, "attach_policy_bundle"),
+        "action" => Map.get(rule, "action", "annotate"),
+        "allowed_targets" => normalize_string_list(Map.get(rule, "allowed_targets")),
+        "target_model" => blank_to_nil(Map.get(rule, "target_model", Map.get(rule, "model"))),
+        "allow_fallback" => Map.get(rule, "allow_fallback")
+      }
+      |> reject_blank()
+
+    Map.update!(policy, "tool_policy_selectors", &[selector | &1])
+  end
+
+  defp put_tool_policy_status(policy, action, rule_id, count, threshold, cache_key, cache_scope) do
+    status =
+      case action do
+        "block" -> "blocked"
+        "restrict_routes" -> "rerouted"
+        "switch_model" -> "rerouted"
+        "reroute" -> "rerouted"
+        action when action in ["escalate", "alert_async"] -> "alerted"
+        action when action in ["inject_reminder_and_retry", "transform"] -> "transformed"
+        _ -> "allowed"
+      end
+
+    Map.put(policy, "tool_policy", %{
+      "status" => status,
+      "rule_id" => rule_id,
+      "state_scope" => scope_label(cache_scope),
+      "counter_key_hash" => content_hash(cache_key),
+      "threshold" => threshold,
+      "observed_count" => count
+    })
+  end
+
   defp policy_match?(_text, value) when value in [nil, ""], do: false
 
   defp policy_match?(text, value) do
@@ -464,6 +992,13 @@ defmodule Wardwright.Policy.Plan do
   end
 
   defp request_text(_), do: ""
+
+  defp request_tool_context(_request, %{"tool_context" => tool_context}, _opts)
+       when is_map(tool_context),
+       do: tool_context
+
+  defp request_tool_context(request, _policy, opts),
+    do: Wardwright.ToolContext.normalize(request, opts)
 
   defp cache_scope_from_caller(_caller, scope_name) when scope_name in [nil, ""], do: %{}
 
@@ -496,4 +1031,30 @@ defmodule Wardwright.Policy.Plan do
   end
 
   defp integer_value(_), do: nil
+
+  defp content_hash(nil), do: nil
+
+  defp content_hash(value),
+    do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, to_string(value)), case: :lower)
+
+  defp scope_label(value) do
+    case blank_to_nil(value) do
+      nil -> "session"
+      "session_id" -> "session"
+      "run_id" -> "run"
+      value -> value
+    end
+  end
+
+  defp reject_blank(map) when is_map(map) do
+    map
+    |> Enum.reject(fn
+      {_key, nil} -> true
+      {_key, ""} -> true
+      {_key, []} -> true
+      {_key, value} when is_map(value) and map_size(value) == 0 -> true
+      {_key, _value} -> false
+    end)
+    |> Map.new()
+  end
 end

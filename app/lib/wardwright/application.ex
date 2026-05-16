@@ -13,6 +13,7 @@ defmodule Wardwright.Application do
     children =
       [
         Wardwright.ReceiptStore,
+        Wardwright.PolicyScenarioStore,
         {DynamicSupervisor,
          strategy: :one_for_one, name: Wardwright.PolicyCache.SessionSupervisor},
         Wardwright.PolicyCache,
@@ -23,6 +24,8 @@ defmodule Wardwright.Application do
         {Registry, keys: :unique, name: Wardwright.Runtime.Registry},
         {DynamicSupervisor, strategy: :one_for_one, name: Wardwright.Runtime.ModelSupervisor},
         {DynamicSupervisor, strategy: :one_for_one, name: Wardwright.Runtime.SessionSupervisor},
+        Hermes.Server.Registry,
+        {WardwrightWeb.MCPServer, transport: {:streamable_http, start: true}},
         endpoint_child(host, port)
       ]
       |> Enum.reject(&is_nil/1)

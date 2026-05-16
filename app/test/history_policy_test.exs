@@ -64,6 +64,68 @@ defmodule Wardwright.HistoryPolicyTest do
              2
   end
 
+  test "history threshold can count normalized tool context from current session requests" do
+    cache_key = "mcp.github:create_pull_request:planning"
+
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 8, "recent_limit" => 8})
+      |> Map.put("governance", [
+        %{
+          "id" => "repeat-pr-tool",
+          "kind" => "history_threshold",
+          "action" => "escalate",
+          "cache_kind" => "tool_call",
+          "cache_key" => cache_key,
+          "cache_scope" => "session_id",
+          "threshold" => 1,
+          "severity" => "warning"
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{
+          request: %{
+            model: "unit-model",
+            messages: [%{role: "user", content: "open a pull request"}],
+            metadata: %{
+              tool_context: %{
+                phase: "planning",
+                primary_tool: %{
+                  namespace: "mcp.github",
+                  name: "create_pull_request",
+                  risk_class: "write"
+                },
+                tool_call_id: "call_1"
+              }
+            }
+          }
+        },
+        [{"x-wardwright-session-id", "session-tools"}]
+      )
+
+    body = Jason.decode!(conn.resp_body)
+
+    assert get_in(body, ["receipt", "final", "alert_count"]) == 1
+
+    assert get_in(body, ["receipt", "decision", "policy_actions", Access.at(0), "history_count"]) ==
+             1
+
+    assert [%{"kind" => "tool_call", "key" => ^cache_key, "value" => value}] =
+             Wardwright.PolicyCache.recent(
+               %{"kind" => "tool_call", "scope" => %{"session_id" => "session-tools"}},
+               10
+             )
+
+    assert value["tool_call_id"] == "call_1"
+    assert get_in(value, ["primary_tool", "namespace"]) == "mcp.github"
+  end
+
   test "history threshold uses safe defaults for blank operator-facing fields" do
     config =
       unit_policy_config()

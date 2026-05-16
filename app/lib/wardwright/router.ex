@@ -3,6 +3,11 @@ defmodule Wardwright.Router do
 
   use Plug.Router
 
+  @max_unpinned_key "max_unpinned"
+  @regression_format_key "format"
+  @json_format "json"
+  @tool_context_key "tool_context"
+
   plug(Plug.Logger)
 
   plug(Plug.Parsers,
@@ -46,8 +51,9 @@ defmodule Wardwright.Router do
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
-      Wardwright.Policy.History.record_request(caller, request)
-      {request, policy} = apply_request_policies(request, caller)
+      tool_context_opts = tool_context_opts(conn)
+      Wardwright.Policy.History.record_request(caller, request, tool_context_opts)
+      {request, policy} = apply_request_policies(request, caller, tool_context_opts)
       {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request, policy)
 
@@ -101,8 +107,9 @@ defmodule Wardwright.Router do
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
-      Wardwright.Policy.History.record_request(caller, request)
-      {request, policy} = apply_request_policies(request, caller)
+      tool_context_opts = tool_context_opts(conn)
+      Wardwright.Policy.History.record_request(caller, request, tool_context_opts)
+      {request, policy} = apply_request_policies(request, caller, tool_context_opts)
       {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request, policy)
 
@@ -150,6 +157,13 @@ defmodule Wardwright.Router do
           "selected_model",
           "simulation",
           "stream_policy_action",
+          "tool_namespace",
+          "tool_name",
+          "tool_phase",
+          "tool_policy_status",
+          "tool_risk_class",
+          "tool_source",
+          "tool_call_id",
           "created_at_min",
           "created_at_max"
         ])
@@ -233,6 +247,178 @@ defmodule Wardwright.Router do
     end
   end
 
+  get "/v1/policy-authoring/tools" do
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Map.new([{"data", WardwrightWeb.PolicyAuthoringTools.list()}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
+  end
+
+  get "/v1/policy-authoring/projections/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         :ok <- require_known_policy_pattern(pattern_id) do
+      json(
+        conn,
+        200,
+        Map.new([{"projection", Wardwright.PolicyProjection.projection(pattern_id)}])
+      )
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      {:error, message} ->
+        error(conn, 404, message, "not_found", "policy_pattern_not_found")
+    end
+  end
+
+  get "/v1/policy-authoring/simulations/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         :ok <- require_known_policy_pattern(pattern_id) do
+      json(conn, 200, Map.new([{"data", Wardwright.PolicyProjection.simulations(pattern_id)}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      {:error, message} ->
+        error(conn, 404, message, "not_found", "policy_pattern_not_found")
+    end
+  end
+
+  get "/v1/policy-authoring/scenarios/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id) do
+      scenarios =
+        pattern_id
+        |> Wardwright.PolicyScenarioStore.list()
+        |> Enum.map(&Wardwright.PolicyScenario.to_map/1)
+
+      json(conn, 200, Map.new([{"data", scenarios}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+    end
+  end
+
+  post "/v1/policy-authoring/scenarios/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, body} <- require_json_object(conn.body_params),
+         {:ok, scenario_body} <- scenario_payload(body),
+         {:ok, scenario} <- Wardwright.PolicyScenarioStore.create(pattern_id, scenario_body) do
+      json(conn, 201, Map.new([{"scenario", Wardwright.PolicyScenario.to_map(scenario)}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_scenario")
+    end
+  end
+
+  post "/v1/policy-authoring/scenarios/:pattern_id/from-receipt/:receipt_id" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, body} <- require_json_object(conn.body_params),
+         {:ok, receipt} <- receipt_for_import(receipt_id),
+         {:ok, scenario} <-
+           Wardwright.PolicyScenarioStore.create_from_receipt(pattern_id, receipt, body) do
+      json(conn, 201, Map.new([{"scenario", Wardwright.PolicyScenario.to_map(scenario)}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, :receipt_not_found} ->
+        error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_scenario")
+    end
+  end
+
+  get "/v1/policy-authoring/scenarios/:pattern_id/regression-export" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, export} <- Wardwright.PolicyScenarioStore.regression_export(pattern_id) do
+      format = Map.get(conn.query_params, @regression_format_key, @json_format)
+
+      case format do
+        @json_format ->
+          json(conn, 200, export)
+
+        "exunit" ->
+          case WardwrightWeb.PolicyScenarioRegression.exunit_source(export) do
+            {:ok, source} ->
+              text(conn, 200, source)
+
+            {:error, message} ->
+              error(conn, 400, message, "invalid_request", "invalid_regression_export")
+          end
+
+        other ->
+          error(
+            conn,
+            400,
+            "unsupported regression export format #{inspect(other)}",
+            "invalid_request",
+            "invalid_regression_export_format"
+          )
+      end
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_regression_export")
+    end
+  end
+
+  post "/v1/policy-authoring/scenarios/:pattern_id/retention" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, body} <- require_json_object(conn.body_params),
+         {:ok, max_unpinned} <- retention_max_unpinned(body),
+         {:ok, retention} <-
+           Wardwright.PolicyScenarioStore.enforce_retention(pattern_id, max_unpinned) do
+      json(conn, 200, retention)
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_scenario_retention")
+    end
+  end
+
+  post "/v1/policy-authoring/validate" do
+    with :ok <- require_protected_access(conn),
+         {:ok, artifact, source} <- validation_artifact(conn.body_params) do
+      json(conn, 200, WardwrightWeb.PolicyArtifactValidator.validate(artifact, source: source))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      {:error, message} ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_artifact")
+    end
+  end
+
   get "/admin/providers" do
     with :ok <- require_protected_access(conn) do
       json(conn, 200, %{"data" => Wardwright.providers()})
@@ -256,6 +442,7 @@ defmodule Wardwright.Router do
       with {:ok, config} <- require_json_object(conn.body_params),
            {:ok, config} <- Wardwright.put_config(config) do
         Wardwright.ReceiptStore.clear()
+        Wardwright.PolicyScenarioStore.clear()
 
         json(conn, 200, %{
           "status" => "ok",
@@ -276,6 +463,43 @@ defmodule Wardwright.Router do
 
   defp require_json_object(value) when is_map(value), do: {:ok, value}
   defp require_json_object(_), do: {:error, "request body must be a JSON object"}
+
+  defp scenario_payload(body) do
+    # boundary-map-ok
+    case Map.fetch(body, "scenario") do
+      {:ok, scenario} when is_map(scenario) -> {:ok, scenario}
+      {:ok, _scenario} -> {:error, "scenario must be a JSON object"}
+      :error -> {:ok, body}
+    end
+  end
+
+  defp receipt_for_import(receipt_id) do
+    case Wardwright.ReceiptStore.get(receipt_id) do
+      nil -> {:error, :receipt_not_found}
+      receipt -> {:ok, receipt}
+    end
+  end
+
+  defp validation_artifact(body) when body == %{},
+    do: {:ok, Wardwright.current_config(), "current_config"}
+
+  defp validation_artifact(body) when is_map(body) do
+    # boundary-map-ok
+    case Map.fetch(body, "artifact") do
+      {:ok, artifact} when is_map(artifact) -> {:ok, artifact, "submitted"}
+      {:ok, _artifact} -> {:error, "artifact must be a JSON object"}
+      :error -> {:ok, body, "submitted"}
+    end
+  end
+
+  defp validation_artifact(_body), do: {:error, "request body must be a JSON object"}
+
+  defp retention_max_unpinned(body) do
+    case Map.get(body, @max_unpinned_key) do
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      _value -> {:error, "max_unpinned must be a non-negative integer"}
+    end
+  end
 
   defp override_model(request, nil), do: request
   defp override_model(request, ""), do: request
@@ -307,8 +531,9 @@ defmodule Wardwright.Router do
     Map.put(request, "messages", messages)
   end
 
-  defp apply_request_policies(request, caller),
-    do: Wardwright.Policy.Plan.evaluate_request(request, caller)
+  defp apply_request_policies(request, caller, opts),
+    do:
+      Wardwright.Policy.Plan.evaluate_request(request, caller, Wardwright.current_config(), opts)
 
   defp deliver_policy_alerts(%{"events" => events} = policy) do
     alert_delivery = Wardwright.Policy.AlertDelivery.deliver(events)
@@ -424,6 +649,13 @@ defmodule Wardwright.Router do
   defp bearer_token("Bearer " <> token), do: blank_to_nil(token)
   defp bearer_token("bearer " <> token), do: blank_to_nil(token)
   defp bearer_token(_value), do: nil
+
+  defp tool_context_opts(conn), do: [trusted_metadata: trusted_tool_context_metadata?(conn)]
+
+  defp trusted_tool_context_metadata?(conn) do
+    local_request?(conn) or admin_token_valid?(conn) or
+      Application.get_env(:wardwright, :allow_prototype_access, false)
+  end
 
   defp route_decision(request, policy) do
     estimate = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
@@ -564,7 +796,8 @@ defmodule Wardwright.Router do
         "stream" => Map.get(request, "stream", false),
         "message_count" => length(Map.get(request, "messages", [])),
         "prompt_transforms" => Wardwright.current_config()["prompt_transforms"],
-        "structured_output" => Wardwright.current_config()["structured_output"]
+        "structured_output" => Wardwright.current_config()["structured_output"],
+        @tool_context_key => policy["tool_context"]
       },
       "decision" => %{
         "strategy" => decision.combine_strategy,
@@ -583,6 +816,8 @@ defmodule Wardwright.Router do
         "reason" => decision.reason,
         "rule" => decision.rule,
         "governance" => Wardwright.current_config()["governance"],
+        @tool_context_key => policy["tool_context"] || Wardwright.ToolContext.normalize(request),
+        "tool_policy_selectors" => policy["tool_policy_selectors"],
         "policy_actions" => policy["actions"],
         "policy_conflicts" => policy["conflicts"]
       },
@@ -601,6 +836,7 @@ defmodule Wardwright.Router do
         "stream_trigger_count" => 0,
         "alert_count" => policy["alert_count"],
         "alert_delivery" => Map.get(policy, "alert_delivery", []),
+        "tool_policy" => policy["tool_policy"],
         "events" => policy["events"],
         "receipt_recorded_at" =>
           DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
@@ -621,6 +857,7 @@ defmodule Wardwright.Router do
       |> Map.put("latency_ms", provider.latency_ms)
       |> put_if_present("provider_id", provider_id_from_model(Map.get(provider, :selected_model)))
       |> put_if_present("model", Map.get(provider, :selected_model))
+      |> put_if_present("provider_metadata", Map.get(provider, :provider_metadata))
       |> put_if_present("provider_error", provider.error)
     end)
     |> update_in(["final"], fn final ->
@@ -630,6 +867,7 @@ defmodule Wardwright.Router do
       |> put_if_present("structured_output", Map.get(provider, :structured_output))
       |> put_if_present("stream_policy", stream_policy_receipt(Map.get(provider, :stream_policy)))
       |> put_stream_policy_summary(Map.get(provider, :stream_policy))
+      |> put_if_present("provider_metadata", Map.get(provider, :provider_metadata))
       |> put_if_present("provider_error", provider.error)
     end)
   end
@@ -1332,13 +1570,19 @@ defmodule Wardwright.Router do
     |> send_resp(status, Jason.encode!(payload))
   end
 
+  defp text(conn, status, body) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(status, body)
+  end
+
   defp cors(conn, _opts) do
     conn
     |> put_resp_header("access-control-allow-origin", "*")
     |> put_resp_header("access-control-allow-methods", "GET, POST, OPTIONS")
     |> put_resp_header(
       "access-control-allow-headers",
-      "Content-Type, X-Wardwright-Tenant-Id, X-Wardwright-Application-Id, X-Wardwright-Agent-Id, X-Wardwright-User-Id, X-Wardwright-Session-Id, X-Wardwright-Run-Id, X-Client-Request-Id"
+      "Authorization, Content-Type, X-Wardwright-Admin-Token, X-Wardwright-Tenant-Id, X-Wardwright-Application-Id, X-Wardwright-Agent-Id, X-Wardwright-User-Id, X-Wardwright-Session-Id, X-Wardwright-Run-Id, X-Client-Request-Id"
     )
     |> put_resp_header(
       "access-control-expose-headers",
@@ -1364,6 +1608,17 @@ defmodule Wardwright.Router do
       _ -> 50
     end
   end
+
+  defp require_known_policy_pattern(pattern_id) do
+    if known_policy_pattern?(pattern_id) do
+      :ok
+    else
+      {:error, "policy pattern not found"}
+    end
+  end
+
+  defp known_policy_pattern?(pattern_id),
+    do: pattern_id in Wardwright.PolicyProjection.pattern_ids()
 
   defp receipt_events(receipt_id, created_at, status, decision, called_provider) do
     [
