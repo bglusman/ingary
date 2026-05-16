@@ -71,10 +71,13 @@ a clear error that names the missing capability.
   toward artifact-declared states/transitions or a compiler pass that emits a
   state projection from policy primitives and sandbox regions.
 - Assistant authoring is a deterministic boundary only. `validate_policy_artifact`
-  now executes a conservative structural/capability validation pass, while
-  `propose_rule_change` remains an advertised future draft-only tool.
-- Tool discovery is HTTP-shaped, not MCP-shaped. A Hermes or bespoke MCP adapter
-  can wrap the same functions, but no MCP server is implemented yet.
+  now executes a conservative structural/capability validation pass through HTTP
+  and MCP-shaped tools, while `propose_rule_change` remains an advertised future
+  draft-only tool.
+- Tool discovery is available over protected HTTP, and a first Hermes-backed MCP
+  server is mounted at `/mcp` for read-only projection, simulation, and artifact
+  validation tools. Write tools are still HTTP-only until the MCP auth/review
+  boundary is explicit.
 - The policy workbench is mostly static projection plus live runtime/cache
   events. It can consume persisted scenario records, but does not yet execute
   user-authored scenarios or show artifact diffs.
@@ -160,8 +163,8 @@ Interface expectation:
 
 1. Run and harden the live-provider smoke profile against local Ollama and one
    configured OpenAI-compatible target.
-2. Spike Hermes MCP over the protected authoring API without changing policy
-   engine internals.
+2. Add MCP write tools for scenario recording/import/export only after the
+   auth/review boundary is explicit.
 3. Generate StreamData and Gleam regression modules from pinned scenario packs,
    then decide whether Python Hypothesis remains a cross-implementation oracle
    only or becomes a first-class export format.

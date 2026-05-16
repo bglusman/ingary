@@ -17,12 +17,26 @@ defmodule WardwrightWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  pipeline :protected_api do
+    plug(WardwrightWeb.ProtectedAccess)
+  end
+
   scope "/", WardwrightWeb do
     pipe_through(:browser)
 
     live("/", PolicyProjectionLive, :index)
     live("/policies", PolicyProjectionLive, :index)
     live("/policies/:pattern/:mode", PolicyProjectionLive, :index)
+  end
+
+  scope "/" do
+    pipe_through(:protected_api)
+
+    forward(
+      "/mcp",
+      Hermes.Server.Transport.StreamableHTTP.Plug,
+      server: WardwrightWeb.MCPServer
+    )
   end
 
   scope "/" do
