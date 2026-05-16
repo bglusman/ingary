@@ -40,11 +40,15 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert projection["engine"]["language"] == "structured"
     assert projection["artifact"]["artifact_hash"] =~ "sha256:"
     assert projection["compiled_plan"]["planner"] == "Wardwright.Policy.Plan"
+    assert projection["state_machine"]["schema"] == "wardwright.policy_state_machine.v1"
+    assert projection["state_machine"]["default_projection"] == true
+    assert [%{"id" => "active", "node_ids" => node_ids}] = projection["state_machine"]["states"]
 
     nodes = projection["phases"] |> Enum.flat_map(& &1["nodes"])
     assert Enum.any?(nodes, &(&1["id"] == "request-policy.private-route-gate"))
     assert Enum.any?(nodes, &(&1["confidence"] == "exact"))
     assert Enum.all?(nodes, &is_binary(&1["node_class"]))
+    assert "request-policy.private-route-gate" in node_ids
     assert [%{"class" => "ordered"}] = projection["conflicts"]
   end
 
@@ -57,7 +61,30 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert simulation["artifact_hash"] == projection["artifact"]["artifact_hash"]
     assert simulation["verdict"] in ["passed", "failed", "inconclusive"]
     assert Enum.any?(simulation["trace"], &MapSet.member?(node_ids, &1["node_id"]))
+    assert Enum.all?(simulation["trace"], &is_binary(&1["state_id"]))
     assert is_map(simulation["receipt_preview"])
+
+    assert projection["state_machine"]["default_projection"] == false
+    state_ids = projection["state_machine"]["states"] |> MapSet.new(& &1["id"])
+
+    assert Enum.map(projection["state_machine"]["states"], & &1["id"]) == [
+             "observing",
+             "guarding",
+             "retrying",
+             "recording"
+           ]
+
+    assert Enum.map(projection["state_machine"]["simulation_steps"], & &1["state"]) == [
+             "observing",
+             "guarding",
+             "retrying",
+             "recording"
+           ]
+
+    assert Enum.all?(
+             projection["state_machine"]["simulation_steps"],
+             &MapSet.member?(state_ids, &1["state"])
+           )
   end
 
   test "route projection simulation is derived from configured policy plan actions" do
@@ -101,6 +128,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert connected_html =~ "Artifact first"
     assert connected_html =~ "Policy nodes"
     assert connected_html =~ "Simulation evidence"
+    assert connected_html =~ "State model"
     assert connected_html =~ "Review load"
 
     assert {:error, {:redirect, %{to: "/policies/route-privacy/effect_matrix"}}} =
@@ -115,6 +143,25 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert matrix_html =~ "Private context route gate"
     assert matrix_html =~ "Effect matrix"
     assert matrix_html =~ "route.allowed_targets"
+  end
+
+  test "LiveView state-machine mode shows default and explicit state projections" do
+    :ok = put_route_gate_config()
+    {:ok, route_view, route_html} = live(build_conn(), "/policies/route-privacy/state_machine")
+
+    assert route_html =~ "State machine"
+    assert route_html =~ "default one-state"
+    assert route_html =~ "No explicit transitions"
+    assert route_html =~ "Assistant boundary"
+    assert route_html =~ "explain_projection"
+    assert render(route_view) =~ "request-policy.private-route-gate"
+
+    {:ok, retry_view, retry_html} = live(build_conn(), "/policies/tts-retry/state_machine")
+
+    assert retry_html =~ "explicit stateful"
+    assert retry_html =~ "Observing"
+    assert retry_html =~ "Retrying"
+    assert render(retry_view) =~ "stream.match"
   end
 
   defp put_route_gate_config do

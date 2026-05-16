@@ -51,6 +51,36 @@ defmodule Wardwright.PublicApiTest do
     assert is_map(model["route_graph"])
   end
 
+  test "protected policy authoring API exposes projection and tool contracts" do
+    rejected = call(:get, "/v1/policy-authoring/tools", nil, [], {203, 0, 113, 10})
+    assert rejected.status == 403
+
+    tools = call(:get, "/v1/policy-authoring/tools")
+    assert tools.status == 200
+
+    tool_names =
+      tools.resp_body |> Jason.decode!() |> Map.fetch!("data") |> Enum.map(& &1["name"])
+
+    assert "explain_projection" in tool_names
+    assert "simulate_policy" in tool_names
+    assert "propose_rule_change" in tool_names
+
+    projection = call(:get, "/v1/policy-authoring/projections/tts-retry")
+    assert projection.status == 200
+
+    body = Jason.decode!(projection.resp_body)
+    assert get_in(body, ["projection", "state_machine", "initial_state"]) == "observing"
+
+    simulations = call(:get, "/v1/policy-authoring/simulations/tts-retry")
+    assert simulations.status == 200
+
+    assert [%{"artifact_hash" => "sha256:" <> _hash}] =
+             Jason.decode!(simulations.resp_body)["data"]
+
+    missing = call(:get, "/v1/policy-authoring/projections/not-real")
+    assert missing.status == 404
+  end
+
   test "chat completion records caller headers and selected model" do
     request = %{
       model: "wardwright/coding-balanced",

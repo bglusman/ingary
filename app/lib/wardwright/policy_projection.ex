@@ -29,6 +29,8 @@ defmodule Wardwright.PolicyProjection do
 
   def patterns, do: @patterns
 
+  def pattern_ids, do: Enum.map(@patterns, &Map.fetch!(&1, "id"))
+
   def pattern(pattern_id) do
     Enum.find(@patterns, &(&1["id"] == pattern_id)) || hd(@patterns)
   end
@@ -43,6 +45,7 @@ defmodule Wardwright.PolicyProjection do
       "engine" => engine(pattern["id"], config),
       "compiled_plan" => compiled_plan(pattern["id"], config, phases),
       "phases" => phases,
+      "state_machine" => state_machine(pattern["id"], phases, config),
       "effects" => effects(pattern["id"], config),
       "conflicts" => conflicts(pattern["id"], config),
       "opaque_regions" => opaque_regions(pattern["id"], config),
@@ -275,6 +278,175 @@ defmodule Wardwright.PolicyProjection do
       "node_count" => phases |> Enum.flat_map(& &1["nodes"]) |> length(),
       "source" => "current_config"
     }
+  end
+
+  defp state_machine("tts-retry", phases, config) do
+    states = [
+      state(
+        "observing",
+        "Observing",
+        "Hold unreleased stream chunks while matching configured stream rules.",
+        ["tts.no-old-client"]
+      ),
+      state(
+        "guarding",
+        "Guarding",
+        "A prohibited span has matched before release; current attempt must stop.",
+        ["tts.no-old-client", "tts.retry-arbiter"]
+      ),
+      state(
+        "retrying",
+        "Retrying",
+        "Retry arbitration adds a reminder or resolves repeat violation to final block.",
+        ["tts.retry-arbiter"]
+      ),
+      state(
+        "recording",
+        "Recording",
+        "Receipt facts persist the held bytes, match, abort, retry, and final status.",
+        ["tts.receipt-events"],
+        terminal: true
+      )
+    ]
+
+    %Contract.StateMachine{
+      initial_state: "observing",
+      default_projection: false,
+      summary:
+        "Explicit retry loop projection for stream guard, abort, retry, and receipt recording.",
+      states: states,
+      transitions: [
+        transition(
+          "stream.match",
+          "observing",
+          "guarding",
+          "stream window matches a prohibited span",
+          "abort_attempt",
+          "tts.no-old-client"
+        ),
+        transition(
+          "attempt.retry",
+          "guarding",
+          "retrying",
+          "retry budget remains",
+          "retry_with_reminder",
+          "tts.retry-arbiter"
+        ),
+        transition(
+          "receipt.write",
+          "retrying",
+          "recording",
+          "attempt outcome is known",
+          "annotate_receipt",
+          "tts.receipt-events"
+        )
+      ],
+      simulation_steps: simulation_steps("tts-retry", config, states)
+    }
+    |> Contract.to_map()
+    |> attach_state_node_fallback(phases)
+  end
+
+  defp state_machine(pattern_id, phases, config) do
+    states = [
+      state(
+        "active",
+        "Active",
+        "Evaluate configured phases without a separate user-authored state model.",
+        phase_node_ids(phases)
+      )
+    ]
+
+    %Contract.StateMachine{
+      initial_state: "active",
+      default_projection: true,
+      summary:
+        "Default one-state projection for policies without explicit stateful control flow.",
+      states: states,
+      transitions: [],
+      simulation_steps: simulation_steps(pattern_id, config, states)
+    }
+    |> Contract.to_map()
+  end
+
+  defp attach_state_node_fallback(state_machine, phases) do
+    known_node_ids = phase_node_ids(phases) |> MapSet.new()
+
+    states =
+      state_machine["states"]
+      |> Enum.map(fn state ->
+        node_ids = Enum.filter(state["node_ids"], &MapSet.member?(known_node_ids, &1))
+        Map.put(state, "node_ids", node_ids)
+      end)
+
+    Map.put(state_machine, "states", states)
+  end
+
+  defp state(id, label, summary, node_ids, opts \\ []) do
+    %Contract.State{
+      id: id,
+      label: label,
+      summary: summary,
+      node_ids: node_ids,
+      terminal: Keyword.get(opts, :terminal, false)
+    }
+  end
+
+  defp transition(id, from, to, trigger, action, node_id) do
+    %Contract.Transition{
+      id: id,
+      from: from,
+      to: to,
+      trigger: trigger,
+      action: action,
+      node_id: node_id
+    }
+  end
+
+  defp simulation_steps(pattern_id, config, states) do
+    pattern_id
+    |> simulation_cases(config)
+    |> List.first(%{})
+    |> Map.get("trace", [])
+    |> Enum.with_index(1)
+    |> Enum.map(fn {event, index} ->
+      state_id = trace_state(event, states)
+
+      %Contract.StateStep{
+        step: index,
+        state: state_id,
+        event_id: event["id"],
+        node_id: event["node_id"],
+        summary: event["label"],
+        severity: event["severity"]
+      }
+    end)
+  end
+
+  defp trace_state(%{"state_id" => state_id}, states)
+       when is_binary(state_id) and state_id != "" do
+    if Enum.any?(states, &(&1.id == state_id)) do
+      state_id
+    else
+      raise ArgumentError,
+            "simulation trace references unknown state_id #{inspect(state_id)}"
+    end
+  end
+
+  defp trace_state(%{"node_id" => node_id}, states) when is_binary(node_id) do
+    states
+    |> Enum.find(first_state(states), fn state -> node_id in state.node_ids end)
+    |> Map.fetch!(:id)
+  end
+
+  defp trace_state(_event, states), do: first_state(states).id
+
+  defp first_state([state | _states]), do: state
+
+  defp phase_node_ids(phases) do
+    phases
+    |> Enum.flat_map(& &1["nodes"])
+    |> Enum.map(& &1["id"])
   end
 
   defp route_governance_rules(config) do
@@ -678,7 +850,8 @@ defmodule Wardwright.PolicyProjection do
             "input",
             "chunk held",
             "avoid introducing Old",
-            "info"
+            "info",
+            state_id: "observing"
           ),
           trace(
             "t2",
@@ -687,7 +860,8 @@ defmodule Wardwright.PolicyProjection do
             "match",
             "regex matched",
             "Client( completes the prohibited span inside the holdback window",
-            "block"
+            "block",
+            state_id: "guarding"
           ),
           trace(
             "t3",
@@ -696,7 +870,8 @@ defmodule Wardwright.PolicyProjection do
             "action",
             "retry selected",
             "attempt aborted before release and retry reminder injected",
-            "pass"
+            "pass",
+            state_id: "retrying"
           ),
           trace(
             "t4",
@@ -705,7 +880,8 @@ defmodule Wardwright.PolicyProjection do
             "receipt_event",
             "receipt preview",
             "stream.rule_matched and attempt.retry_requested events recorded",
-            "info"
+            "info",
+            state_id: "recording"
           )
         ],
         "receipt_preview" => %{
@@ -838,7 +1014,9 @@ defmodule Wardwright.PolicyProjection do
     end)
   end
 
-  defp trace(id, phase, node_id, kind, label, detail, severity, source_span \\ nil) do
+  defp trace(id, phase, node_id, kind, label, detail, severity, opts \\ []) do
+    opts = trace_opts(opts)
+
     %Contract.TraceEvent{
       id: id,
       phase: phase,
@@ -847,8 +1025,12 @@ defmodule Wardwright.PolicyProjection do
       label: label,
       detail: detail,
       severity: severity,
-      source_span: source_span
+      state_id: Keyword.get(opts, :state_id),
+      source_span: Keyword.get(opts, :source_span)
     }
     |> Contract.to_map()
   end
+
+  defp trace_opts(opts) when is_list(opts), do: opts
+  defp trace_opts(source_span), do: [source_span: source_span]
 end

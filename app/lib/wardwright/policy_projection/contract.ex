@@ -32,7 +32,48 @@ defmodule Wardwright.PolicyProjection.Contract do
   defmodule TraceEvent do
     @moduledoc false
     @enforce_keys [:id, :phase, :node_id, :kind, :label, :detail, :severity]
-    defstruct [:id, :phase, :node_id, :kind, :label, :detail, :severity, source_span: nil]
+    defstruct [
+      :id,
+      :phase,
+      :node_id,
+      :kind,
+      :label,
+      :detail,
+      :severity,
+      state_id: nil,
+      source_span: nil
+    ]
+  end
+
+  defmodule StateMachine do
+    @moduledoc false
+    @enforce_keys [:initial_state, :states]
+    defstruct [
+      :initial_state,
+      states: [],
+      transitions: [],
+      simulation_steps: [],
+      default_projection: true,
+      summary: nil
+    ]
+  end
+
+  defmodule State do
+    @moduledoc false
+    @enforce_keys [:id, :label, :summary]
+    defstruct [:id, :label, :summary, node_ids: [], terminal: false]
+  end
+
+  defmodule Transition do
+    @moduledoc false
+    @enforce_keys [:id, :from, :to, :trigger, :action]
+    defstruct [:id, :from, :to, :trigger, :action, :node_id, confidence: "exact"]
+  end
+
+  defmodule StateStep do
+    @moduledoc false
+    @enforce_keys [:step, :state, :event_id, :summary]
+    defstruct [:step, :state, :event_id, :summary, :node_id, severity: "info"]
   end
 
   def to_map(%Node{} = node) do
@@ -73,7 +114,57 @@ defmodule Wardwright.PolicyProjection.Contract do
       {"label", event.label},
       {"detail", event.detail},
       {"severity", event.severity},
+      {"state_id", event.state_id},
       {"source_span", event.source_span}
+    ]
+    |> reject_nil()
+  end
+
+  def to_map(%StateMachine{} = state_machine) do
+    [
+      {"schema", "wardwright.policy_state_machine.v1"},
+      {"default_projection", state_machine.default_projection},
+      {"initial_state", state_machine.initial_state},
+      {"summary", state_machine.summary},
+      {"states", Enum.map(state_machine.states, &to_map/1)},
+      {"transitions", Enum.map(state_machine.transitions, &to_map/1)},
+      {"simulation_steps", Enum.map(state_machine.simulation_steps, &to_map/1)}
+    ]
+    |> reject_nil()
+  end
+
+  def to_map(%State{} = state) do
+    [
+      {"id", state.id},
+      {"label", state.label},
+      {"summary", state.summary},
+      {"node_ids", state.node_ids},
+      {"terminal", state.terminal}
+    ]
+    |> reject_nil()
+  end
+
+  def to_map(%Transition{} = transition) do
+    [
+      {"id", transition.id},
+      {"from", transition.from},
+      {"to", transition.to},
+      {"trigger", transition.trigger},
+      {"action", transition.action},
+      {"node_id", transition.node_id},
+      {"confidence", transition.confidence}
+    ]
+    |> reject_nil()
+  end
+
+  def to_map(%StateStep{} = step) do
+    [
+      {"step", step.step},
+      {"state", step.state},
+      {"event_id", step.event_id},
+      {"node_id", step.node_id},
+      {"summary", step.summary},
+      {"severity", step.severity}
     ]
     |> reject_nil()
   end

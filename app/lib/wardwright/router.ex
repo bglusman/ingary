@@ -233,6 +233,45 @@ defmodule Wardwright.Router do
     end
   end
 
+  get "/v1/policy-authoring/tools" do
+    with :ok <- require_protected_access(conn) do
+      json(conn, 200, Map.new([{"data", WardwrightWeb.PolicyAuthoringTools.list()}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+    end
+  end
+
+  get "/v1/policy-authoring/projections/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         :ok <- require_known_policy_pattern(pattern_id) do
+      json(
+        conn,
+        200,
+        Map.new([{"projection", Wardwright.PolicyProjection.projection(pattern_id)}])
+      )
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      {:error, message} ->
+        error(conn, 404, message, "not_found", "policy_pattern_not_found")
+    end
+  end
+
+  get "/v1/policy-authoring/simulations/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         :ok <- require_known_policy_pattern(pattern_id) do
+      json(conn, 200, Map.new([{"data", Wardwright.PolicyProjection.simulations(pattern_id)}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      {:error, message} ->
+        error(conn, 404, message, "not_found", "policy_pattern_not_found")
+    end
+  end
+
   get "/admin/providers" do
     with :ok <- require_protected_access(conn) do
       json(conn, 200, %{"data" => Wardwright.providers()})
@@ -1362,6 +1401,14 @@ defmodule Wardwright.Router do
     case Integer.parse(raw) do
       {value, ""} -> value |> max(1) |> min(500)
       _ -> 50
+    end
+  end
+
+  defp require_known_policy_pattern(pattern_id) do
+    if pattern_id in Wardwright.PolicyProjection.pattern_ids() do
+      :ok
+    else
+      {:error, "policy pattern not found"}
     end
   end
 
