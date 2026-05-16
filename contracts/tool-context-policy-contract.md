@@ -33,10 +33,12 @@ tool_context:
   confidence: exact | declared | inferred | ambiguous
 ```
 
-The prototype supports trusted `metadata.tool_context`, OpenAI-compatible
-`tools`, `tool_choice`, assistant `tool_calls`, and `tool` result messages. Raw
-tool arguments and tool results are not stored by default; hashes are used for
-receipts and history evidence.
+The prototype supports OpenAI-compatible `tools`, `tool_choice`, assistant
+`tool_calls`, and `tool` result messages by default. `metadata.tool_context` is
+accepted only when the caller is a trusted gateway path such as localhost,
+prototype access, or a request carrying the configured Wardwright admin token.
+Raw tool arguments and tool results are not stored by default; hashes are used
+for receipts and history evidence.
 
 ## Governance Rules
 
@@ -88,7 +90,8 @@ Receipt summaries can filter by `tool_namespace`, `tool_name`, `tool_phase`,
 
 ## Trust Boundary
 
-`metadata.tool_context` is currently treated as trusted gateway metadata. Client
-supplied metadata should not be accepted as proof of a real tool execution until
-caller provenance and gateway attestation rules distinguish trusted and
-untrusted sources.
+`metadata.tool_context` is gateway-attested evidence, not public client input.
+Remote callers without the configured admin token cannot drive tool policy from
+that field. This is still a prototype trust model: production deployments should
+replace the admin-token shortcut with explicit gateway identity, request
+signature, or another auditable attestation mechanism.

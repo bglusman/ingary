@@ -83,27 +83,30 @@ defmodule Wardwright.ToolContextTest do
 
   test "normalizes caller metadata into a bounded contract shape" do
     {request, context} =
-      Wardwright.ToolContext.normalize_request(%{
-        "metadata" => %{
-          "tool_context" => %{
-            "schema" => "caller-controlled",
-            "phase" => "planning",
-            "primary_tool" => %{
-              "namespace" => "mcp.github",
-              "name" => "create_pull_request",
-              "risk_class" => "write",
-              "source" => "unexpected"
-            },
-            "tool_call_id" => 42,
-            "argument_hash" => "raw secret argument",
-            "result_hash" => "raw secret result",
-            "available_tools" => [
-              %{"namespace" => "mcp.github", "name" => "create_pull_request"}
-            ],
-            "confidence" => "unexpected"
+      Wardwright.ToolContext.normalize_request(
+        %{
+          "metadata" => %{
+            "tool_context" => %{
+              "schema" => "caller-controlled",
+              "phase" => "planning",
+              "primary_tool" => %{
+                "namespace" => "mcp.github",
+                "name" => "create_pull_request",
+                "risk_class" => "write",
+                "source" => "unexpected"
+              },
+              "tool_call_id" => 42,
+              "argument_hash" => "raw secret argument",
+              "result_hash" => "raw secret result",
+              "available_tools" => [
+                %{"namespace" => "mcp.github", "name" => "create_pull_request"}
+              ],
+              "confidence" => "unexpected"
+            }
           }
-        }
-      })
+        },
+        trusted_metadata: true
+      )
 
     assert context["schema"] == "wardwright.tool_context.v1"
     assert context["tool_call_id"] == "42"
@@ -119,6 +122,24 @@ defmodule Wardwright.ToolContextTest do
              "names" => ["create_pull_request"],
              "risk_classes" => ["read_only", "write"]
            })
+  end
+
+  test "ignores caller metadata unless the gateway marks it trusted" do
+    request = %{
+      "metadata" => %{
+        "tool_context" => %{
+          "phase" => "planning",
+          "primary_tool" => %{"namespace" => "mcp.github", "name" => "create_pull_request"}
+        }
+      }
+    }
+
+    assert Wardwright.ToolContext.normalize(request) == nil
+
+    assert get_in(
+             Wardwright.ToolContext.normalize(request, trusted_metadata: true),
+             ["primary_tool", "name"]
+           ) == "create_pull_request"
   end
 
   test "does not produce partial cache keys for incomplete identities" do

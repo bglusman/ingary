@@ -8,8 +8,10 @@ description: Tool-aware policy selectors, loop thresholds, receipts, and trust b
 
 Wardwright normalizes request-visible tool facts before policy planning,
 receipts, history, or UI projection consume them. The active prototype supports
-trusted `metadata.tool_context`, OpenAI-compatible `tools`, `tool_choice`,
-assistant `tool_calls`, and `tool` result messages.
+OpenAI-compatible `tools`, `tool_choice`, assistant `tool_calls`, and `tool`
+result messages by default. `metadata.tool_context` is accepted only from
+trusted gateway paths such as localhost, prototype access, or requests carrying
+the configured Wardwright admin token.
 
 Tool-aware governance currently has two built-in rule shapes:
 

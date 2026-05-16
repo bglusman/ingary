@@ -407,7 +407,7 @@ components:
         metadata:
           type: object
           additionalProperties: true
-          description: Optional caller metadata. Header values win when trusted.
+          description: Optional caller metadata. Header values win when trusted; metadata.tool_context is only trusted for local, prototype, or admin-token gateway paths.
     ChatMessage:
       type: object
       required: [role]

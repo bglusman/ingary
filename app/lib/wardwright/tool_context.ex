@@ -63,19 +63,27 @@ defmodule Wardwright.ToolContext do
                    ~w(declared_tool tool_choice assistant_tool_call tool_result caller_metadata inferred)
                  )
 
-  def normalize(request) when is_map(request) do
-    request
-    |> metadata_tool_context()
-    |> case do
-      nil -> inferred_context(request)
-      context -> normalize_metadata_context(context)
+  def normalize(request, opts \\ [])
+
+  def normalize(request, opts) when is_map(request) do
+    if Keyword.get(opts, :trusted_metadata, false) do
+      request
+      |> metadata_tool_context()
+      |> case do
+        nil -> inferred_context(request)
+        context -> normalize_metadata_context(context)
+      end
+    else
+      inferred_context(request)
     end
   end
 
-  def normalize(_request), do: nil
+  def normalize(_request, _opts), do: nil
 
-  def normalize_request(request) when is_map(request) do
-    case normalize(request) do
+  def normalize_request(request, opts \\ [])
+
+  def normalize_request(request, opts) when is_map(request) do
+    case normalize(request, opts) do
       nil ->
         {request, nil}
 
@@ -93,7 +101,7 @@ defmodule Wardwright.ToolContext do
     end
   end
 
-  def normalize_request(request), do: {request, nil}
+  def normalize_request(request, _opts), do: {request, nil}
 
   def cache_key(%{
         @primary_tool_key => %{@namespace_key => namespace, @name_key => name},

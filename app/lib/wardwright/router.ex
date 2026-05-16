@@ -51,8 +51,9 @@ defmodule Wardwright.Router do
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
-      Wardwright.Policy.History.record_request(caller, request)
-      {request, policy} = apply_request_policies(request, caller)
+      tool_context_opts = tool_context_opts(conn)
+      Wardwright.Policy.History.record_request(caller, request, tool_context_opts)
+      {request, policy} = apply_request_policies(request, caller, tool_context_opts)
       {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request, policy)
 
@@ -106,8 +107,9 @@ defmodule Wardwright.Router do
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
-      Wardwright.Policy.History.record_request(caller, request)
-      {request, policy} = apply_request_policies(request, caller)
+      tool_context_opts = tool_context_opts(conn)
+      Wardwright.Policy.History.record_request(caller, request, tool_context_opts)
+      {request, policy} = apply_request_policies(request, caller, tool_context_opts)
       {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request, policy)
 
@@ -529,8 +531,9 @@ defmodule Wardwright.Router do
     Map.put(request, "messages", messages)
   end
 
-  defp apply_request_policies(request, caller),
-    do: Wardwright.Policy.Plan.evaluate_request(request, caller)
+  defp apply_request_policies(request, caller, opts),
+    do:
+      Wardwright.Policy.Plan.evaluate_request(request, caller, Wardwright.current_config(), opts)
 
   defp deliver_policy_alerts(%{"events" => events} = policy) do
     alert_delivery = Wardwright.Policy.AlertDelivery.deliver(events)
@@ -646,6 +649,13 @@ defmodule Wardwright.Router do
   defp bearer_token("Bearer " <> token), do: blank_to_nil(token)
   defp bearer_token("bearer " <> token), do: blank_to_nil(token)
   defp bearer_token(_value), do: nil
+
+  defp tool_context_opts(conn), do: [trusted_metadata: trusted_tool_context_metadata?(conn)]
+
+  defp trusted_tool_context_metadata?(conn) do
+    local_request?(conn) or admin_token_valid?(conn) or
+      Application.get_env(:wardwright, :allow_prototype_access, false)
+  end
 
   defp route_decision(request, policy) do
     estimate = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
@@ -1572,7 +1582,7 @@ defmodule Wardwright.Router do
     |> put_resp_header("access-control-allow-methods", "GET, POST, OPTIONS")
     |> put_resp_header(
       "access-control-allow-headers",
-      "Content-Type, X-Wardwright-Tenant-Id, X-Wardwright-Application-Id, X-Wardwright-Agent-Id, X-Wardwright-User-Id, X-Wardwright-Session-Id, X-Wardwright-Run-Id, X-Client-Request-Id"
+      "Authorization, Content-Type, X-Wardwright-Admin-Token, X-Wardwright-Tenant-Id, X-Wardwright-Application-Id, X-Wardwright-Agent-Id, X-Wardwright-User-Id, X-Wardwright-Session-Id, X-Wardwright-Run-Id, X-Client-Request-Id"
     )
     |> put_resp_header(
       "access-control-expose-headers",

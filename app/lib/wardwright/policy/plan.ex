@@ -8,14 +8,14 @@ defmodule Wardwright.Policy.Plan do
   events.
   """
 
-  def evaluate_request(request, caller, config \\ Wardwright.current_config()) do
+  def evaluate_request(request, caller, config \\ Wardwright.current_config(), opts \\ []) do
     text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
-    tool_context = Wardwright.ToolContext.normalize(request)
+    tool_context = Wardwright.ToolContext.normalize(request, opts)
 
     config
     |> Map.get("governance", [])
     |> Enum.reduce({request, empty_policy(tool_context)}, fn rule, {request, policy} ->
-      apply_rule(rule, text, caller, request, policy)
+      apply_rule(rule, text, caller, request, policy, opts)
     end)
     |> then(fn {request, policy} ->
       policy =
@@ -45,7 +45,7 @@ defmodule Wardwright.Policy.Plan do
       "tool_policy_selectors" => []
     }
 
-  defp apply_rule(rule, text, caller, request, policy) do
+  defp apply_rule(rule, text, caller, request, policy, opts) do
     kind = Map.get(rule, "kind", "")
 
     cond do
@@ -59,10 +59,10 @@ defmodule Wardwright.Policy.Plan do
         apply_history_regex_threshold_rule(rule, caller, request, policy)
 
       kind == "tool_selector" ->
-        apply_tool_selector_rule(rule, request, policy)
+        apply_tool_selector_rule(rule, request, policy, opts)
 
       kind == "tool_loop_threshold" ->
-        apply_tool_loop_threshold_rule(rule, caller, request, policy)
+        apply_tool_loop_threshold_rule(rule, caller, request, policy, opts)
 
       kind in ["request_guard", "request_transform", "receipt_annotation", "route_gate"] &&
           policy_rule_matches?(text, rule) ->
@@ -457,8 +457,8 @@ defmodule Wardwright.Policy.Plan do
     end
   end
 
-  defp apply_tool_selector_rule(rule, request, policy) do
-    tool_context = request_tool_context(request, policy)
+  defp apply_tool_selector_rule(rule, request, policy, opts) do
+    tool_context = request_tool_context(request, policy, opts)
 
     if Wardwright.ToolContext.matches?(tool_context, Map.get(rule, "tool", %{})) do
       policy = record_tool_selector(policy, rule, true)
@@ -468,8 +468,8 @@ defmodule Wardwright.Policy.Plan do
     end
   end
 
-  defp apply_tool_loop_threshold_rule(rule, caller, request, policy) do
-    tool_context = request_tool_context(request, policy)
+  defp apply_tool_loop_threshold_rule(rule, caller, request, policy, opts) do
+    tool_context = request_tool_context(request, policy, opts)
     threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
     tool_matcher = Map.get(rule, "tool", %{})
 
@@ -618,15 +618,12 @@ defmodule Wardwright.Policy.Plan do
 
   defp request_text(_), do: ""
 
-  defp request_tool_context(_request, %{"tool_context" => tool_context})
+  defp request_tool_context(_request, %{"tool_context" => tool_context}, _opts)
        when is_map(tool_context),
        do: tool_context
 
-  defp request_tool_context(%{"metadata" => %{"tool_context" => tool_context}}, _policy)
-       when is_map(tool_context),
-       do: tool_context
-
-  defp request_tool_context(request, _policy), do: Wardwright.ToolContext.normalize(request)
+  defp request_tool_context(request, _policy, opts),
+    do: Wardwright.ToolContext.normalize(request, opts)
 
   defp cache_scope_from_caller(_caller, scope_name) when scope_name in [nil, ""], do: %{}
 

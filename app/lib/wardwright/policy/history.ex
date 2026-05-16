@@ -13,7 +13,7 @@ defmodule Wardwright.Policy.History do
   @tool_call_id_key "tool_call_id"
   @tool_call_kind "tool_call"
 
-  def record_request(caller, request) do
+  def record_request(caller, request, opts \\ []) do
     add_text_event(
       "request_text",
       "chat_completion",
@@ -21,7 +21,7 @@ defmodule Wardwright.Policy.History do
       request_text(Map.get(request, "messages", []))
     )
 
-    record_tool_context(caller, Wardwright.ToolContext.normalize(request))
+    record_tool_context(caller, Wardwright.ToolContext.normalize(request, opts))
   end
 
   def record_response(caller, content) when is_binary(content) and content != "" do

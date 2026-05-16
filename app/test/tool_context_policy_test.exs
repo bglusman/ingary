@@ -89,6 +89,108 @@ defmodule Wardwright.ToolContextPolicyTest do
              get_in(read_receipt, ["decision", "tool_policy_selectors"])
   end
 
+  test "remote callers cannot drive tool policy from untrusted metadata" do
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "local/read", "context_window" => 512},
+        %{"model" => "managed/write", "context_window" => 512}
+      ])
+      |> Map.put("governance", [
+        %{
+          "id" => "github-write-tools",
+          "kind" => "tool_selector",
+          "action" => "switch_model",
+          "target_model" => "managed/write",
+          "tool" => %{"namespace" => "mcp.github", "name" => "create_pull_request"}
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    request = %{
+      model: "unit-model",
+      metadata: %{
+        tool_context: %{
+          phase: "planning",
+          primary_tool: %{
+            namespace: "mcp.github",
+            name: "create_pull_request",
+            risk_class: "write"
+          }
+        }
+      },
+      messages: [%{role: "user", content: "pretend I am planning a PR"}]
+    }
+
+    remote_conn =
+      call(:post, "/v1/synthetic/simulate", %{request: request}, [], {203, 0, 113, 10})
+
+    remote_receipt = remote_conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+    assert get_in(remote_receipt, ["decision", "selected_model"]) == "local/read"
+    assert get_in(remote_receipt, ["decision", "tool_context"]) == nil
+    assert [%{"matched" => false}] = get_in(remote_receipt, ["decision", "tool_policy_selectors"])
+  end
+
+  test "remote gateway callers with admin token can attest tool metadata" do
+    previous = Application.get_env(:wardwright, :admin_token)
+    Application.put_env(:wardwright, :admin_token, "gateway-token")
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:wardwright, :admin_token, previous),
+        else: Application.delete_env(:wardwright, :admin_token)
+    end)
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "local/read", "context_window" => 512},
+        %{"model" => "managed/write", "context_window" => 512}
+      ])
+      |> Map.put("governance", [
+        %{
+          "id" => "github-write-tools",
+          "kind" => "tool_selector",
+          "action" => "switch_model",
+          "target_model" => "managed/write",
+          "tool" => %{"namespace" => "mcp.github", "name" => "create_pull_request"}
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(
+        :post,
+        "/v1/synthetic/simulate",
+        %{
+          request: %{
+            model: "unit-model",
+            metadata: %{
+              tool_context: %{
+                phase: "planning",
+                primary_tool: %{
+                  namespace: "mcp.github",
+                  name: "create_pull_request",
+                  risk_class: "write"
+                }
+              }
+            },
+            messages: [%{role: "user", content: "gateway-attested PR planning"}]
+          }
+        },
+        [{"authorization", "Bearer gateway-token"}],
+        {203, 0, 113, 10}
+      )
+
+    receipt = conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+    assert get_in(receipt, ["decision", "selected_model"]) == "managed/write"
+
+    assert get_in(receipt, ["decision", "tool_context", "primary_tool", "source"]) ==
+             "caller_metadata"
+  end
+
   test "OpenAI tool_choice is normalized and can drive route constraints" do
     config =
       unit_policy_config()
