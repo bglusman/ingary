@@ -155,6 +155,12 @@ defmodule Wardwright.Router do
           "selected_model",
           "simulation",
           "stream_policy_action",
+          "tool_namespace",
+          "tool_name",
+          "tool_phase",
+          "tool_risk_class",
+          "tool_source",
+          "tool_call_id",
           "created_at_min",
           "created_at_max"
         ])

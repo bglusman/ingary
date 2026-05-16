@@ -329,4 +329,61 @@ defmodule Wardwright.StorageAndAdminTest do
              "rcpt_sim"
            ]
   end
+
+  test "receipt list exposes and filters normalized tool context dimensions" do
+    github_receipt =
+      "rcpt_github_tool"
+      |> receipt_fixture(1_800_000_000, "agent-a")
+      |> put_in(["decision", "tool_context"], %{
+        "schema" => "wardwright.tool_context.v1",
+        "phase" => "planning",
+        "tool_call_id" => "call_1",
+        "primary_tool" => %{
+          "namespace" => "mcp.github",
+          "name" => "create_pull_request",
+          "risk_class" => "write",
+          "source" => "caller_metadata"
+        }
+      })
+
+    browser_receipt =
+      "rcpt_browser_tool"
+      |> receipt_fixture(1_800_000_001, "agent-b")
+      |> put_in(["decision", "tool_context"], %{
+        "schema" => "wardwright.tool_context.v1",
+        "phase" => "planning",
+        "primary_tool" => %{
+          "namespace" => "browser",
+          "name" => "read_page",
+          "risk_class" => "read_only",
+          "source" => "caller_metadata"
+        }
+      })
+
+    Wardwright.ReceiptStore.insert(github_receipt)
+    Wardwright.ReceiptStore.insert(browser_receipt)
+
+    assert [
+             %{
+               "receipt_id" => "rcpt_github_tool",
+               "tool_namespace" => "mcp.github",
+               "tool_name" => "create_pull_request",
+               "tool_phase" => "planning",
+               "tool_risk_class" => "write",
+               "tool_source" => "caller_metadata",
+               "tool_call_id" => "call_1"
+             }
+           ] =
+             Wardwright.ReceiptStore.list(
+               %{
+                 "tool_namespace" => "mcp.github",
+                 "tool_name" => "create_pull_request",
+                 "tool_phase" => "planning",
+                 "tool_risk_class" => "write",
+                 "tool_source" => "caller_metadata",
+                 "tool_call_id" => "call_1"
+               },
+               10
+             )
+  end
 end
