@@ -19,6 +19,7 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
     <a class="button secondary" href="feature-spikes.html">Feature Spikes</a>
     <a class="button secondary" href="architecture-review-tasks.html">Architecture Tasks</a>
     <a class="button secondary" href="architecture-ratchets.html">Architecture Ratchets</a>
+    <a class="button secondary" href="policy-workbench-implementation-plan.html">Workbench Plan</a>
     <a class="button secondary" href="https://github.com/bglusman/wardwright">GitHub</a>
   </div>
 </section>
