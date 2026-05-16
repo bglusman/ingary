@@ -30,8 +30,8 @@ defmodule WardwrightWeb.PolicyAuthoringTools do
       tool(
         "export_regression_pack",
         "GET",
-        "/v1/policy-authoring/scenarios/{pattern_id}/regression-export",
-        "Export pinned scenario records as a deterministic regression pack for review or downstream native test generation."
+        "/v1/policy-authoring/scenarios/{pattern_id}/regression-export?format=json|exunit",
+        "Export pinned scenario records as a deterministic regression pack or generated ExUnit source for native regression review."
       ),
       tool(
         "apply_scenario_retention",

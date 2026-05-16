@@ -58,6 +58,9 @@ a clear error that names the missing capability.
 - Pinned authoring scenarios can be exported as a versioned regression pack, and
   retention can prune oldest unpinned scenario records without deleting pinned
   regression evidence.
+- Pinned scenario packs can also export generated ExUnit source. The generated
+  tests validate pack coherence and replay pinned scenario records through the
+  current policy-scenario/projection contracts.
 
 ## Still Prototype Or Fixture Backed
 
@@ -119,8 +122,9 @@ a clear error that names the missing capability.
   pinned regression export, and unpinned retention pruning.
 - Simulation should execute against compiled policy logic and selected scenario
   inputs instead of only returning canned projection examples.
-- Regression export is JSON-only. It does not yet generate native StreamData,
-  Hypothesis, or Gleam test modules from pinned scenarios.
+- Regression export generates ExUnit source for the BEAM prototype, but does
+  not yet generate StreamData properties, Hypothesis suites, or Gleam test
+  modules from pinned scenarios.
 - State-machine projection needs source spans and artifact references, not only
   node ids, so the UI can explain which config or DSL clause created each
   state/transition.
@@ -158,4 +162,6 @@ Interface expectation:
    configured OpenAI-compatible target.
 2. Spike Hermes MCP over the protected authoring API without changing policy
    engine internals.
-3. Generate native regression test modules from pinned scenario packs.
+3. Generate StreamData and Gleam regression modules from pinned scenario packs,
+   then decide whether Python Hypothesis remains a cross-implementation oracle
+   only or becomes a first-class export format.

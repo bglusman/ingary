@@ -4,6 +4,8 @@ defmodule Wardwright.Router do
   use Plug.Router
 
   @max_unpinned_key "max_unpinned"
+  @regression_format_key "format"
+  @json_format "json"
 
   plug(Plug.Logger)
 
@@ -338,7 +340,30 @@ defmodule Wardwright.Router do
     with :ok <- require_protected_access(conn),
          true <- known_policy_pattern?(pattern_id),
          {:ok, export} <- Wardwright.PolicyScenarioStore.regression_export(pattern_id) do
-      json(conn, 200, export)
+      format = Map.get(conn.query_params, @regression_format_key, @json_format)
+
+      case format do
+        @json_format ->
+          json(conn, 200, export)
+
+        "exunit" ->
+          case WardwrightWeb.PolicyScenarioRegression.exunit_source(export) do
+            {:ok, source} ->
+              text(conn, 200, source)
+
+            {:error, message} ->
+              error(conn, 400, message, "invalid_request", "invalid_regression_export")
+          end
+
+        other ->
+          error(
+            conn,
+            400,
+            "unsupported regression export format #{inspect(other)}",
+            "invalid_request",
+            "invalid_regression_export_format"
+          )
+      end
     else
       {:error, :protected, message} ->
         error(conn, 403, message, "forbidden", "protected_endpoint")
@@ -1521,6 +1546,12 @@ defmodule Wardwright.Router do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(status, Jason.encode!(payload))
+  end
+
+  defp text(conn, status, body) do
+    conn
+    |> put_resp_content_type("text/plain")
+    |> send_resp(status, body)
   end
 
   defp cors(conn, _opts) do

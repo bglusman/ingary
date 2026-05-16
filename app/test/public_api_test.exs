@@ -274,6 +274,25 @@ defmodule Wardwright.PublicApiTest do
     assert export_body["scenario_count"] == 1
     assert [%{"scenario_id" => "pinned-regression", "pinned" => true}] = export_body["scenarios"]
 
+    exunit_export =
+      call(:get, "/v1/policy-authoring/scenarios/tts-retry/regression-export?format=exunit")
+
+    assert exunit_export.status == 200
+    assert [content_type] = get_resp_header(exunit_export, "content-type")
+    assert content_type =~ "text/plain"
+    assert {:ok, _quoted} = Code.string_to_quoted(exunit_export.resp_body)
+    assert [{module, _bytecode}] = Code.compile_string(exunit_export.resp_body)
+    assert module.regression_pack()["scenario_count"] == 1
+    assert :ok = module.validate_pack!()
+
+    unsupported_export =
+      call(:get, "/v1/policy-authoring/scenarios/tts-retry/regression-export?format=stream_data")
+
+    assert unsupported_export.status == 400
+
+    assert get_in(Jason.decode!(unsupported_export.resp_body), ["error", "code"]) ==
+             "invalid_regression_export_format"
+
     retention =
       call(:post, "/v1/policy-authoring/scenarios/tts-retry/retention", %{
         "max_unpinned" => 1
