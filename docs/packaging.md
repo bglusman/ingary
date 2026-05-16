@@ -118,7 +118,10 @@ The generated formula:
 - installs the Burrito-wrapped `wardwright` binary;
 - creates `etc/wardwright`, `var/lib/wardwright`, and `var/log/wardwright`;
 - generates `etc/wardwright/secret_key_base` on first install;
-- runs Wardwright bound to `127.0.0.1:8787` under `brew services`;
+- runs Wardwright bound to `127.0.0.1:8787` under `brew services` by default;
+- reads the service bind from `etc/wardwright/bind`, which defaults to
+  `127.0.0.1:8787`; change that file and restart the service to use a
+  different port;
 - does not require Erlang, Elixir, or Gleam at runtime.
 
 `WARDWRIGHT_ADMIN_TOKEN` remains optional for loopback-only use, but should be
