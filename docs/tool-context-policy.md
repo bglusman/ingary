@@ -85,7 +85,7 @@ makes ordering, scope, windows, and reset conditions first-class:
 - `before`: the later/current event facet that is being governed, usually
   expressed as `then.tool` when the rule also names an action.
 - `within`: the turn, event-count, or wall-clock window where the prior event is
-  still relevant.
+  still relevant. Wall-clock windows accept `ms` or `milliseconds`.
 - `until`: the state transition or tool event that clears the condition.
 - `cache_scope`: the caller/session/run boundary that owns the sequence.
 - `then`: the ordinary policy action applied when the later tool facet appears.
@@ -107,7 +107,7 @@ governance:
         namespace: browser
         phase: result_interpretation
     within:
-      turns: 1
+      milliseconds: 30000
     transition_to: reviewing_untrusted_tool_result
 
   - id: block-shell-while-reviewing
@@ -121,11 +121,11 @@ governance:
 ```
 
 The current runtime supports this scoped shape for tool facts and policy-state
-facts. It is still intentionally narrow: windows are recent event/turn windows,
-state is represented by the latest scoped `policy_state` fact, and raw tool
-payloads stay out of history. Multiple independent state machines in the same
-session should use disjoint state names for now; a future `state_machine_id`
-facet should make that isolation explicit.
+facts. It is still intentionally narrow: windows are recent event/turn or
+wall-clock windows, state is represented by the latest scoped `policy_state`
+fact, and raw tool payloads stay out of history. Multiple independent state
+machines in the same session should use disjoint state names for now; a future
+`state_machine_id` facet should make that isolation explicit.
 
 ## Problems To Validate
 
