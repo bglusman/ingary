@@ -17,6 +17,7 @@ defmodule Wardwright.ReceiptStore do
   @tool_name_key "tool_name"
   @tool_namespace_key "tool_namespace"
   @tool_phase_key "tool_phase"
+  @tool_policy_status_key "tool_policy_status"
   @tool_risk_class_key "tool_risk_class"
   @tool_source_key "tool_source"
 
@@ -117,6 +118,10 @@ defmodule Wardwright.ReceiptStore do
     |> put_if_present(@tool_risk_class_key, Map.get(primary_tool, @risk_class_key))
     |> put_if_present(@tool_source_key, Map.get(primary_tool, @source_key))
     |> put_if_present(@tool_call_id_key, Map.get(tool_context, @tool_call_id_key))
+    |> put_if_present(
+      @tool_policy_status_key,
+      get_in(receipt, ["final", "tool_policy", "status"])
+    )
   end
 
   defp matches?(receipt, filters) do
@@ -156,6 +161,7 @@ defmodule Wardwright.ReceiptStore do
              @tool_namespace_key,
              @tool_name_key,
              @tool_phase_key,
+             @tool_policy_status_key,
              @tool_risk_class_key,
              @tool_source_key,
              @tool_call_id_key

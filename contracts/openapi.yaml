@@ -150,6 +150,27 @@ paths:
         - name: status
           in: query
           schema: { type: string }
+        - name: tool_namespace
+          in: query
+          schema: { type: string }
+        - name: tool_name
+          in: query
+          schema: { type: string }
+        - name: tool_phase
+          in: query
+          schema: { type: string }
+        - name: tool_risk_class
+          in: query
+          schema: { type: string }
+        - name: tool_source
+          in: query
+          schema: { type: string }
+        - name: tool_call_id
+          in: query
+          schema: { type: string }
+        - name: tool_policy_status
+          in: query
+          schema: { type: string }
         - name: limit
           in: query
           schema:
@@ -529,10 +550,10 @@ components:
         id: { type: string }
         kind:
           type: string
-          enum: [request_guard, request_transform, route_gate, stream_guard, structured_output, receipt_annotation, custom]
+          enum: [request_guard, request_transform, route_gate, stream_guard, structured_output, receipt_annotation, history_threshold, history_regex_threshold, tool_selector, tool_loop_threshold, custom]
         action:
           type: string
-          enum: [pass, transform, validate_or_block, inject_reminder_and_retry, reroute, escalate, block_final, annotate]
+          enum: [pass, transform, validate_or_block, inject_reminder_and_retry, restrict_routes, switch_model, reroute, escalate, alert_async, block, block_final, annotate]
         engine:
           type: string
           description: Optional implementation hint, such as builtin, starlark, dune, wasm, or sidecar. Not required for portable configs.
@@ -599,6 +620,13 @@ components:
         selected_model: { type: string }
         status: { type: string }
         stream_trigger_count: { type: integer }
+        tool_namespace: { type: string }
+        tool_name: { type: string }
+        tool_phase: { type: string }
+        tool_risk_class: { type: string }
+        tool_source: { type: string }
+        tool_call_id: { type: string }
+        tool_policy_status: { type: string }
         caller:
           $ref: "#/components/schemas/CallerContext"
     Receipt:

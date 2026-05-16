@@ -158,6 +158,7 @@ defmodule Wardwright.Router do
           "tool_namespace",
           "tool_name",
           "tool_phase",
+          "tool_policy_status",
           "tool_risk_class",
           "tool_source",
           "tool_call_id",
@@ -785,7 +786,8 @@ defmodule Wardwright.Router do
         "stream" => Map.get(request, "stream", false),
         "message_count" => length(Map.get(request, "messages", [])),
         "prompt_transforms" => Wardwright.current_config()["prompt_transforms"],
-        "structured_output" => Wardwright.current_config()["structured_output"]
+        "structured_output" => Wardwright.current_config()["structured_output"],
+        @tool_context_key => policy["tool_context"]
       },
       "decision" => %{
         "strategy" => decision.combine_strategy,
@@ -804,7 +806,8 @@ defmodule Wardwright.Router do
         "reason" => decision.reason,
         "rule" => decision.rule,
         "governance" => Wardwright.current_config()["governance"],
-        @tool_context_key => Wardwright.ToolContext.normalize(request),
+        @tool_context_key => policy["tool_context"] || Wardwright.ToolContext.normalize(request),
+        "tool_policy_selectors" => policy["tool_policy_selectors"],
         "policy_actions" => policy["actions"],
         "policy_conflicts" => policy["conflicts"]
       },
@@ -823,6 +826,7 @@ defmodule Wardwright.Router do
         "stream_trigger_count" => 0,
         "alert_count" => policy["alert_count"],
         "alert_delivery" => Map.get(policy, "alert_delivery", []),
+        "tool_policy" => policy["tool_policy"],
         "events" => policy["events"],
         "receipt_recorded_at" =>
           DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()

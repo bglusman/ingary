@@ -755,12 +755,14 @@ defmodule Wardwright.PolicyProjection do
   end
 
   defp tool_match_summary(rule) do
+    tool = Map.get(rule, "tool", %{})
+
     matcher =
       [
-        {"namespace", Map.get(rule, "namespace")},
-        {"name", Map.get(rule, "name")},
-        {"risk_class", Map.get(rule, "risk_class")},
-        {"phase", Map.get(rule, "phase")}
+        {"namespace", Map.get(rule, "namespace", Map.get(tool, "namespace"))},
+        {"name", Map.get(rule, "name", Map.get(tool, "name"))},
+        {"risk_class", Map.get(rule, "risk_class", Map.get(tool, "risk_class"))},
+        {"phase", Map.get(rule, "phase", Map.get(tool, "phase"))}
       ]
       |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
       |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
