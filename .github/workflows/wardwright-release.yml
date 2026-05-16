@@ -152,6 +152,10 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Generate Homebrew SHA sidecars
+        run: |
+          awk '{print $1 "  " $2 > ("artifacts/" $2 ".sha256")}' artifacts/checksums-sha256.txt
+
       - name: Update Homebrew formula
         working-directory: app
         env:
