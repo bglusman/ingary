@@ -8,8 +8,10 @@ defmodule Wardwright.ToolContext do
 
   @schema "wardwright.tool_context.v1"
   @argument_hash_key "argument_hash"
+  @arguments_key "arguments"
   @available_tools_key "available_tools"
   @confidence_key "confidence"
+  @content_key "content"
   @function_key "function"
   @metadata_key "metadata"
   @id_key "id"
@@ -18,6 +20,7 @@ defmodule Wardwright.ToolContext do
   @namespace_key "namespace"
   @phase_key "phase"
   @primary_tool_key "primary_tool"
+  @parameters_key "parameters"
   @result_hash_key "result_hash"
   @result_status_key "result_status"
   @risk_class_key "risk_class"
@@ -48,6 +51,8 @@ defmodule Wardwright.ToolContext do
   @source_declared_tool "declared_tool"
   @source_tool_choice "tool_choice"
 
+  @hash_prefix "sha256:"
+
   @confidence_values MapSet.new(~w(exact declared inferred ambiguous))
   @phase_values MapSet.new(
                   ~w(planning argument_repair result_interpretation loop_governance unknown)
@@ -68,6 +73,64 @@ defmodule Wardwright.ToolContext do
   end
 
   def normalize(_request), do: nil
+
+  def normalize_request(request) when is_map(request) do
+    case normalize(request) do
+      nil ->
+        {request, nil}
+
+      tool_context ->
+        metadata =
+          request
+          |> Map.get(@metadata_key, %{})
+          |> case do
+            metadata when is_map(metadata) -> metadata
+            _metadata -> %{}
+          end
+          |> Map.put(@tool_context_key, tool_context)
+
+        {Map.put(request, @metadata_key, metadata), tool_context}
+    end
+  end
+
+  def normalize_request(request), do: {request, nil}
+
+  def cache_key(%{
+        @primary_tool_key => %{@namespace_key => namespace, @name_key => name},
+        @phase_key => phase
+      }) do
+    [namespace, name, phase || @phase_unknown]
+    |> Enum.map(&text_value/1)
+    |> case do
+      [namespace, name, phase] when namespace != nil and name != nil and phase != nil ->
+        Enum.join([namespace, name, phase], ":")
+
+      _parts ->
+        nil
+    end
+  end
+
+  def cache_key(_tool_context), do: nil
+
+  def matches?(tool_context, matcher) when is_map(tool_context) and is_map(matcher) do
+    tool = Map.get(tool_context, @primary_tool_key, %{})
+
+    list_matches?(
+      matcher_values(matcher, @phase_key, "phases"),
+      Map.get(tool_context, @phase_key)
+    ) and
+      list_matches?(
+        matcher_values(matcher, @namespace_key, "namespaces"),
+        Map.get(tool, @namespace_key)
+      ) and
+      list_matches?(matcher_values(matcher, @name_key, "names"), Map.get(tool, @name_key)) and
+      list_matches?(
+        matcher_values(matcher, @risk_class_key, "risk_classes"),
+        Map.get(tool, @risk_class_key)
+      )
+  end
+
+  def matches?(_tool_context, _matcher), do: false
 
   defp metadata_tool_context(request) do
     case Map.get(request, @metadata_key) do
@@ -95,8 +158,8 @@ defmodule Wardwright.ToolContext do
         context
         |> Map.get(@available_tools_key, [])
         |> normalize_tool_list("caller_metadata"),
-      @argument_hash_key => text_value(Map.get(context, @argument_hash_key)),
-      @result_hash_key => text_value(Map.get(context, @result_hash_key)),
+      @argument_hash_key => hash_value(Map.get(context, @argument_hash_key)),
+      @result_hash_key => hash_value(Map.get(context, @result_hash_key)),
       @result_status_key =>
         enum_value(Map.get(context, @result_status_key), @result_status_values, nil),
       @confidence_key =>
@@ -126,6 +189,9 @@ defmodule Wardwright.ToolContext do
         @primary_tool_key => primary_tool,
         @tool_call_id_key => tool_result_call_id(request) || assistant_tool_call_id(request),
         @available_tools_key => available_tools,
+        @argument_hash_key => assistant_tool_argument_hash(request),
+        @result_hash_key => tool_result_hash(request),
+        @result_status_key => result_status(tool_result?),
         @confidence_key =>
           inferred_confidence(chosen_tool, assistant_tool, available_tools, tool_result?)
       }
@@ -172,7 +238,7 @@ defmodule Wardwright.ToolContext do
         @source_key => enum_value(Map.get(tool, @source_key), @source_values, source),
         @risk_class_key =>
           enum_value(Map.get(tool, @risk_class_key), @risk_values, @risk_unknown),
-        @schema_hash_key => text_value(Map.get(tool, @schema_hash_key))
+        @schema_hash_key => text_value(Map.get(tool, @schema_hash_key)) || schema_hash(function)
       }
       |> compact()
     end
@@ -221,6 +287,27 @@ defmodule Wardwright.ToolContext do
     end)
   end
 
+  defp assistant_tool_argument_hash(request) do
+    request
+    |> messages()
+    |> Enum.find_value(fn message ->
+      message
+      |> Map.get(@tool_calls_key)
+      |> case do
+        [%{} = call | _] ->
+          call
+          |> Map.get(@function_key, %{})
+          |> case do
+            %{} = function -> content_hash(Map.get(function, @arguments_key))
+            _function -> nil
+          end
+
+        _ ->
+          nil
+      end
+    end)
+  end
+
   defp tool_result_message?(request) do
     Enum.any?(messages(request), &(Map.get(&1, @role_key) == @tool_role))
   end
@@ -233,6 +320,18 @@ defmodule Wardwright.ToolContext do
         do: text_value(Map.get(message, @tool_call_id_key))
     end)
   end
+
+  defp tool_result_hash(request) do
+    request
+    |> messages()
+    |> Enum.find_value(fn message ->
+      if Map.get(message, @role_key) == @tool_role,
+        do: content_hash(Map.get(message, @content_key))
+    end)
+  end
+
+  defp result_status(true), do: "unknown"
+  defp result_status(false), do: nil
 
   defp inferred_confidence(chosen_tool, assistant_tool, available_tools, tool_result?) do
     cond do
@@ -272,6 +371,54 @@ defmodule Wardwright.ToolContext do
   defp text_value(value) when is_atom(value), do: value |> Atom.to_string() |> text_value()
   defp text_value(value) when is_integer(value), do: Integer.to_string(value)
   defp text_value(_value), do: nil
+
+  defp matcher_values(matcher, singular_key, plural_key) do
+    matcher
+    |> Map.get(singular_key, Map.get(matcher, plural_key))
+    |> case do
+      values when is_list(values) -> values
+      nil -> []
+      value -> [value]
+    end
+    |> Enum.map(&text_value/1)
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp list_matches?([], _actual), do: true
+
+  defp list_matches?(expected, actual) do
+    case text_value(actual) do
+      nil -> false
+      actual -> actual in expected
+    end
+  end
+
+  defp schema_hash(%{} = function), do: content_hash(Map.get(function, @parameters_key))
+  defp schema_hash(_function), do: nil
+
+  defp content_hash(nil), do: nil
+
+  defp content_hash(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      text -> @hash_prefix <> Base.encode16(:crypto.hash(:sha256, text), case: :lower)
+    end
+  end
+
+  defp content_hash(value) do
+    case Jason.encode(value) do
+      {:ok, encoded} -> content_hash(encoded)
+      {:error, _error} -> nil
+    end
+  end
+
+  defp hash_value(value) do
+    case text_value(value) do
+      @hash_prefix <> _rest = hash -> hash
+      nil -> nil
+      _text -> content_hash(value)
+    end
+  end
 
   defp enum_value(value, allowed, default) do
     value = text_value(value)
