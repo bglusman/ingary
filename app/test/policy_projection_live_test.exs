@@ -44,6 +44,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     nodes = projection["phases"] |> Enum.flat_map(& &1["nodes"])
     assert Enum.any?(nodes, &(&1["id"] == "request-policy.private-route-gate"))
     assert Enum.any?(nodes, &(&1["confidence"] == "exact"))
+    assert Enum.all?(nodes, &is_binary(&1["node_class"]))
     assert [%{"class" => "ordered"}] = projection["conflicts"]
   end
 

@@ -1,6 +1,8 @@
 defmodule Wardwright.PolicyProjection do
   @moduledoc false
 
+  alias Wardwright.PolicyProjection.Contract
+
   @patterns [
     %{
       "id" => "tts-retry",
@@ -249,20 +251,19 @@ defmodule Wardwright.PolicyProjection do
          actions,
          source_span \\ nil
        ) do
-    %{
-      "id" => id,
-      "label" => label,
-      "kind" => kind,
-      "phase" => phase,
-      "summary" => summary,
-      "confidence" => confidence,
-      "reads" => reads,
-      "writes" => writes,
-      "actions" => actions,
-      "source_span" => source_span
+    %Contract.Node{
+      id: id,
+      label: label,
+      node_class: kind,
+      phase: phase,
+      summary: summary,
+      confidence: confidence,
+      reads: reads,
+      writes: writes,
+      actions: actions,
+      source_span: source_span
     }
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
+    |> Contract.to_map()
   end
 
   defp compiled_plan(pattern_id, config, phases) do
@@ -510,14 +511,15 @@ defmodule Wardwright.PolicyProjection do
   defp effect_confidence(_source_type), do: "inferred"
 
   defp effect(id, node_id, phase, effect, target, confidence) do
-    %{
-      "id" => id,
-      "node_id" => node_id,
-      "phase" => phase,
-      "effect" => effect,
-      "target" => target,
-      "confidence" => confidence
+    %Contract.Effect{
+      id: id,
+      node_id: node_id,
+      phase: phase,
+      effect: effect,
+      target: target,
+      confidence: confidence
     }
+    |> Contract.to_map()
   end
 
   defp conflicts("ambiguous-success", _config) do
@@ -837,17 +839,16 @@ defmodule Wardwright.PolicyProjection do
   end
 
   defp trace(id, phase, node_id, kind, label, detail, severity, source_span \\ nil) do
-    %{
-      "id" => id,
-      "phase" => phase,
-      "node_id" => node_id,
-      "kind" => kind,
-      "label" => label,
-      "detail" => detail,
-      "severity" => severity,
-      "source_span" => source_span
+    %Contract.TraceEvent{
+      id: id,
+      phase: phase,
+      node_id: node_id,
+      kind: kind,
+      label: label,
+      detail: detail,
+      severity: severity,
+      source_span: source_span
     }
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-    |> Map.new()
+    |> Contract.to_map()
   end
 end
