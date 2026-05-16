@@ -64,6 +64,7 @@ defmodule Wardwright.PublicApiTest do
     assert "explain_projection" in tool_names
     assert "simulate_policy" in tool_names
     assert "propose_rule_change" in tool_names
+    assert "validate_policy_artifact" in tool_names
 
     projection = call(:get, "/v1/policy-authoring/projections/tts-retry")
     assert projection.status == 200
@@ -79,6 +80,51 @@ defmodule Wardwright.PublicApiTest do
 
     missing = call(:get, "/v1/policy-authoring/projections/not-real")
     assert missing.status == 404
+  end
+
+  test "protected policy validation reports errors and explicit review gaps" do
+    rejected =
+      call(:post, "/v1/policy-authoring/validate", %{}, [], {203, 0, 113, 10})
+
+    assert rejected.status == 403
+
+    current = call(:post, "/v1/policy-authoring/validate", %{})
+    assert current.status == 200
+
+    current_body = Jason.decode!(current.resp_body)
+    assert current_body["schema"] == "wardwright.policy_validation.v1"
+    assert current_body["source"] == "current_config"
+    assert current_body["verdict"] in ["valid", "needs_review"]
+    assert Enum.any?(current_body["coverage_gaps"], &(&1["path"] == "scenarios"))
+
+    invalid_artifact =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{"model" => "tiny/model", "context_window" => 8},
+        %{"model" => "tiny/model", "context_window" => 32}
+      ])
+      |> Map.put("dispatchers", [%{"id" => "dispatcher.good", "models" => ["tiny/model"]}])
+      |> Map.put("route_root", "missing.selector")
+
+    invalid = call(:post, "/v1/policy-authoring/validate", %{"artifact" => invalid_artifact})
+    assert invalid.status == 200
+
+    body = Jason.decode!(invalid.resp_body)
+    assert body["source"] == "submitted"
+    assert body["verdict"] == "invalid"
+    assert Enum.any?(body["errors"], &(&1["message"] =~ "duplicate target tiny/model"))
+    assert Enum.any?(body["errors"], &(&1["path"] == "route_root"))
+
+    malformed_selector =
+      unit_policy_config()
+      |> Map.put("dispatchers", "not-a-list")
+
+    malformed = call(:post, "/v1/policy-authoring/validate", %{"artifact" => malformed_selector})
+    assert malformed.status == 200
+
+    malformed_body = Jason.decode!(malformed.resp_body)
+    assert malformed_body["verdict"] == "invalid"
+    assert Enum.any?(malformed_body["errors"], &(&1["path"] == "dispatchers"))
   end
 
   test "chat completion records caller headers and selected model" do

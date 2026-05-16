@@ -272,6 +272,19 @@ defmodule Wardwright.Router do
     end
   end
 
+  post "/v1/policy-authoring/validate" do
+    with :ok <- require_protected_access(conn),
+         {:ok, artifact, source} <- validation_artifact(conn.body_params) do
+      json(conn, 200, WardwrightWeb.PolicyArtifactValidator.validate(artifact, source: source))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      {:error, message} ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_artifact")
+    end
+  end
+
   get "/admin/providers" do
     with :ok <- require_protected_access(conn) do
       json(conn, 200, %{"data" => Wardwright.providers()})
@@ -315,6 +328,20 @@ defmodule Wardwright.Router do
 
   defp require_json_object(value) when is_map(value), do: {:ok, value}
   defp require_json_object(_), do: {:error, "request body must be a JSON object"}
+
+  defp validation_artifact(body) when body == %{},
+    do: {:ok, Wardwright.current_config(), "current_config"}
+
+  defp validation_artifact(body) when is_map(body) do
+    # boundary-map-ok
+    case Map.fetch(body, "artifact") do
+      {:ok, artifact} when is_map(artifact) -> {:ok, artifact, "submitted"}
+      {:ok, _artifact} -> {:error, "artifact must be a JSON object"}
+      :error -> {:ok, body, "submitted"}
+    end
+  end
+
+  defp validation_artifact(_body), do: {:error, "request body must be a JSON object"}
 
   defp override_model(request, nil), do: request
   defp override_model(request, ""), do: request

@@ -23,9 +23,9 @@ defmodule WardwrightWeb.PolicyAuthoringTools do
       ),
       tool(
         "validate_policy_artifact",
-        "not_implemented",
-        nil,
-        "Future validation tool: check artifact shape, unresolved conflicts, opaque review requirements, and scenario coverage."
+        "POST",
+        "/v1/policy-authoring/validate",
+        "Validate the current or submitted policy artifact for structural errors, opaque regions, missing scenario coverage, and unsupported provider stream capabilities."
       )
     ]
   end

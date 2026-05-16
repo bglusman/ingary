@@ -50,9 +50,9 @@ a clear error that names the missing capability.
 - The state-machine model is still embedded in projection code. It should move
   toward artifact-declared states/transitions or a compiler pass that emits a
   state projection from policy primitives and sandbox regions.
-- Assistant authoring is a deterministic boundary only. `propose_rule_change`
-  and `validate_policy_artifact` are advertised as future tools and do not yet
-  execute.
+- Assistant authoring is a deterministic boundary only. `validate_policy_artifact`
+  now executes a conservative structural/capability validation pass, while
+  `propose_rule_change` remains an advertised future draft-only tool.
 - Tool discovery is HTTP-shaped, not MCP-shaped. A Hermes or bespoke MCP adapter
   can wrap the same functions, but no MCP server is implemented yet.
 - The policy workbench is mostly static projection plus live runtime/cache
@@ -135,15 +135,12 @@ Interface expectation:
 
 ## Suggested Next Slices
 
-1. Turn `validate_policy_artifact` into a real protected endpoint that reports
-   unresolved conflicts, opaque regions, missing scenario coverage, and
-   unsupported provider stream capabilities.
-2. Add persisted scenario records and make projection simulations read from
+1. Add persisted scenario records and make projection simulations read from
    those records when present, falling back to built-in examples only for demo
    mode.
-3. Preserve upstream stream terminal metadata in receipts for OpenAI-compatible
+2. Preserve upstream stream terminal metadata in receipts for OpenAI-compatible
    and Ollama providers.
-4. Add a live-provider smoke test profile that is skipped by default but can run
+3. Add a live-provider smoke test profile that is skipped by default but can run
    against local Ollama and one configured OpenAI-compatible target.
-5. Spike Hermes MCP over the protected authoring API without changing policy
+4. Spike Hermes MCP over the protected authoring API without changing policy
    engine internals.
