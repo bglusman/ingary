@@ -123,6 +123,43 @@ needs unless the synthetic model asks for more.
    - Asynchronous human/operator alerts live here unless an earlier phase
      explicitly returned a blocking approval action.
 
+## State And Route Binding
+
+The state machine is the policy control-flow model. The route planner remains
+the synthetic-model selection model. They should compose through explicit route
+bindings rather than collapsing every state into exactly one backend model.
+
+A state may optionally declare a route binding:
+
+```yaml
+states:
+  - id: normal
+    route_binding:
+      type: dispatcher
+      id: dispatcher.prompt_length
+  - id: review_required
+    route_binding:
+      type: model
+      model: local/qwen-coder
+  - id: broad_search
+    route_binding:
+      type: alloy
+      id: alloy.consensus
+```
+
+This supports the simplifying intuition that "state controls which model path
+is active" without losing dispatchers, cascades, fallback, weighted alloys, or
+partial-context alloys. A one-state model can bind the default route plan; a
+more complex policy can transition into states that constrain or force routing
+for subsequent attempts.
+
+Policy actions should still emit normal route effects such as
+`restrict_routes`, `switch_model`, `reroute`, or `forced_model`. Receipts should
+record both the state that was active and the route effect that actually
+constrained model selection. That keeps simulation and visualization honest:
+state explains why a route policy became active, while route evidence proves
+which backend model or selector was used.
+
 ## Time-Travel Stream Rewriting
 
 TTSR is best treated as a stream-phase policy mode, not a separate feature.

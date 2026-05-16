@@ -24,6 +24,13 @@ defmodule Wardwright.PolicyProjection do
         "Hold a bounded stream horizon, catch prohibited output before release, then retry once with a precise reminder."
     },
     %{
+      "id" => "stream-rewrite-state",
+      "title" => "Regex rewrite and state transition",
+      "category" => "response.streaming",
+      "promise" =>
+        "Show related stream regex matches where one rewrites held output and a later match transitions the session into review."
+    },
+    %{
       "id" => "ambiguous-success",
       "title" => "Ambiguous success alert",
       "category" => "output.finalizing",
@@ -51,6 +58,9 @@ defmodule Wardwright.PolicyProjection do
   def pattern_ids, do: Enum.map(@patterns, &Map.fetch!(&1, "id"))
 
   def state_ids("tts-retry"), do: ["observing", "guarding", "retrying", "recording"]
+
+  def state_ids("stream-rewrite-state"),
+    do: ["observing", "rewriting", "review_required", "recording"]
 
   def state_ids(pattern_id) when is_binary(pattern_id) do
     if pattern_id in pattern_ids() do
@@ -316,6 +326,70 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
+  defp phases("stream-rewrite-state", _config) do
+    [
+      %{
+        "id" => "response.streaming",
+        "title" => "Stream",
+        "description" =>
+          "Evaluate related regex matches over held chunks before bytes are released.",
+        "nodes" => [
+          node(
+            "stream.redact-account",
+            "account redactor",
+            "primitive",
+            "response.streaming",
+            "Rewrite account-like spans inside the holdback window before release.",
+            "exact",
+            ["stream.window", "policy_cache.session.regex_match"],
+            ["stream.rewrite_patch", "policy.events"],
+            ["match_regex", "rewrite_span"]
+          ),
+          node(
+            "stream.secret-transition",
+            "secret transition",
+            "primitive",
+            "response.streaming",
+            "Escalate if a related secret-token pattern appears after the account rewrite.",
+            "exact",
+            ["stream.window", "policy_cache.session.regex_match"],
+            ["policy.state", "final.status"],
+            ["match_regex", "state_transition"]
+          ),
+          node(
+            "stream.rewrite-arbiter",
+            "rewrite arbiter",
+            "arbiter",
+            "response.streaming",
+            "Applies rewrite patches while preserving enough held context to detect related later matches.",
+            "declared",
+            ["stream.rewrite_patch", "policy.state"],
+            ["stream.release_decision", "request.review_required"],
+            ["release_rewritten", "hold_for_review"]
+          )
+        ]
+      },
+      %{
+        "id" => "receipt.finalized",
+        "title" => "Receipt",
+        "description" => "Persist rewrite, transition, and review evidence.",
+        "nodes" => [
+          node(
+            "stream.rewrite-receipt",
+            "rewrite receipt",
+            "receipt_rule",
+            "receipt.finalized",
+            "Record regex matches, applied rewrite ranges, state transition, and withheld bytes hash.",
+            "exact",
+            ["policy.events", "stream.rewrite_patch", "policy.state"],
+            ["receipt.events"],
+            ["annotate_receipt"]
+          )
+        ]
+      }
+    ]
+  end
+
   defp phases(_pattern_id, config) do
     stream_rules = Map.get(config, "stream_rules", [])
 
@@ -470,6 +544,73 @@ defmodule Wardwright.PolicyProjection do
         )
       ],
       simulation_steps: simulation_steps("tts-retry", config, states)
+    }
+    |> Contract.to_map()
+    |> attach_state_node_fallback(phases)
+  end
+
+  defp state_machine("stream-rewrite-state", phases, config) do
+    states = [
+      state(
+        "observing",
+        "Observing",
+        "Hold chunks and scan for related regex matches.",
+        ["stream.redact-account"]
+      ),
+      state(
+        "rewriting",
+        "Rewriting",
+        "A safe rewrite patch is available but more related stream context is still held.",
+        ["stream.redact-account", "stream.rewrite-arbiter"]
+      ),
+      state(
+        "review_required",
+        "Review Required",
+        "A later related secret-token match prevents normal release.",
+        ["stream.secret-transition", "stream.rewrite-arbiter"]
+      ),
+      state(
+        "recording",
+        "Recording",
+        "Persist rewrite and transition evidence for review and regression fixtures.",
+        ["stream.rewrite-receipt"],
+        terminal: true
+      )
+    ]
+
+    %Contract.StateMachine{
+      initial_state: "observing",
+      default_projection: false,
+      summary:
+        "Explicit projection for related stream regex matches, rewrite, state transition, and receipt recording.",
+      states: states,
+      transitions: [
+        transition(
+          "regex.rewrite",
+          "observing",
+          "rewriting",
+          "account-like regex match is safe to rewrite",
+          "rewrite_span",
+          "stream.redact-account"
+        ),
+        transition(
+          "regex.related-secret",
+          "rewriting",
+          "review_required",
+          "related secret-token regex appears after a rewrite",
+          "state_transition",
+          "stream.secret-transition"
+        ),
+        transition(
+          "receipt.write",
+          "review_required",
+          "recording",
+          "review outcome is known",
+          "annotate_receipt",
+          "stream.rewrite-receipt"
+        )
+      ],
+      simulation_steps: simulation_steps("stream-rewrite-state", config, states)
     }
     |> Contract.to_map()
     |> attach_state_node_fallback(phases)
@@ -935,6 +1076,43 @@ defmodule Wardwright.PolicyProjection do
       ]
   end
 
+  defp effects("stream-rewrite-state", _config) do
+    [
+      effect(
+        "effect.stream-rewrite",
+        "stream.redact-account",
+        "response.streaming",
+        "rewrite_span",
+        "stream",
+        "exact"
+      ),
+      effect(
+        "effect.stream-transition",
+        "stream.secret-transition",
+        "response.streaming",
+        "state_transition",
+        "policy_state",
+        "exact"
+      ),
+      effect(
+        "effect.stream-review",
+        "stream.rewrite-arbiter",
+        "response.streaming",
+        "hold_for_review",
+        "request",
+        "declared"
+      ),
+      effect(
+        "effect.stream-receipt",
+        "stream.rewrite-receipt",
+        "receipt.finalized",
+        "annotate_receipt",
+        "receipt",
+        "exact"
+      )
+    ]
+  end
+
   defp effects(_pattern_id, _config) do
     [
       effect(
@@ -1062,6 +1240,20 @@ defmodule Wardwright.PolicyProjection do
         []
       end
     end)
+  end
+
+  defp conflicts("stream-rewrite-state", _config) do
+    [
+      %{
+        "id" => "conflict.rewrite-before-transition",
+        "class" => "ordered",
+        "node_ids" => ["stream.redact-account", "stream.secret-transition"],
+        "summary" =>
+          "The safe rewrite may run, but a later related secret-token match can still force review before release.",
+        "required_resolution" =>
+          "preserve enough held context after rewriting to evaluate related transition rules"
+      }
+    ]
   end
 
   defp conflicts(_pattern_id, _config) do
@@ -1211,6 +1403,90 @@ defmodule Wardwright.PolicyProjection do
       [] -> [no_tool_governance_simulation()]
       _configured -> [tool_governance_simulation(rules)]
     end
+  end
+
+  defp simulation_cases("stream-rewrite-state", _config) do
+    [
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "rewrite-then-transition",
+        "title" => "Rewrite followed by related transition",
+        "engine_id" => "structured-stream-primitives",
+        "input_summary" =>
+          "Provider emits an account identifier, then a related secret token inside the held stream horizon.",
+        "expected_behavior" =>
+          "Account span is rewritten, later secret-token match transitions to review_required, and no unsafe bytes are released.",
+        "verdict" => "passed",
+        "trace" => [
+          trace(
+            "r1",
+            "response.streaming",
+            "stream.redact-account",
+            "input",
+            "chunk held",
+            "held chunk contains acct_4938 before release",
+            "info",
+            state_id: "observing"
+          ),
+          trace(
+            "r2",
+            "response.streaming",
+            "stream.redact-account",
+            "match",
+            "account regex matched",
+            "acct_4938 rewritten to [account-id] inside the holdback window",
+            "pass",
+            state_id: "rewriting"
+          ),
+          trace(
+            "r3",
+            "response.streaming",
+            "stream.secret-transition",
+            "match",
+            "related secret matched",
+            "token_ prefix appears after the account rewrite and triggers review_required",
+            "block",
+            state_id: "review_required"
+          ),
+          trace(
+            "r4",
+            "response.streaming",
+            "stream.rewrite-arbiter",
+            "action",
+            "review hold selected",
+            "rewritten output remains withheld pending review state resolution",
+            "warn",
+            state_id: "review_required"
+          ),
+          trace(
+            "r5",
+            "receipt.finalized",
+            "stream.rewrite-receipt",
+            "receipt_event",
+            "rewrite receipt",
+            "receipt records rewrite range, transition state, and withheld bytes hash",
+            "info",
+            state_id: "recording"
+          )
+        ],
+        "receipt_preview" => %{
+          "receipt_id" => "simulated-rewrite-transition-receipt",
+          "stream" => %{
+            "rewrites" => [
+              %{"rule_id" => "account-redactor", "replacement" => "[account-id]"}
+            ],
+            "state_transition" => "review_required",
+            "released_to_consumer" => false
+          },
+          "events" => [
+            %{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"},
+            %{"type" => "policy.state_transition", "state" => "review_required"},
+            %{"type" => "stream.release_blocked", "reason" => "related_secret_match"}
+          ]
+        }
+      }
+      |> fixture_case()
+    ]
   end
 
   defp simulation_cases(_pattern_id, _config) do

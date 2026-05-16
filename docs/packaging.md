@@ -6,8 +6,8 @@ description: Release, native binary, and Homebrew packaging plan for Wardwright.
 
 # Packaging
 
-Status: initial Burrito/Tinfoil packaging path in place. The first expected
-publication is `v0.0.2`, a usable early release before the policy UI is
+Status: initial Burrito/Tinfoil packaging path in place. The next expected
+publication is `v0.0.3`, a usable early release before the policy UI is
 complete enough to call `0.1.0`.
 
 Wardwright is a BEAM application with a Phoenix/LiveView operator UI and Gleam
@@ -57,7 +57,7 @@ curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/in
 For a pinned release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.2
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.3
 ```
 
 The script downloads the matching release archive, requires
@@ -65,10 +65,10 @@ The script downloads the matching release archive, requires
 to `~/.local/bin` by default. A manual install is equivalent:
 
 ```bash
-curl -fLO https://github.com/bglusman/wardwright/releases/download/v0.0.2/wardwright-0.0.2-x86_64-unknown-linux-musl.tar.gz
-curl -fLO https://github.com/bglusman/wardwright/releases/download/v0.0.2/checksums-sha256.txt
+curl -fLO https://github.com/bglusman/wardwright/releases/download/v0.0.3/wardwright-0.0.3-x86_64-unknown-linux-musl.tar.gz
+curl -fLO https://github.com/bglusman/wardwright/releases/download/v0.0.3/checksums-sha256.txt
 sha256sum -c checksums-sha256.txt --ignore-missing
-tar -xzf wardwright-0.0.2-x86_64-unknown-linux-musl.tar.gz
+tar -xzf wardwright-0.0.3-x86_64-unknown-linux-musl.tar.gz
 install -m 0755 wardwright ~/.local/bin/wardwright
 ```
 
@@ -130,7 +130,7 @@ The root workflow `.github/workflows/wardwright-release.yml` is adapted from
 Tinfoil's generated workflow because this repository keeps the Mix app under
 `app/`.
 
-Tagging `v0.0.2` or later should:
+Tagging `v0.0.3` or later should:
 
 1. Build Burrito binaries for each configured target.
 2. Upload archives and checksums to a GitHub Release.
@@ -149,6 +149,9 @@ where the policy UI and validation story are useful enough to promote.
 
 - Release `v0.0.1` was cut, but its packaged payload missed the Gleam decision
   core modules and should be superseded by `v0.0.2`.
+- Release `v0.0.2` is the first usable packaging baseline. `v0.0.3` is expected
+  to add the initial policy visualization, simulation playback, and recipe
+  catalog workbench boundary.
 - The first CI run may expose platform-specific Burrito, Zig, or NIF issues.
   macOS builds intentionally install Homebrew `zig@0.15` because upstream Zig
   0.15.2 can fail to link on newer macOS/Xcode combinations.

@@ -238,6 +238,165 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert matrix_html =~ "route.allowed_targets"
   end
 
+  test "LiveView diagram mode renders projection graph from backend facts" do
+    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
+
+    assert html =~ "Time-travel stream retry"
+    assert html =~ "Diagram"
+    assert html =~ "Projection graph"
+    assert html =~ "Simulated stream playback"
+    assert html =~ "Ready: 4 trace events available for playback."
+    assert html =~ "waiting at input boundary"
+    assert html =~ "Policy projection graph"
+    assert html =~ "simulated path"
+    assert html =~ "conflict"
+    assert html =~ "no-old-client"
+    assert html =~ "retry arbiter"
+    assert html =~ "abort_attempt"
+    assert html =~ "retry_with_reminder"
+
+    connected_html = render(view)
+
+    assert connected_html =~ "regex matched"
+    assert connected_html =~ "retry selected"
+    assert connected_html =~ "receipt preview"
+  end
+
+  test "LiveView diagram simulation can step through matching rules and state changes" do
+    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
+
+    assert html =~ "Ready: 4 trace events available for playback."
+    assert html =~ "waiting at input boundary"
+    assert html =~ "pending"
+
+    stepped =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert stepped =~ "Step 1 of 4: state observing, response.streaming."
+    assert stepped =~ "chunk held"
+    assert stepped =~ "active"
+
+    stepped =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert stepped =~ "Step 2 of 4: state guarding, response.streaming."
+    assert stepped =~ "regex matched"
+    assert stepped =~ "completed"
+
+    reset =
+      view
+      |> element("button", "Reset")
+      |> render_click()
+
+    assert reset =~ "Ready: 4 trace events available for playback."
+    assert reset =~ "waiting at input boundary"
+  end
+
+  test "LiveView diagram simulation can open directly to a reviewed playback step" do
+    {:ok, _view, html} = live(build_conn(), "/policies/tts-retry/diagram/step/2")
+
+    assert html =~ "Step 2 of 4: state guarding, response.streaming."
+    assert html =~ "regex matched"
+    assert html =~ "Client( completes the prohibited span"
+    assert html =~ "completed"
+    assert html =~ "active"
+  end
+
+  test "LiveView diagram can demonstrate related regex rewrite and state transition" do
+    {:ok, _view, html} = live(build_conn(), "/policies/stream-rewrite-state/diagram/step/3")
+
+    assert html =~ "Regex rewrite and state transition"
+    assert html =~ "Recipe source"
+    assert html =~ "Built-in demos"
+    assert html =~ "wardwright.dev/recipes"
+    assert html =~ "account redactor"
+    assert html =~ "secret transition"
+    assert html =~ "rewrite arbiter"
+    assert html =~ "Step 3 of 5: state review_required, response.streaming."
+    assert html =~ "related secret matched"
+    assert html =~ "state_transition"
+    assert html =~ "hold_for_review"
+  end
+
+  test "LiveView recipe source can point at workspace catalogs without changing projection contract" do
+    original_workspace = Application.get_env(:wardwright, :policy_recipe_workspace_dir)
+
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-live-recipes-#{System.unique_integer()}")
+
+    File.mkdir_p!(workspace_dir)
+
+    File.write!(
+      Path.join(workspace_dir, "tool-demo.json"),
+      Jason.encode!(%{
+        "id" => "tool-demo",
+        "title" => "Workspace tool policy",
+        "category" => "tool.using",
+        "promise" => "Review a locally curated tool policy recipe.",
+        "pattern_id" => "tool-governance"
+      })
+    )
+
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
+
+    on_exit(fn ->
+      case original_workspace do
+        nil -> Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+        value -> Application.put_env(:wardwright, :policy_recipe_workspace_dir, value)
+      end
+    end)
+
+    {:ok, view, html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
+
+    assert html =~ "Workspace recipes"
+    assert html =~ workspace_dir
+    assert html =~ "Workspace tool policy"
+    assert html =~ "Tool call governance"
+    assert html =~ "tool receipt context"
+
+    assert {:error,
+            {:redirect, %{to: "/policies/tool-governance/state_machine?source=workspace"}}} =
+             view
+             |> element("a", "State machine")
+             |> render_click()
+
+    {:ok, _state_view, updated} =
+      live(build_conn(), "/policies/tool-governance/state_machine?source=workspace")
+
+    assert updated =~ "Workspace recipes"
+    assert updated =~ "State machine"
+  end
+
+  test "LiveView diagram mode reflects configured route and tool policies" do
+    :ok = put_route_gate_config()
+    {:ok, _route_view, route_html} = live(build_conn(), "/policies/route-privacy/diagram")
+
+    assert route_html =~ "Private context route gate"
+    assert route_html =~ "private-route-gate"
+    assert route_html =~ "fallback-route-gate"
+    assert route_html =~ "restrict_routes"
+    assert route_html =~ "switch_model"
+    assert route_html =~ "route"
+    assert route_html =~ "Multiple"
+    assert route_html =~ "policy"
+
+    :ok = put_tool_governance_config()
+    {:ok, _tool_view, tool_html} = live(build_conn(), "/policies/tool-governance/diagram")
+
+    assert tool_html =~ "Tool call governance"
+    assert tool_html =~ "github-write-tools"
+    assert tool_html =~ "shell-write-tools"
+    assert tool_html =~ "repeat-github-tool"
+    assert tool_html =~ "constrain_tools"
+    assert tool_html =~ "deny_tool"
+    assert tool_html =~ "fail_closed"
+    assert tool_html =~ "tool receipt context"
+  end
+
   test "LiveView state-machine mode shows default and explicit state projections" do
     :ok = put_route_gate_config()
     {:ok, route_view, route_html} = live(build_conn(), "/policies/route-privacy/state_machine")
