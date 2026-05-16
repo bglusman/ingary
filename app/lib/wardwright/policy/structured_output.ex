@@ -1,8 +1,6 @@
 defmodule Wardwright.Policy.StructuredOutput do
   @moduledoc false
 
-  alias Wardwright.Policy.CoreRuntime
-
   def run(nil, provider_fun) when is_function(provider_fun, 1), do: provider_fun.(0)
 
   def run(%{} = config, provider_fun) when is_function(provider_fun, 1),
@@ -147,16 +145,10 @@ defmodule Wardwright.Policy.StructuredOutput do
         not Map.has_key?(parsed, key) or property_valid?(parsed[key], property_schema)
       end)
 
-    CoreRuntime.dispatch(
-      :structured_object_schema_valid,
-      fn ->
-        :wardwright@structured_validation_core.object_schema_valid(
-          required_ok?,
-          additional_ok?,
-          properties_ok?
-        )
-      end,
-      fn -> required_ok? and additional_ok? and properties_ok? end
+    :wardwright@structured_validation_core.object_schema_valid(
+      required_ok?,
+      additional_ok?,
+      properties_ok?
     )
   end
 
@@ -164,58 +156,32 @@ defmodule Wardwright.Policy.StructuredOutput do
 
   defp property_valid?(_value, nil), do: false
 
-  defp property_valid?(value, %{"type" => "string"} = schema),
-    do:
-      CoreRuntime.dispatch(
-        :structured_string_property_valid,
-        fn ->
-          min_length = string_min_length(schema)
+  defp property_valid?(value, %{"type" => "string"} = schema) do
+    :wardwright@structured_validation_core.string_property_valid(
+      is_binary(value),
+      if(is_binary(value), do: String.length(value), else: 0),
+      string_min_length(schema),
+      enum_valid?(value, schema)
+    )
+  end
 
-          :wardwright@structured_validation_core.string_property_valid(
-            is_binary(value),
-            if(is_binary(value), do: String.length(value), else: 0),
-            min_length,
-            enum_valid?(value, schema)
-          )
-        end,
-        fn ->
-          is_binary(value) and String.length(value) >= string_min_length(schema) and
-            enum_valid?(value, schema)
-        end
-      )
+  defp property_valid?(value, %{"type" => "number"} = schema) do
+    minimum = number_minimum(schema, value)
+    maximum = number_maximum(schema, value)
 
-  defp property_valid?(value, %{"type" => "number"} = schema),
-    do:
-      CoreRuntime.dispatch(
-        :structured_number_property_valid,
-        fn ->
-          minimum = number_minimum(schema, value)
-          maximum = number_maximum(schema, value)
+    :wardwright@structured_validation_core.number_property_valid(
+      is_number(value),
+      is_number(value) and value >= minimum,
+      is_number(value) and value <= maximum
+    )
+  end
 
-          :wardwright@structured_validation_core.number_property_valid(
-            is_number(value),
-            is_number(value) and value >= minimum,
-            is_number(value) and value <= maximum
-          )
-        end,
-        fn ->
-          is_number(value) and value >= number_minimum(schema, value) and
-            value <= number_maximum(schema, value)
-        end
-      )
-
-  defp property_valid?(value, %{"type" => "array", "items" => %{"type" => "string"}}),
-    do:
-      CoreRuntime.dispatch(
-        :structured_string_array_property_valid,
-        fn ->
-          :wardwright@structured_validation_core.string_array_property_valid(
-            is_list(value),
-            is_list(value) and Enum.all?(value, &is_binary/1)
-          )
-        end,
-        fn -> is_list(value) and Enum.all?(value, &is_binary/1) end
-      )
+  defp property_valid?(value, %{"type" => "array", "items" => %{"type" => "string"}}) do
+    :wardwright@structured_validation_core.string_array_property_valid(
+      is_list(value),
+      is_list(value) and Enum.all?(value, &is_binary/1)
+    )
+  end
 
   defp property_valid?(_value, _schema), do: false
 
@@ -263,15 +229,9 @@ defmodule Wardwright.Policy.StructuredOutput do
   defp semantic_rule_valid?(parsed, %{"kind" => "json_path_number", "path" => path} = rule) do
     value = json_pointer(parsed, path)
 
-    CoreRuntime.dispatch(
-      :structured_semantic_number_rule_valid,
-      fn ->
-        :wardwright@structured_validation_core.semantic_number_rule_valid(
-          is_number(value),
-          is_number(value) and compare_number(value, rule)
-        )
-      end,
-      fn -> is_number(value) and compare_number(value, rule) end
+    :wardwright@structured_validation_core.semantic_number_rule_valid(
+      is_number(value),
+      is_number(value) and compare_number(value, rule)
     )
   end
 
@@ -287,27 +247,15 @@ defmodule Wardwright.Policy.StructuredOutput do
             rule |> semantic_pattern() |> String.downcase()
           )
 
-        CoreRuntime.dispatch(
-          :structured_semantic_string_not_contains_valid,
-          fn ->
-            :wardwright@structured_validation_core.semantic_string_not_contains_valid(
-              true,
-              contains_pattern?
-            )
-          end,
-          fn -> not contains_pattern? end
+        :wardwright@structured_validation_core.semantic_string_not_contains_valid(
+          true,
+          contains_pattern?
         )
 
       _ ->
-        CoreRuntime.dispatch(
-          :structured_semantic_string_not_contains_valid,
-          fn ->
-            :wardwright@structured_validation_core.semantic_string_not_contains_valid(
-              false,
-              false
-            )
-          end,
-          fn -> true end
+        :wardwright@structured_validation_core.semantic_string_not_contains_valid(
+          false,
+          false
         )
     end
   end

@@ -1,8 +1,6 @@
 defmodule Wardwright.Policy.HistoryCore do
   @moduledoc false
 
-  alias Wardwright.Policy.CoreRuntime
-
   def count_recent_matches(matches, opts \\ []) when is_list(matches) do
     recent_limit = Keyword.get(opts, :recent_limit, length(matches))
     threshold = Keyword.get(opts, :threshold, 1)
@@ -24,29 +22,12 @@ defmodule Wardwright.Policy.HistoryCore do
     working_set_size = integer_value(Keyword.fetch!(opts, :working_set_size))
     scope = to_string(Keyword.fetch!(opts, :scope))
 
-    CoreRuntime.dispatch(
-      :history_count_decision,
-      fn ->
-        :wardwright@history_core.count_matches(
-          matches,
-          threshold,
-          recent_limit,
-          working_set_size,
-          scope
-        )
-      end,
-      fn ->
-        bounded_threshold = max(1, threshold)
-        bounded_limit = max(1, recent_limit)
-
-        count =
-          matches
-          |> Enum.take(bounded_limit)
-          |> Enum.count(&(&1 == true))
-
-        status = if count >= bounded_threshold, do: :triggered, else: :not_triggered
-        {status, scope, count, bounded_threshold, bounded_limit, working_set_size}
-      end
+    :wardwright@history_core.count_matches(
+      matches,
+      threshold,
+      recent_limit,
+      working_set_size,
+      scope
     )
   end
 

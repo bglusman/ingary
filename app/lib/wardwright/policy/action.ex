@@ -10,8 +10,6 @@ defmodule Wardwright.Policy.Action do
   @schema "wardwright.policy_action.v1"
   @result_schema "wardwright.policy_result.v1"
 
-  alias Wardwright.Policy.CoreRuntime
-
   def schema, do: @schema
   def result_schema, do: @result_schema
 
@@ -123,92 +121,23 @@ defmodule Wardwright.Policy.Action do
     blocking? = Enum.any?(actions, &(Map.get(&1, "action") == "block"))
     action_count = length(actions)
 
-    CoreRuntime.dispatch(
-      :action_result_action,
-      fn -> :wardwright@action_core.result_action(status, blocking?, action_count) end,
-      fn ->
-        cond do
-          status == "error" -> "block"
-          blocking? -> "block"
-          true -> "allow"
-        end
-      end
-    )
+    :wardwright@action_core.result_action(status, blocking?, action_count)
   end
 
   defp phase(kind, action) do
-    CoreRuntime.dispatch(
-      :action_phase,
-      fn -> :wardwright@action_core.phase(kind, action) end,
-      fn ->
-        cond do
-          action in ["restrict_routes", "switch_model", "reroute"] -> "request.routing"
-          action in ["inject_reminder_and_retry", "transform"] -> "request.rewrite"
-          action in ["escalate", "alert_async"] -> "request.alert"
-          action == "block" -> "request.terminal"
-          kind in ["history_threshold", "history_regex_threshold"] -> "request.history"
-          true -> "request.review"
-        end
-      end
-    )
+    :wardwright@action_core.phase(kind, action)
   end
 
   defp effect_type(action) do
-    CoreRuntime.dispatch(
-      :action_effect_type,
-      fn -> :wardwright@action_core.effect_type(action) end,
-      fn ->
-        case action do
-          "block" ->
-            "terminal"
-
-          action when action in ["restrict_routes", "switch_model", "reroute"] ->
-            "route_constraint"
-
-          action when action in ["inject_reminder_and_retry", "transform"] ->
-            "request_transform"
-
-          action when action in ["escalate", "alert_async"] ->
-            "alert"
-
-          "annotate" ->
-            "annotation"
-
-          _ ->
-            "custom"
-        end
-      end
-    )
+    :wardwright@action_core.effect_type(action)
   end
 
   defp conflict_key(action) do
-    CoreRuntime.dispatch(
-      :action_conflict_key,
-      fn -> :wardwright@action_core.conflict_key(action) |> blank_to_nil() end,
-      fn ->
-        case action do
-          "block" ->
-            "terminal_decision"
-
-          action when action in ["restrict_routes", "switch_model", "reroute"] ->
-            "route_constraints"
-
-          action when action in ["inject_reminder_and_retry", "transform"] ->
-            "request_rewrite"
-
-          _ ->
-            nil
-        end
-      end
-    )
+    :wardwright@action_core.conflict_key(action) |> blank_to_nil()
   end
 
   defp conflict_policy(action) do
-    CoreRuntime.dispatch(
-      :action_conflict_policy,
-      fn -> :wardwright@action_core.conflict_policy(action) end,
-      fn -> if conflict_key(action), do: "ordered", else: "parallel_safe" end
-    )
+    :wardwright@action_core.conflict_policy(action)
   end
 
   defp priority(action, rule, name) do
@@ -220,19 +149,7 @@ defmodule Wardwright.Policy.Action do
   end
 
   defp default_priority(action) do
-    CoreRuntime.dispatch(
-      :action_default_priority,
-      fn -> :wardwright@action_core.default_priority(action) end,
-      fn ->
-        case action do
-          "block" -> 10
-          action when action in ["restrict_routes", "switch_model", "reroute"] -> 30
-          action when action in ["inject_reminder_and_retry", "transform"] -> 50
-          action when action in ["escalate", "alert_async"] -> 70
-          _action -> 90
-        end
-      end
-    )
+    :wardwright@action_core.default_priority(action)
   end
 
   defp source(_source, %{"source" => action_source}) when is_map(action_source),
@@ -270,36 +187,11 @@ defmodule Wardwright.Policy.Action do
     do: conflict_summary_core(key, policy)
 
   defp conflict_resolution(policy) do
-    CoreRuntime.dispatch(
-      :action_conflict_resolution,
-      fn -> :wardwright@action_core.conflict_resolution(policy) |> blank_to_nil() end,
-      fn ->
-        case policy do
-          "ordered" -> "preserve policy declaration order"
-          "parallel_safe" -> nil
-          policy -> policy
-        end
-      end
-    )
+    :wardwright@action_core.conflict_resolution(policy) |> blank_to_nil()
   end
 
   defp conflict_summary_core(key, policy) do
-    CoreRuntime.dispatch(
-      :action_conflict_summary,
-      fn -> :wardwright@action_core.conflict_summary(key, policy) end,
-      fn ->
-        case {key, policy} do
-          {"route_constraints", "ordered"} ->
-            "Multiple route-affecting policy actions matched; declaration order resolves the final route constraints."
-
-          {"terminal_decision", "ordered"} ->
-            "Multiple terminal policy actions matched; fail-closed block semantics win."
-
-          {key, policy} ->
-            "Multiple policy actions share #{key}; resolution policy is #{policy}."
-        end
-      end
-    )
+    :wardwright@action_core.conflict_summary(key, policy)
   end
 
   defp first_present(values) do

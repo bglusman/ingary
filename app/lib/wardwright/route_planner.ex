@@ -10,8 +10,6 @@ defmodule Wardwright.RoutePlanner do
     round-robin-style selection
   """
 
-  alias Wardwright.Policy.CoreRuntime
-
   def select(config, estimated_prompt_tokens, attrs \\ %{}) when is_map(config) do
     targets =
       config
@@ -52,21 +50,7 @@ defmodule Wardwright.RoutePlanner do
     first_cascade = first_selector_id(config, "cascades")
     first_alloy = first_selector_id(config, "alloys")
 
-    CoreRuntime.dispatch(
-      :route_default_root,
-      fn ->
-        :wardwright@route_core.default_root(root, first_dispatcher, first_cascade, first_alloy)
-      end,
-      fn ->
-        cond do
-          root != "" -> root
-          first_dispatcher != "" -> first_dispatcher
-          first_cascade != "" -> first_cascade
-          first_alloy != "" -> first_alloy
-          true -> "__targets_dispatcher__"
-        end
-      end
-    )
+    :wardwright@route_core.default_root(root, first_dispatcher, first_cascade, first_alloy)
   end
 
   defp select_selector("__targets_dispatcher__", config, targets, estimated, _attrs) do
@@ -96,110 +80,45 @@ defmodule Wardwright.RoutePlanner do
   end
 
   defp select_dispatcher(dispatcher, targets, estimated) do
-    CoreRuntime.dispatch(
-      :route_select_dispatcher,
-      fn ->
-        models =
-          dispatcher
-          |> models_for(targets, "models")
-          |> Enum.sort_by(fn model ->
-            {Map.fetch!(model, "context_window"), Map.fetch!(model, "model")}
-          end)
-          |> Enum.map(&target_for_core/1)
-
-        all_targets = all_targets_for_core(targets)
-
-        :wardwright@route_core.select_dispatcher(models, all_targets, estimated)
-        |> route_selection_decision(%{
-          route_type: "dispatcher",
-          route_id: Map.fetch!(dispatcher, "id"),
-          combine_strategy: "smallest_context_window",
-          rule: "select the smallest configured context window that fits the estimated prompt"
-        })
-      end,
-      fn -> select_dispatcher_elixir(dispatcher, targets, estimated) end
-    )
-  end
-
-  defp select_dispatcher_elixir(dispatcher, targets, estimated) do
-    {eligible, skipped} =
+    models =
       dispatcher
       |> models_for(targets, "models")
-      |> Enum.sort_by(fn model -> {model["context_window"], model["model"]} end)
-      |> split_by_context(estimated)
+      |> Enum.sort_by(fn model ->
+        {Map.fetch!(model, "context_window"), Map.fetch!(model, "model")}
+      end)
+      |> Enum.map(&target_for_core/1)
 
-    selected = List.first(eligible) || largest_known_model(targets)
-    selected_models = selected_models(selected, eligible)
+    all_targets = all_targets_for_core(targets)
 
-    decision(selected, %{
+    :wardwright@route_core.select_dispatcher(models, all_targets, estimated)
+    |> route_selection_decision(%{
       route_type: "dispatcher",
-      route_id: dispatcher["id"],
+      route_id: Map.fetch!(dispatcher, "id"),
       combine_strategy: "smallest_context_window",
-      selected_models: selected_models,
-      fallback_models: Enum.drop(selected_models, 1),
-      skipped: skipped,
-      reason: dispatcher_reason(skipped, selected),
       rule: "select the smallest configured context window that fits the estimated prompt"
     })
   end
 
   defp select_forced_model(model, config, targets, estimated, attrs) do
-    CoreRuntime.dispatch(
-      :route_select_forced_model,
-      fn ->
-        forced = targets |> Map.get(model) |> forced_target_for_core()
+    forced = targets |> Map.get(model) |> forced_target_for_core()
 
-        skipped_targets =
-          targets
-          |> Map.delete(model)
-          |> Map.values()
-          |> Enum.map(&target_for_core/1)
+    skipped_targets =
+      targets
+      |> Map.delete(model)
+      |> Map.values()
+      |> Enum.map(&target_for_core/1)
 
-        forced
-        |> :wardwright@route_core.select_forced_model(skipped_targets, estimated)
-        |> forced_selection_decision(%{
-          route_type: "policy_override",
-          route_id: "policy.forced_model",
-          combine_strategy: "policy_forced_model",
-          fallback_models: [],
-          fallback_used: false,
-          rule: "apply policy route override before provider selection"
-        })
-      end,
-      fn -> select_forced_model_elixir(model, config, targets, estimated, attrs) end
-    )
-    |> maybe_forced_fallback(model, config, targets, estimated, attrs)
-  end
-
-  defp select_forced_model_elixir(model, _config, targets, estimated, _attrs) do
-    forced = Map.get(targets, model)
-    skipped = targets |> Map.delete(model) |> Map.values() |> Enum.map(&policy_skip/1)
-
-    {selected, skipped, reason} =
-      cond do
-        forced == nil ->
-          {nil, skipped, forced_model_reason(false, false)}
-
-        forced["context_window"] < estimated ->
-          {nil, [context_skip(forced, estimated) | skipped], forced_model_reason(true, false)}
-
-        true ->
-          {forced, skipped, forced_model_reason(true, true)}
-      end
-
-    selected_models = selected_models(selected, if(selected, do: [selected], else: []))
-
-    decision(selected, %{
+    forced
+    |> :wardwright@route_core.select_forced_model(skipped_targets, estimated)
+    |> forced_selection_decision(%{
       route_type: "policy_override",
       route_id: "policy.forced_model",
       combine_strategy: "policy_forced_model",
-      selected_models: selected_models,
       fallback_models: [],
-      skipped: skipped,
       fallback_used: false,
-      reason: reason,
       rule: "apply policy route override before provider selection"
     })
+    |> maybe_forced_fallback(model, config, targets, estimated, attrs)
   end
 
   defp maybe_forced_fallback(decision, model, config, targets, estimated, attrs) do
@@ -242,41 +161,14 @@ defmodule Wardwright.RoutePlanner do
   defp allow_fallback?(attrs), do: Map.fetch(attrs, "allow_fallback") == {:ok, true}
 
   defp select_cascade(cascade, targets, estimated) do
-    CoreRuntime.dispatch(
-      :route_select_cascade,
-      fn ->
-        models = cascade |> models_for(targets, "models") |> Enum.map(&target_for_core/1)
-        all_targets = all_targets_for_core(targets)
+    models = cascade |> models_for(targets, "models") |> Enum.map(&target_for_core/1)
+    all_targets = all_targets_for_core(targets)
 
-        :wardwright@route_core.select_cascade(models, all_targets, estimated)
-        |> route_selection_decision(%{
-          route_type: "cascade",
-          route_id: Map.fetch!(cascade, "id"),
-          combine_strategy: "ordered_fallback",
-          rule: "try configured models in order, skipping models whose context window cannot fit"
-        })
-      end,
-      fn -> select_cascade_elixir(cascade, targets, estimated) end
-    )
-  end
-
-  defp select_cascade_elixir(cascade, targets, estimated) do
-    {eligible, skipped} =
-      cascade
-      |> models_for(targets, "models")
-      |> split_by_context(estimated)
-
-    selected = List.first(eligible) || largest_known_model(targets)
-    selected_models = selected_models(selected, eligible)
-
-    decision(selected, %{
+    :wardwright@route_core.select_cascade(models, all_targets, estimated)
+    |> route_selection_decision(%{
       route_type: "cascade",
-      route_id: cascade["id"],
+      route_id: Map.fetch!(cascade, "id"),
       combine_strategy: "ordered_fallback",
-      selected_models: selected_models,
-      fallback_models: Enum.drop(selected_models, 1),
-      skipped: skipped,
-      reason: cascade_reason(skipped, selected),
       rule: "try configured models in order, skipping models whose context window cannot fit"
     })
   end
@@ -380,17 +272,7 @@ defmodule Wardwright.RoutePlanner do
   defp normalize_alloy_strategy(strategy) do
     strategy = string_value(strategy)
 
-    CoreRuntime.dispatch(
-      :route_alloy_strategy,
-      fn -> :wardwright@route_core.normalize_alloy_strategy(strategy) end,
-      fn ->
-        case strategy do
-          strategy when strategy in ["deterministic_all", "weighted", "round_robin"] -> strategy
-          "all" -> "deterministic_all"
-          _ -> "weighted"
-        end
-      end
-    )
+    :wardwright@route_core.normalize_alloy_strategy(strategy)
   end
 
   defp weighted_without_replacement(models, seed) do
@@ -497,14 +379,6 @@ defmodule Wardwright.RoutePlanner do
     }
   end
 
-  defp policy_skip(model) do
-    %{
-      "target" => model["model"],
-      "reason" => "policy_route_gate",
-      "context_window" => model["context_window"]
-    }
-  end
-
   defp selected_models(nil, eligible), do: Enum.map(eligible, & &1["model"])
   defp selected_models(selected, []), do: [selected["model"]]
   defp selected_models(_selected, eligible), do: Enum.map(eligible, & &1["model"])
@@ -521,58 +395,10 @@ defmodule Wardwright.RoutePlanner do
     |> Map.put(:route_blocked, selected == nil)
   end
 
-  defp dispatcher_reason(skipped, _selected) do
-    skipped_count = length(skipped)
-
-    CoreRuntime.dispatch(
-      :route_dispatcher_reason,
-      fn -> :wardwright@route_core.dispatcher_reason(skipped_count) end,
-      fn ->
-        case skipped_count do
-          0 -> "estimated prompt fits selected context window"
-          _ -> "estimated prompt exceeded smaller configured context windows"
-        end
-      end
-    )
-  end
-
-  defp cascade_reason(skipped, _selected) do
-    skipped_count = length(skipped)
-
-    CoreRuntime.dispatch(
-      :route_cascade_reason,
-      fn -> :wardwright@route_core.cascade_reason(skipped_count) end,
-      fn ->
-        case skipped_count do
-          0 -> "selected first configured cascade target"
-          _ -> "cascade skipped targets whose context windows were too small"
-        end
-      end
-    )
-  end
-
   defp alloy_reason(partial_context, skipped, _selected_models) do
     skipped_count = length(skipped)
 
-    CoreRuntime.dispatch(
-      :route_alloy_reason,
-      fn -> :wardwright@route_core.alloy_reason(partial_context, skipped_count) end,
-      fn ->
-        case {partial_context, skipped_count} do
-          {true, 0} ->
-            "partial alloy selected all constituents whose context windows fit"
-
-          {true, _} ->
-            "partial alloy dropped smaller constituents whose context windows were too small"
-
-          {false, 0} ->
-            "alloy constituents share a compatible context window for this prompt"
-
-          {false, _} ->
-            "alloy prompt exceeded the compatible minimum context window"
-        end
-      end
-    )
+    :wardwright@route_core.alloy_reason(partial_context, skipped_count)
   end
 
   defp alloy_min_context(alloy, models) do
@@ -780,26 +606,8 @@ defmodule Wardwright.RoutePlanner do
 
   defp integer_value(_), do: nil
 
-  defp forced_model_reason(available?, fits_prompt?) do
-    CoreRuntime.dispatch(
-      :route_forced_model_reason,
-      fn -> :wardwright@route_core.forced_model_reason(available?, fits_prompt?) end,
-      fn ->
-        case {available?, fits_prompt?} do
-          {false, _} -> "policy forced model was not in the allowed route set"
-          {true, false} -> "policy forced model was too small for estimated prompt"
-          {true, true} -> "policy forced selected model"
-        end
-      end
-    )
-  end
-
   defp forced_fallback_reason(forced_reason) do
-    CoreRuntime.dispatch(
-      :route_forced_fallback_reason,
-      fn -> :wardwright@route_core.forced_fallback_reason(forced_reason) end,
-      fn -> "#{forced_reason}; explicit policy fallback allowed" end
-    )
+    :wardwright@route_core.forced_fallback_reason(forced_reason)
   end
 
   defp provider_from_model(model) do
@@ -809,11 +617,7 @@ defmodule Wardwright.RoutePlanner do
   defp valid_alloy_strategy?(strategy) do
     strategy = string_value(strategy)
 
-    CoreRuntime.dispatch(
-      :route_valid_alloy_strategy,
-      fn -> :wardwright@route_core.validate_strategy(strategy) end,
-      fn -> strategy in ["weighted", "round_robin", "deterministic_all", "all"] end
-    )
+    :wardwright@route_core.validate_strategy(strategy)
   end
 
   defp first_selector_id(config, key) do
