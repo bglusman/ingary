@@ -153,6 +153,30 @@ For the first product slice, prefer native LiveView plus a stable projection
 schema. Add a client graph hook only when a specific workflow proves that pan,
 zoom, auto-layout, or large-graph interaction is needed.
 
+## 2026-05-15 LiveView UI Spike Notes
+
+Scope: `app/lib/wardwright_web` only. The spike focused on the running
+`/policies/route-privacy/phase_map` workbench and did not change policy
+semantics.
+
+Observations:
+
+- The LiveView was attaching the root layout twice, which rendered a complete
+  HTML document inside the LiveView container. Chrome inspection showed the
+  sidebar and workspace squeezed into one grid column instead of a full
+  workbench shell.
+- The schema badge and short confidence badges wrapped vertically when the
+  containing panel collapsed. This made the authority/projection relationship
+  harder to scan before reviewing policy nodes.
+- Operators need a faster first read than the phase map alone provides. A
+  top-level summary strip now surfaces artifact authority, policy-node count,
+  simulation evidence, and review load before the detailed projection.
+
+Screenshot evidence:
+
+- Before: `/tmp/wardwright-policy-workbench-before.png`
+- After layout fix and summary strip: `/tmp/wardwright-policy-workbench-final.png`
+
 ## Agent Framework Candidates
 
 Alloy and Jido are the two relevant Elixir agent candidates currently visible.

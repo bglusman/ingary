@@ -1,7 +1,7 @@
 defmodule WardwrightWeb.PolicyProjectionLive do
   @moduledoc false
 
-  use Phoenix.LiveView, layout: {WardwrightWeb.Layouts, :root}
+  use Phoenix.LiveView
 
   @modes ["phase_map", "effect_matrix", "trace_overlay"]
 
@@ -37,6 +37,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     |> assign(:mode, mode)
     |> assign(:projection, projection)
     |> assign(:simulations, simulations)
+    |> assign(:projection_stats, projection_stats(projection, simulations))
     |> assign(:selected_simulation, List.first(simulations))
     |> assign(:selected_node, selected_node)
     |> assign_new(:runtime_status, fn -> Wardwright.Runtime.status() end)
@@ -103,6 +104,29 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         </div>
       </header>
 
+      <section class="scan_strip" aria-label="Policy authoring summary">
+        <article>
+          <span>Authority</span>
+          <strong>Artifact first</strong>
+          <small><%= @projection["artifact"]["policy_version"] %></small>
+        </article>
+        <article>
+          <span>Policy nodes</span>
+          <strong><%= @projection_stats.node_count %></strong>
+          <small><%= @projection_stats.exact_count %> exact, <%= @projection_stats.opaque_count %> opaque</small>
+        </article>
+        <article>
+          <span>Simulation evidence</span>
+          <strong><%= @projection_stats.simulation_count %> runs</strong>
+          <small><%= @projection_stats.trace_event_count %> trace events</small>
+        </article>
+        <article>
+          <span>Review load</span>
+          <strong><%= @projection_stats.review_count %></strong>
+          <small>conflicts, warnings, opaque regions</small>
+        </article>
+      </section>
+
       <section class="panel">
         <div class="panel_header">
           <div>
@@ -112,7 +136,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               then shows simulation evidence against that projection.
             </p>
           </div>
-          <.badge value={@projection["projection_schema"]} />
+          <.badge value={@projection["projection_schema"]} class="schema_badge" />
         </div>
 
         <div class="mode_tabs">
@@ -374,20 +398,22 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   attr(:value, :string, required: true)
+  attr(:class, :string, default: "")
 
   def badge(assigns) do
     ~H"""
-    <span class={"badge #{String.replace(@value, ~r/[^a-zA-Z0-9]+/, "-") |> String.downcase()}"}><%= @value %></span>
+    <span class={"badge #{@class} #{String.replace(@value, ~r/[^a-zA-Z0-9]+/, "-") |> String.downcase()}"}><%= @value %></span>
     """
   end
 
   def styles do
     """
-    :root { color: #17202a; background: #f4f6f8; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    :root { color: #17202a; background: #f4f6f8; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     * { box-sizing: border-box; }
     body { margin: 0; }
     a { color: inherit; text-decoration: none; }
-    .shell { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100vh; }
+    .shell, .shell > [data-phx-main] { min-height: 100vh; }
+    .shell > [data-phx-main] { display: grid; grid-template-columns: 260px minmax(0, 1fr); }
     .sidebar { display: flex; flex-direction: column; gap: 24px; padding: 22px 16px; color: #e6ebef; background: #25313b; }
     .brand { display: flex; align-items: center; gap: 12px; }
     .mark { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 1px solid #657583; border-radius: 6px; background: #33414c; color: #fff; font-weight: 800; }
@@ -399,6 +425,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .sidebar_footer { margin-top: auto; padding: 14px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; overflow-wrap: anywhere; }
     .workspace { min-width: 0; padding: 28px; }
     .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+    .topbar > div:first-child, .panel_header > div { min-width: 0; flex: 1 1 auto; }
     .eyebrow { margin: 0 0 4px; color: #5e6b76; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     h1, h2, h3, p { margin-top: 0; }
     h1 { margin-bottom: 6px; font-size: 30px; line-height: 1.12; }
@@ -409,6 +436,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .panel_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
     .engine_card { display: grid; gap: 6px; min-width: 260px; padding: 12px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; }
     .engine_card span:last-child { color: #66727c; font-size: 12px; }
+    .scan_strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .scan_strip article { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgb(16 24 40 / 4%); }
+    .scan_strip span { color: #66727c; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .scan_strip strong { color: #17202a; font-size: 18px; line-height: 1.2; }
+    .scan_strip small { color: #5e6b76; line-height: 1.35; overflow-wrap: anywhere; }
     .mode_tabs { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid #d5dde4; border-radius: 8px; background: #f3f6f8; }
     .mode_tabs a { border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; }
     .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; }
@@ -438,14 +470,30 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .effect_row.header { color: #66727c; background: #f3f6f8; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .trace_summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: start; }
     .trace_summary span { grid-column: 2; }
-    .badge { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; padding: 3px 8px; border: 1px solid #cad4dc; border-radius: 999px; color: #33414c; background: #f5f7f9; font-size: 12px; font-weight: 800; line-height: 1.2; overflow-wrap: anywhere; }
+    .badge { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; min-height: 24px; padding: 3px 8px; border: 1px solid #cad4dc; border-radius: 999px; color: #33414c; background: #f5f7f9; font-size: 12px; font-weight: 800; line-height: 1.2; white-space: nowrap; }
+    .schema_badge { overflow-wrap: normal; }
     .badge.exact, .badge.executed, .badge.passed, .badge.pass { border-color: #94c7b5; color: #1c654f; background: #edf8f3; }
     .badge.declared, .badge.inferred, .badge.inconclusive, .badge.warning, .badge.warn { border-color: #d9bd72; color: #73570d; background: #fff7df; }
     .badge.opaque, .badge.failed, .badge.block, .badge.conflicting { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
     pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
-    @media (max-width: 980px) { .shell, .split { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } }
+    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header { display: grid; } .effect_row, .trace_event { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
     """
+  end
+
+  defp projection_stats(projection, simulations) do
+    nodes = projection["phases"] |> Enum.flat_map(& &1["nodes"])
+
+    %{
+      node_count: length(nodes),
+      exact_count: Enum.count(nodes, &(&1["confidence"] == "exact")),
+      opaque_count: Enum.count(nodes, &(&1["confidence"] == "opaque")),
+      simulation_count: length(simulations),
+      trace_event_count: simulations |> Enum.flat_map(& &1["trace"]) |> length(),
+      review_count:
+        length(projection["conflicts"]) + length(projection["opaque_regions"]) +
+          length(projection["warnings"])
+    }
   end
 
   defp first_node(projection) do

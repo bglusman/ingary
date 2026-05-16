@@ -88,12 +88,20 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Private context route gate"
     assert html =~ "Trace overlay"
     assert html =~ "Request route plan"
+    assert html =~ "Artifact first"
+    assert html =~ "Policy nodes"
+    assert html =~ "Simulation evidence"
+    assert html =~ "Review load"
 
     connected_html = render(view)
 
     assert connected_html =~ "Private context route gate"
     assert connected_html =~ "Trace overlay"
     assert connected_html =~ "Request route plan"
+    assert connected_html =~ "Artifact first"
+    assert connected_html =~ "Policy nodes"
+    assert connected_html =~ "Simulation evidence"
+    assert connected_html =~ "Review load"
 
     assert {:error, {:redirect, %{to: "/policies/route-privacy/effect_matrix"}}} =
              view

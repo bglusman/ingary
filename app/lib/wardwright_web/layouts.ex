@@ -12,7 +12,7 @@ defmodule WardwrightWeb.Layouts do
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Wardwright Policy Workbench</title>
         <style>
-          <%= WardwrightWeb.PolicyProjectionLive.styles() %>
+          <%= Phoenix.HTML.raw(WardwrightWeb.PolicyProjectionLive.styles()) %>
         </style>
       </head>
       <body>
