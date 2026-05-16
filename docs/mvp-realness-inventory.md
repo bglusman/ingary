@@ -37,6 +37,10 @@ a clear error that names the missing capability.
   receipts at a minimal allowlisted level. Receipts now expose stream format,
   completion status/reason, and common token/timing fields when providers emit
   them.
+- Provider records expose a versioned capability map for the currently
+  supported adapter shapes. The map describes endpoint shape, stream format,
+  auth scheme, terminal metadata support, cancellation confidence, unsupported
+  stream delta fields, and the current unsupported-options policy.
 - Policy retry loops are real for stream guards. A retry can inject a reminder,
   reroute when the retry prompt exceeds the current model context window, and
   record the attempt path in receipts.
@@ -75,8 +79,9 @@ a clear error that names the missing capability.
   providers, which prove transport shape but not provider-specific drift.
 - Upstream stream metadata is only minimally preserved. OpenAI `finish_reason`,
   usage chunks, refusal fields, and common Ollama terminal timing/count fields
-  are allowlisted in receipts, but role, tool-call, logprob, and arbitrary
-  provider-specific deltas are not preserved.
+  are allowlisted in receipts and advertised in provider capability records, but
+  role, tool-call, logprob, and arbitrary provider-specific deltas are not
+  preserved.
 - Downstream SSE chunks only emit content deltas and Wardwright terminal events.
   They do not preserve upstream role, tool-call, logprob, or usage deltas.
 - Provider timeout is enforced by `ProviderRuntime`, but lower-level HTTP stream
@@ -91,11 +96,9 @@ a clear error that names the missing capability.
   handle provider variants that require extra stream options, alternate base
   paths, or nonstandard terminal frames.
 
-Interface expectation:
-
-- Provider adapters should publish a capability record before remote use:
-  supported endpoint shape, streaming format, auth scheme, terminal metadata
-  support, cancellation confidence, and unsupported options.
+- Provider capability records are descriptive, not yet enforcement points.
+  Runtime option validation should eventually reject options that could affect
+  policy correctness when the selected adapter cannot honor them.
 - Unsupported provider features should be ignored only when they cannot affect
   policy correctness. If they could affect safety, routing, stream release, or
   receipt truth, the adapter should fail clearly.
@@ -143,10 +146,8 @@ Interface expectation:
 
 ## Suggested Next Slices
 
-1. Normalize provider metadata capabilities beyond terminal fields and publish
-   the supported metadata contract in provider capability records.
-2. Add a live-provider smoke test profile that is skipped by default but can run
+1. Add a live-provider smoke test profile that is skipped by default but can run
    against local Ollama and one configured OpenAI-compatible target.
-3. Spike Hermes MCP over the protected authoring API without changing policy
+2. Spike Hermes MCP over the protected authoring API without changing policy
    engine internals.
-4. Add retention and regression-export paths for pinned scenario records.
+3. Add retention and regression-export paths for pinned scenario records.

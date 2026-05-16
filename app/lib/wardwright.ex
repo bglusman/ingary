@@ -263,7 +263,10 @@ defmodule Wardwright do
         "base_url" => base_url,
         "credential_owner" => "wardwright",
         "credential_source" => credential_source(target),
-        "health" => "healthy"
+        "health" => "healthy",
+        # boundary-map-ok
+        "capabilities" =>
+          Wardwright.ProviderCapabilities.for_provider(kind, credential_source(target))
       }
     end)
   end

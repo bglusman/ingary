@@ -41,8 +41,50 @@ defmodule Wardwright.StorageAndAdminTest do
 
     assert [provider] = Wardwright.providers()
     assert provider["credential_source"] == "env"
+    assert get_in(provider, ["capabilities", "auth_scheme"]) == "bearer"
+    assert get_in(provider, ["capabilities", "stream_format"]) == "openai_sse"
+    assert "usage" in get_in(provider, ["capabilities", "terminal_metadata"])
     refute Map.has_key?(provider, "credential_env")
     refute Map.has_key?(provider, "credential")
+  end
+
+  test "provider capabilities describe stream contract differences by provider kind" do
+    {:ok, _config} =
+      Wardwright.put_config(%{
+        "synthetic_model" => "coding-balanced",
+        "version" => "2026-05-13.mock",
+        "targets" => [
+          %{"model" => "ollama/llama-test", "context_window" => 128_000},
+          %{
+            "model" => "openai/gpt-test",
+            "context_window" => 128_000,
+            "provider_kind" => "openai-compatible",
+            "provider_base_url" => "https://example.com/v1"
+          },
+          %{"model" => "local/mock-test", "context_window" => 32_768}
+        ]
+      })
+
+    providers = Map.new(Wardwright.providers(), &{&1["id"], &1})
+
+    assert get_in(providers, ["ollama", "capabilities", "stream_format"]) == "ollama_ndjson"
+    assert get_in(providers, ["openai", "capabilities", "stream_format"]) == "openai_sse"
+    assert get_in(providers, ["local", "capabilities", "stream_format"]) == "synthetic_chunks"
+
+    assert get_in(providers, ["openai", "capabilities", "schema"]) ==
+             "wardwright.provider_capabilities.v1"
+
+    assert get_in(providers, ["openai", "capabilities", "unsupported_stream_delta_fields"]) == [
+             "role",
+             "tool_calls",
+             "logprobs"
+           ]
+
+    assert get_in(providers, ["ollama", "capabilities", "cancellation", "confidence"]) ==
+             "needs_live_provider_smoke"
+
+    assert get_in(providers, ["local", "capabilities", "cancellation", "confidence"]) ==
+             "deterministic_local"
   end
 
   test "admin storage endpoint exposes receipt store health" do
