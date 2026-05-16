@@ -816,7 +816,13 @@ defmodule Wardwright do
       })
 
     "#{String.trim_trailing(base_url, "/")}/api/chat"
-    |> http_post_stream_each(body, [], {:lines, ""}, &parse_ollama_stream_part/3, emit)
+    |> http_post_stream_each(
+      body,
+      [],
+      {:lines, "", stream_metadata("ollama_ndjson")},
+      &parse_ollama_stream_part/3,
+      emit
+    )
   end
 
   defp complete_with_openai_compatible(target, request) do
@@ -883,7 +889,13 @@ defmodule Wardwright do
       headers = provider_headers(target) ++ [{~c"authorization", ~c"Bearer #{credential}"}]
 
       "#{String.trim_trailing(base_url, "/")}/chat/completions"
-      |> http_post_stream_each(body, headers, {:sse, ""}, &parse_openai_sse_part/3, emit)
+      |> http_post_stream_each(
+        body,
+        headers,
+        {:sse, "", stream_metadata("openai_sse")},
+        &parse_openai_sse_part/3,
+        emit
+      )
     else
       "" -> {:error, "provider_base_url is required for openai-compatible targets"}
       {:error, reason} -> {:error, reason}
@@ -1007,17 +1019,18 @@ defmodule Wardwright do
         collect_http_stream_each(request_id, handler_pid, parser_state, parser_fun, emit)
 
       {:http, {^request_id, :stream_end, _headers}} ->
-        finalize_stream_parser(parser_state, parser_fun, emit)
-        :ok
+        parser_state = finalize_stream_parser(parser_state, parser_fun, emit)
+        {:ok, stream_parser_result(parser_state)}
 
       {:http, {^request_id, {{_, status, _}, _headers, response_body}}}
       when status in 200..299 ->
-        response_body
-        |> IO.iodata_to_binary()
-        |> parser_fun.(parser_state, emit)
-        |> finalize_stream_parser(parser_fun, emit)
+        parser_state =
+          response_body
+          |> IO.iodata_to_binary()
+          |> parser_fun.(parser_state, emit)
+          |> finalize_stream_parser(parser_fun, emit)
 
-        :ok
+        {:ok, stream_parser_result(parser_state)}
 
       {:http, {^request_id, {{_, status, _}, _headers, _response_body}}} ->
         {:error, "provider returned #{status}"}
@@ -1030,29 +1043,44 @@ defmodule Wardwright do
         {:error, "provider stream timed out after 180000ms"}
     end
     |> case do
-      :ok -> {:ok, :done}
+      {:ok, result} -> {:ok, result}
       error -> error
     end
   end
 
   defp parse_ollama_stream_part(part, {:lines, pending}, emit) do
+    parse_ollama_stream_part(part, {:lines, pending, stream_metadata("ollama_ndjson")}, emit)
+    |> then(fn {:lines, pending, _metadata} -> {:lines, pending} end)
+  end
+
+  defp parse_ollama_stream_part(part, {:lines, pending, metadata}, emit) do
     {lines, pending} = split_stream_lines(pending <> part)
 
-    Enum.each(lines, fn line ->
-      case Jason.decode(String.trim(line)) do
-        {:ok, event} ->
-          content = get_in(event, ["message", "content"]) || event["response"]
-          if content not in [nil, ""], do: emit.(content)
+    metadata =
+      Enum.reduce(lines, metadata, fn line, metadata ->
+        case Jason.decode(String.trim(line)) do
+          {:ok, event} ->
+            metadata = ollama_stream_metadata(metadata, event)
 
-        {:error, _} ->
-          :ok
-      end
-    end)
+            content =
+              json_get(json_get(event, "message"), "content") || json_get(event, "response")
 
-    {:lines, pending}
+            if content not in [nil, ""], do: emit.(content)
+            metadata
+
+          {:error, _} ->
+            metadata
+        end
+      end)
+
+    {:lines, pending, metadata}
   end
 
   defp finalize_stream_parser({:lines, _pending} = parser_state, parser_fun, emit) do
+    parser_fun.("\n", parser_state, emit)
+  end
+
+  defp finalize_stream_parser({:lines, _pending, _metadata} = parser_state, parser_fun, emit) do
     parser_fun.("\n", parser_state, emit)
   end
 
@@ -1060,34 +1088,101 @@ defmodule Wardwright do
     parser_fun.("\n\n", parser_state, emit)
   end
 
+  defp finalize_stream_parser({:sse, _pending, _metadata} = parser_state, parser_fun, emit) do
+    parser_fun.("\n\n", parser_state, emit)
+  end
+
+  defp stream_parser_metadata({:sse, _pending, metadata}) when map_size(metadata) > 0,
+    do: metadata
+
+  defp stream_parser_metadata({:lines, _pending, metadata}) when map_size(metadata) > 0,
+    do: metadata
+
+  defp stream_parser_metadata(_parser_state), do: nil
+
+  defp stream_parser_result(parser_state) do
+    case stream_parser_metadata(parser_state) do
+      nil -> :done
+      metadata -> {:provider_metadata, metadata}
+    end
+  end
+
+  defp ollama_stream_metadata(metadata, event) do
+    metadata
+    |> put_if_present("done", json_get(event, "done"))
+    |> put_if_present("done_reason", json_get(event, "done_reason"))
+    |> put_if_present("total_duration", json_get(event, "total_duration"))
+    |> put_if_present("load_duration", json_get(event, "load_duration"))
+    |> put_if_present("prompt_eval_count", json_get(event, "prompt_eval_count"))
+    |> put_if_present("eval_count", json_get(event, "eval_count"))
+  end
+
   defp parse_openai_sse_part(part, {:sse, pending}, emit) do
+    parse_openai_sse_part(part, {:sse, pending, stream_metadata("openai_sse")}, emit)
+    |> then(fn {:sse, pending, _metadata} -> {:sse, pending} end)
+  end
+
+  defp parse_openai_sse_part(part, {:sse, pending, metadata}, emit) do
     {events, pending} = split_sse_events(pending <> part)
 
-    Enum.each(events, fn event ->
-      event
-      |> String.split(["\r\n", "\n"], trim: true)
-      |> Enum.flat_map(&sse_data_values/1)
-      |> Enum.each(fn
-        "[DONE]" ->
-          :ok
+    metadata =
+      Enum.reduce(events, metadata, fn event, metadata ->
+        event
+        |> String.split(["\r\n", "\n"], trim: true)
+        |> Enum.flat_map(&sse_data_values/1)
+        |> Enum.reduce(metadata, fn
+          "[DONE]", metadata ->
+            put_if_present(metadata, "done", true)
 
-        data ->
-          case Jason.decode(data) do
-            {:ok, event} ->
-              content =
-                get_in(event, ["choices", Access.at(0), "delta", "content"]) ||
-                  get_in(event, ["choices", Access.at(0), "message", "content"])
+          data, metadata ->
+            case Jason.decode(data) do
+              {:ok, event} ->
+                metadata = openai_stream_metadata(metadata, event)
 
-              if content not in [nil, ""], do: emit.(content)
+                content =
+                  event
+                  |> openai_choice()
+                  |> openai_choice_content()
 
-            {:error, _} ->
-              :ok
-          end
+                if content not in [nil, ""], do: emit.(content)
+                metadata
+
+              {:error, _} ->
+                metadata
+            end
+        end)
       end)
-    end)
 
-    {:sse, pending}
+    {:sse, pending, metadata}
   end
+
+  defp openai_stream_metadata(metadata, event) do
+    choice = openai_choice(event)
+
+    metadata
+    |> put_if_present("finish_reason", json_get(choice, "finish_reason"))
+    |> put_if_present("choice_index", json_get(choice, "index"))
+    |> put_if_present("usage", json_get(event, "usage"))
+    |> put_if_present("system_fingerprint", json_get(event, "system_fingerprint"))
+    |> put_if_present("refusal", json_get(json_get(choice, "delta"), "refusal"))
+  end
+
+  defp stream_metadata(format), do: put_if_present(%{}, "stream_format", format)
+
+  defp openai_choice(event) do
+    case json_get(event, "choices") do
+      [choice | _] when is_map(choice) -> choice
+      _ -> %{}
+    end
+  end
+
+  defp openai_choice_content(choice) do
+    json_get(json_get(choice, "delta"), "content") ||
+      json_get(json_get(choice, "message"), "content")
+  end
+
+  defp json_get(map, key) when is_map(map), do: Map.get(map, key)
+  defp json_get(_value, _key), do: nil
 
   defp sse_data_values("data:" <> data), do: [String.trim(data)]
   defp sse_data_values(_line), do: []
@@ -1232,6 +1327,12 @@ defmodule Wardwright do
   defp content_string(nil), do: ""
   defp content_string(value), do: Jason.encode!(value)
 
+  defp provider_outcome_from_result({:ok, {:provider_metadata, metadata}}, started) do
+    nil
+    |> provider_outcome("completed", started, nil, true, false)
+    |> Map.put(:provider_metadata, metadata)
+  end
+
   defp provider_outcome_from_result({:ok, content}, started) do
     provider_outcome(content, "completed", started, nil, true, false)
   end
@@ -1275,8 +1376,13 @@ defmodule Wardwright do
   defp stream_each_outcome(acc, result, started, called_provider, mock) do
     provider =
       case result do
+        {:ok, {:provider_metadata, metadata}} ->
+          nil
+          |> provider_outcome("completed", started, nil, true, false)
+          |> Map.put(:provider_metadata, metadata)
+
         {:ok, _} ->
-          provider_outcome(nil, "completed", started, nil, true, false)
+          provider_outcome(nil, "completed", started, nil, called_provider, mock)
 
         {:mock, _} ->
           provider_outcome(nil, "completed", started, nil, false, true)
@@ -1296,6 +1402,9 @@ defmodule Wardwright do
 
   defp blank_to_nil(nil), do: nil
   defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: String.trim(value))
+
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
 
   defp integer_value(value) when is_integer(value), do: value
 

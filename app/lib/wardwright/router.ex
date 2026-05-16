@@ -687,6 +687,7 @@ defmodule Wardwright.Router do
       |> Map.put("latency_ms", provider.latency_ms)
       |> put_if_present("provider_id", provider_id_from_model(Map.get(provider, :selected_model)))
       |> put_if_present("model", Map.get(provider, :selected_model))
+      |> put_if_present("provider_metadata", Map.get(provider, :provider_metadata))
       |> put_if_present("provider_error", provider.error)
     end)
     |> update_in(["final"], fn final ->
@@ -696,6 +697,7 @@ defmodule Wardwright.Router do
       |> put_if_present("structured_output", Map.get(provider, :structured_output))
       |> put_if_present("stream_policy", stream_policy_receipt(Map.get(provider, :stream_policy)))
       |> put_stream_policy_summary(Map.get(provider, :stream_policy))
+      |> put_if_present("provider_metadata", Map.get(provider, :provider_metadata))
       |> put_if_present("provider_error", provider.error)
     end)
   end

@@ -98,11 +98,18 @@ defmodule Wardwright.StreamProviderTransportTest do
 
     [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
 
-    stream_policy =
-      receipt_id |> Wardwright.ReceiptStore.get() |> get_in(["final", "stream_policy"])
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+    stream_policy = get_in(receipt, ["final", "stream_policy"])
 
     assert stream_policy["retry_count"] == 1
     assert stream_policy["released_to_consumer"] == true
+    assert get_in(receipt, ["final", "provider_metadata", "stream_format"]) == "ollama_ndjson"
+    assert get_in(receipt, ["final", "provider_metadata", "done"]) == true
+    assert get_in(receipt, ["final", "provider_metadata", "done_reason"]) == "stop"
+    assert get_in(receipt, ["final", "provider_metadata", "prompt_eval_count"]) == 4
+
+    assert get_in(receipt, ["attempts", Access.at(0), "provider_metadata", "done_reason"]) ==
+             "stop"
 
     assert [
              %{"status" => "stream_policy_retry_required", "released_to_consumer" => false},
@@ -227,5 +234,12 @@ defmodule Wardwright.StreamProviderTransportTest do
     assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == true
     assert get_in(receipt, ["attempts", Access.at(0), "mock"]) == false
     assert get_in(receipt, ["final", "stream_policy", "released_to_consumer"]) == true
+    assert get_in(receipt, ["final", "provider_metadata", "stream_format"]) == "openai_sse"
+    assert get_in(receipt, ["final", "provider_metadata", "finish_reason"]) == "stop"
+    assert get_in(receipt, ["final", "provider_metadata", "done"]) == true
+    assert get_in(receipt, ["final", "provider_metadata", "usage", "total_tokens"]) == 5
+
+    assert get_in(receipt, ["attempts", Access.at(0), "provider_metadata", "finish_reason"]) ==
+             "stop"
   end
 end

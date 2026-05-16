@@ -33,6 +33,10 @@ a clear error that names the missing capability.
 - Stream termination is handled for the current supported paths. Wardwright
   emits downstream `data: [DONE]` after normal completion and after terminal
   policy/provider events once an SSE response has started.
+- OpenAI-compatible SSE and Ollama NDJSON terminal metadata is preserved in
+  receipts at a minimal allowlisted level. Receipts now expose stream format,
+  completion status/reason, and common token/timing fields when providers emit
+  them.
 - Policy retry loops are real for stream guards. A retry can inject a reminder,
   reroute when the retry prompt exceeds the current model context window, and
   record the attempt path in receipts.
@@ -67,9 +71,10 @@ a clear error that names the missing capability.
 - Real-provider smoke tests should run outside CI against at least local Ollama
   and one OpenAI-compatible provider. Current tests use local fake HTTP
   providers, which prove transport shape but not provider-specific drift.
-- Upstream stream metadata is mostly discarded. OpenAI `finish_reason`, usage
-  chunks, refusal fields, tool-call deltas, and provider-specific terminal
-  events are not preserved in receipts today.
+- Upstream stream metadata is only minimally preserved. OpenAI `finish_reason`,
+  usage chunks, refusal fields, and common Ollama terminal timing/count fields
+  are allowlisted in receipts, but role, tool-call, logprob, and arbitrary
+  provider-specific deltas are not preserved.
 - Downstream SSE chunks only emit content deltas and Wardwright terminal events.
   They do not preserve upstream role, tool-call, logprob, or usage deltas.
 - Provider timeout is enforced by `ProviderRuntime`, but lower-level HTTP stream
@@ -138,8 +143,8 @@ Interface expectation:
 1. Add persisted scenario records and make projection simulations read from
    those records when present, falling back to built-in examples only for demo
    mode.
-2. Preserve upstream stream terminal metadata in receipts for OpenAI-compatible
-   and Ollama providers.
+2. Normalize provider metadata capabilities beyond terminal fields and publish
+   the supported metadata contract in provider capability records.
 3. Add a live-provider smoke test profile that is skipped by default but can run
    against local Ollama and one configured OpenAI-compatible target.
 4. Spike Hermes MCP over the protected authoring API without changing policy
