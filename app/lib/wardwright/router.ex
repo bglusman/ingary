@@ -309,6 +309,29 @@ defmodule Wardwright.Router do
     end
   end
 
+  post "/v1/policy-authoring/scenarios/:pattern_id/from-receipt/:receipt_id" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, body} <- require_json_object(conn.body_params),
+         {:ok, receipt} <- receipt_for_import(receipt_id),
+         {:ok, scenario} <-
+           Wardwright.PolicyScenarioStore.create_from_receipt(pattern_id, receipt, body) do
+      json(conn, 201, Map.new([{"scenario", Wardwright.PolicyScenario.to_map(scenario)}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, :receipt_not_found} ->
+        error(conn, 404, "receipt not found", "not_found", "receipt_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_scenario")
+    end
+  end
+
   post "/v1/policy-authoring/validate" do
     with :ok <- require_protected_access(conn),
          {:ok, artifact, source} <- validation_artifact(conn.body_params) do
@@ -373,6 +396,13 @@ defmodule Wardwright.Router do
       {:ok, scenario} when is_map(scenario) -> {:ok, scenario}
       {:ok, _scenario} -> {:error, "scenario must be a JSON object"}
       :error -> {:ok, body}
+    end
+  end
+
+  defp receipt_for_import(receipt_id) do
+    case Wardwright.ReceiptStore.get(receipt_id) do
+      nil -> {:error, :receipt_not_found}
+      receipt -> {:ok, receipt}
     end
   end
 

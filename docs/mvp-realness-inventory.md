@@ -44,14 +44,15 @@ a clear error that names the missing capability.
   not only projection fixtures.
 - The policy-authoring API has protected HTTP endpoints for tool discovery,
   projections, simulations, validation, and persisted authoring scenarios.
-  Scenario writes are minimal and in-memory, but they are real records consumed
-  by simulations instead of hard-coded UI-only state.
+  Scenario writes are minimal but real records consumed by simulations instead
+  of hard-coded UI-only state. The store is memory-backed by default and can be
+  configured to persist records to a local JSON file.
 
 ## Still Prototype Or Fixture Backed
 
 - Projection simulations prefer persisted scenario records when present, then
-  fall back to explicit fixture examples. Persisted records are in-memory only
-  and do not yet replay live receipts or execute generated inputs.
+  fall back to explicit fixture examples. Persisted records can be imported from
+  receipts, but do not yet replay receipt inputs or execute generated inputs.
 - The state-machine model is still embedded in projection code. It should move
   toward artifact-declared states/transitions or a compiler pass that emits a
   state projection from policy primitives and sandbox regions.
@@ -62,7 +63,7 @@ a clear error that names the missing capability.
   can wrap the same functions, but no MCP server is implemented yet.
 - The policy workbench is mostly static projection plus live runtime/cache
   events. It can consume persisted scenario records, but does not yet execute
-  user-authored scenarios, turn receipts into scenarios, or show artifact diffs.
+  user-authored scenarios or show artifact diffs.
 - Canned providers remain first-class in tests and local configs. That is useful
   for deterministic coverage, but remote MVP needs a clear way to distinguish
   demo targets from production targets in UI and API responses.
@@ -103,8 +104,8 @@ Interface expectation:
 
 - Scenario records have a first minimal store: user-written, assistant-generated,
   fixture, and live-replay scenarios can be represented with source and pinned
-  status. The store is still memory-only and lacks retention, import, or durable
-  regression export.
+  status. The store supports optional JSON-file durability and receipt import,
+  but still lacks retention policy and durable regression export.
 - Simulation should execute against compiled policy logic and selected scenario
   inputs instead of only returning canned projection examples.
 - Property/regression export should be wired from pinned scenarios so users can
@@ -142,11 +143,10 @@ Interface expectation:
 
 ## Suggested Next Slices
 
-1. Add durable scenario storage and a receipt-to-scenario importer so production
-   surprises can become pinned simulations and regression fixtures.
-2. Normalize provider metadata capabilities beyond terminal fields and publish
+1. Normalize provider metadata capabilities beyond terminal fields and publish
    the supported metadata contract in provider capability records.
-3. Add a live-provider smoke test profile that is skipped by default but can run
+2. Add a live-provider smoke test profile that is skipped by default but can run
    against local Ollama and one configured OpenAI-compatible target.
-4. Spike Hermes MCP over the protected authoring API without changing policy
+3. Spike Hermes MCP over the protected authoring API without changing policy
    engine internals.
+4. Add retention and regression-export paths for pinned scenario records.

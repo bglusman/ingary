@@ -57,6 +57,51 @@ defmodule Wardwright.StorageAndAdminTest do
     assert body["write_health"] == "ok"
   end
 
+  test "policy scenario store can persist reviewed scenarios to a file" do
+    path =
+      Path.join(System.tmp_dir!(), "wardwright-policy-scenarios-#{System.unique_integer()}.json")
+
+    on_exit(fn ->
+      Wardwright.PolicyScenarioStore.configure_storage(nil)
+      File.rm(path)
+      File.rm("#{path}.tmp")
+    end)
+
+    assert {:ok, _state} = Wardwright.PolicyScenarioStore.configure_storage(path)
+
+    assert {:ok, _scenario} =
+             Wardwright.PolicyScenarioStore.create("tts-retry", %{
+               "scenario_id" => "durable-reviewed-trigger",
+               "title" => "Durable reviewed trigger",
+               "source" => "assistant",
+               "pinned" => true,
+               "input_summary" => "A persisted scenario survives store reload.",
+               "expected_behavior" => "The retry guard remains linked to the guarding state.",
+               "verdict" => "passed",
+               "trace" => [
+                 %{
+                   "id" => "durable-1",
+                   "node_id" => "tts.no-old-client",
+                   "label" => "persisted match",
+                   "severity" => "pass",
+                   "state_id" => "guarding"
+                 }
+               ]
+             })
+
+    assert File.exists?(path)
+
+    assert {:ok, _state} = Wardwright.PolicyScenarioStore.configure_storage(nil)
+    assert Wardwright.PolicyScenarioStore.list("tts-retry") == []
+
+    assert {:ok, _state} = Wardwright.PolicyScenarioStore.configure_storage(path)
+
+    assert [%{id: "durable-reviewed-trigger", source: "assistant"}] =
+             Wardwright.PolicyScenarioStore.list("tts-retry")
+
+    assert Wardwright.PolicyScenarioStore.health()["capabilities"]["durable"] == true
+  end
+
   test "protected prototype endpoints reject non-local callers without an admin token" do
     remote_ip = {203, 0, 113, 10}
 

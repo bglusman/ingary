@@ -22,6 +22,12 @@ defmodule WardwrightWeb.PolicyAuthoringTools do
         "Persist a user, assistant, fixture, or live-replay scenario so simulations can use reviewed scenario records instead of demo fixtures."
       ),
       tool(
+        "import_receipt_scenario",
+        "POST",
+        "/v1/policy-authoring/scenarios/{pattern_id}/from-receipt/{receipt_id}",
+        "Import an existing receipt as a pinned live-replay scenario for later simulation evidence and regression export."
+      ),
+      tool(
         "propose_rule_change",
         "not_implemented",
         nil,

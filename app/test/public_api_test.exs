@@ -64,6 +64,7 @@ defmodule Wardwright.PublicApiTest do
     assert "explain_projection" in tool_names
     assert "simulate_policy" in tool_names
     assert "record_scenario" in tool_names
+    assert "import_receipt_scenario" in tool_names
     assert "propose_rule_change" in tool_names
     assert "validate_policy_artifact" in tool_names
 
@@ -170,6 +171,72 @@ defmodule Wardwright.PublicApiTest do
 
     missing = call(:post, "/v1/policy-authoring/scenarios/not-real", %{"scenario" => scenario})
     assert missing.status == 404
+  end
+
+  test "protected policy authoring API imports receipts as live replay scenarios" do
+    receipt = %{
+      "receipt_id" => "receipt_import_1",
+      "created_at" => 1_800_000_123,
+      "synthetic_model" => "unit-model",
+      "synthetic_version" => "2026-05-13.mock",
+      "final" => %{
+        "status" => "completed",
+        "stream_policy" => %{
+          "status" => "completed",
+          "retry_count" => 1,
+          "released_to_consumer" => true,
+          "events" => [
+            %{
+              "type" => "stream_policy.triggered",
+              "rule_id" => "tts.no-old-client",
+              "action" => "retry_with_reminder"
+            },
+            %{
+              "type" => "attempt.retry_requested",
+              "rule_id" => "tts.retry-arbiter",
+              "retry_count" => 1
+            }
+          ]
+        }
+      }
+    }
+
+    Wardwright.ReceiptStore.insert(receipt)
+
+    rejected =
+      call(
+        :post,
+        "/v1/policy-authoring/scenarios/tts-retry/from-receipt/receipt_import_1",
+        %{},
+        [],
+        {203, 0, 113, 10}
+      )
+
+    assert rejected.status == 403
+
+    imported =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/from-receipt/receipt_import_1", %{
+        "source" => "assistant",
+        "title" => "Imported retry receipt"
+      })
+
+    assert imported.status == 201
+
+    scenario = Jason.decode!(imported.resp_body)["scenario"]
+    assert scenario["scenario_id"] == "receipt-receipt_import_1"
+    assert scenario["source"] == "live_replay"
+    assert scenario["pinned"] == true
+    assert get_in(scenario, ["receipt_preview", "receipt_id"]) == "receipt_import_1"
+
+    assert Enum.map(scenario["trace"], & &1["state_id"]) == [
+             "guarding",
+             "retrying"
+           ]
+
+    missing_receipt =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/from-receipt/not-real", %{})
+
+    assert missing_receipt.status == 404
   end
 
   test "protected policy validation reports errors and explicit review gaps" do
