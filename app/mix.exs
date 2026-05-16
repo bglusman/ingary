@@ -4,15 +4,14 @@ defmodule Wardwright.MixProject do
   def project do
     [
       app: :wardwright,
-      version: "0.0.1",
+      version: "0.0.2",
       elixir: "~> 1.17",
       compilers: [:gleam] ++ Mix.compilers(),
       aliases: ["deps.get": ["deps.get", "gleam.deps.get"]],
       erlc_paths: [
-        "build/#{gleam_build_env()}/erlang/wardwright/_gleam_artefacts",
-        "build/#{gleam_build_env()}/erlang/wardwright/build"
+        "_build/#{Mix.env()}/lib/wardwright/_gleam_artefacts"
       ],
-      erlc_include_path: "build/#{gleam_build_env()}/erlang/wardwright/include",
+      erlc_include_path: "_build/#{Mix.env()}/lib/wardwright/include",
       prune_code_paths: false,
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -82,9 +81,5 @@ defmodule Wardwright.MixProject do
         ]
       ]
     ]
-  end
-
-  defp gleam_build_env do
-    if Mix.env() == :prod, do: "prod", else: "dev"
   end
 end

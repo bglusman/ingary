@@ -60,6 +60,11 @@ fi
 cd app && PATH="$ZIG15_PREFIX/bin:$PATH" mix release --overwrite
 """
 
+[tasks."package:smoke:darwin-arm64"]
+description = "Build and smoke test the local Apple Silicon Burrito binary"
+depends = ["package:build:darwin-arm64"]
+run = "scripts/smoke-burrito-binary.sh app/burrito_out/wardwright_darwin_arm64"
+
 [tasks."config:app:local"]
 description = "Load ignored local provider targets into the app"
 run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.wardwright.local/provider-targets.json"

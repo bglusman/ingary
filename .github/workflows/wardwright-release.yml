@@ -74,6 +74,11 @@ jobs:
             mix tinfoil.build --target "$target"
           done
 
+      - name: Smoke packaged binary
+        if: ${{ matrix.id != 'linux_arm64' }}
+        run: |
+          scripts/smoke-burrito-binary.sh app/burrito_out/wardwright_${{ matrix.id }}
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
