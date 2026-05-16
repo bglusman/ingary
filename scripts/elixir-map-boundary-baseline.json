@@ -56,15 +56,6 @@
         "get_in_string_path": 0
       }
     },
-    "app/lib/wardwright/policy/core_runtime.ex": {
-      "total": 0,
-      "patterns": {
-        "string_key_entry": 0,
-        "string_key_access": 0,
-        "map_call_string_key": 0,
-        "get_in_string_path": 0
-      }
-    },
     "app/lib/wardwright/policy/engine.ex": {
       "total": 50,
       "patterns": {
@@ -156,20 +147,29 @@
       }
     },
     "app/lib/wardwright/policy_projection.ex": {
-      "total": 289,
+      "total": 265,
       "patterns": {
-        "string_key_entry": 214,
+        "string_key_entry": 190,
         "string_key_access": 38,
         "map_call_string_key": 37,
         "get_in_string_path": 0
       }
     },
-    "app/lib/wardwright/provider_runtime.ex": {
-      "total": 23,
+    "app/lib/wardwright/policy_projection/contract.ex": {
+      "total": 0,
       "patterns": {
-        "string_key_entry": 18,
+        "string_key_entry": 0,
         "string_key_access": 0,
-        "map_call_string_key": 5,
+        "map_call_string_key": 0,
+        "get_in_string_path": 0
+      }
+    },
+    "app/lib/wardwright/provider_runtime.ex": {
+      "total": 6,
+      "patterns": {
+        "string_key_entry": 3,
+        "string_key_access": 0,
+        "map_call_string_key": 3,
         "get_in_string_path": 0
       }
     },
@@ -183,11 +183,11 @@
       }
     },
     "app/lib/wardwright/route_planner.ex": {
-      "total": 89,
+      "total": 81,
       "patterns": {
-        "string_key_entry": 16,
-        "string_key_access": 32,
-        "map_call_string_key": 41,
+        "string_key_entry": 21,
+        "string_key_access": 25,
+        "map_call_string_key": 35,
         "get_in_string_path": 0
       }
     },

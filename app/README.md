@@ -104,9 +104,6 @@ alert enqueue/backpressure classification, normalized action/result metadata,
 and route-planner strategy/reason classification. Keep process ownership,
 open config-map parsing, provider boundaries, and side-effecting delivery in
 Elixir unless a later spike proves a better split.
-Set `WARDWRIGHT_POLICY_CORE=elixir`, `gleam`, or `compare` to select the runtime
-decision implementation; `compare` executes both implementations and raises on
-semantic drift.
 
 The old Go and Rust backend prototypes remain in git history as bakeoff
 evidence, but they are no longer part of the live tree.

@@ -1,8 +1,6 @@
 defmodule Wardwright.GleamPolicyCoreTest do
   use ExUnit.Case, async: true
 
-  alias Wardwright.Policy.CoreRuntime
-
   test "structured core classifies successful guard-loop outcomes" do
     assert Wardwright.Policy.StructuredCore.success_status(0) == "completed"
     assert Wardwright.Policy.StructuredCore.success_status(2) == "completed_after_guard"
@@ -190,196 +188,52 @@ defmodule Wardwright.GleamPolicyCoreTest do
              })
   end
 
-  test "Elixir and Gleam policy cores remain equivalent for representative decisions" do
-    assert in_core(:compare, fn ->
-             [
-               Wardwright.Policy.StructuredCore.success_status(1),
-               Wardwright.Policy.StructuredCore.loop_outcome_status(
-                 "structured-json",
-                 1,
-                 3,
-                 1,
-                 2
-               ),
-               Wardwright.Policy.HistoryCore.count_decision([true, false, true],
-                 threshold: 2,
-                 recent_limit: 3,
-                 working_set_size: 3,
-                 scope: "session_id"
-               ),
-               Wardwright.Policy.AlertCore.decide_enqueue(
-                 %{"capacity" => 1, "on_full" => "fail_closed"},
-                 1,
-                 false,
-                 %{"idempotency_key" => "key-1", "rule_id" => "alert-rule"}
-               ),
-               Wardwright.Policy.Action.normalize(%{
-                 "rule_id" => "block-private",
-                 "kind" => "request_guard",
-                 "action" => "block",
-                 "message" => "private data blocked"
-               }),
-               Wardwright.Policy.Action.normalize_result(%{
-                 "engine" => "primitive",
-                 "status" => "ok",
-                 "actions" => [
-                   %{"rule_id" => "local-only", "action" => "restrict_routes"},
-                   %{"rule_id" => "strong-model", "action" => "switch_model"}
-                 ]
-               }),
-               Wardwright.RoutePlanner.select(
-                 %{
-                   "synthetic_model" => "unit-model",
-                   "version" => "unit-version",
-                   "targets" => [
-                     %{"model" => "cheap/model", "context_window" => 128},
-                     %{"model" => "strong/model", "context_window" => 128}
-                   ],
-                   "alloys" => [
-                     %{
-                       "id" => "blend",
-                       "strategy" => "all",
-                       "constituents" => ["cheap/model", "strong/model"]
-                     }
-                   ]
-                 },
-                 64
-               ),
-               Wardwright.RoutePlanner.select(
-                 %{
-                   "synthetic_model" => "unit-model",
-                   "version" => "unit-version",
-                   "targets" => [
-                     %{"model" => "small/model", "context_window" => 16},
-                     %{"model" => "medium/model", "context_window" => 64},
-                     %{"model" => "large/model", "context_window" => 256}
-                   ],
-                   "route_root" => "fit-dispatcher",
-                   "dispatchers" => [
-                     %{
-                       "id" => "fit-dispatcher",
-                       "models" => ["small/model", "medium/model", "large/model"]
-                     }
-                   ]
-                 },
-                 32
-               ),
-               Wardwright.RoutePlanner.select(
-                 %{
-                   "synthetic_model" => "unit-model",
-                   "version" => "unit-version",
-                   "targets" => [
-                     %{"model" => "fast/model", "context_window" => 16},
-                     %{"model" => "steady/model", "context_window" => 128},
-                     %{"model" => "reserve/model", "context_window" => 256}
-                   ],
-                   "route_root" => "local-then-reserve",
-                   "cascades" => [
-                     %{
-                       "id" => "local-then-reserve",
-                       "models" => ["fast/model", "steady/model", "reserve/model"]
-                     }
-                   ]
-                 },
-                 96
-               )
-             ]
-           end) ==
-             in_core(:elixir, fn ->
-               [
-                 Wardwright.Policy.StructuredCore.success_status(1),
-                 Wardwright.Policy.StructuredCore.loop_outcome_status(
-                   "structured-json",
-                   1,
-                   3,
-                   1,
-                   2
-                 ),
-                 Wardwright.Policy.HistoryCore.count_decision([true, false, true],
-                   threshold: 2,
-                   recent_limit: 3,
-                   working_set_size: 3,
-                   scope: "session_id"
-                 ),
-                 Wardwright.Policy.AlertCore.decide_enqueue(
-                   %{"capacity" => 1, "on_full" => "fail_closed"},
-                   1,
-                   false,
-                   %{"idempotency_key" => "key-1", "rule_id" => "alert-rule"}
-                 ),
-                 Wardwright.Policy.Action.normalize(%{
-                   "rule_id" => "block-private",
-                   "kind" => "request_guard",
-                   "action" => "block",
-                   "message" => "private data blocked"
-                 }),
-                 Wardwright.Policy.Action.normalize_result(%{
-                   "engine" => "primitive",
-                   "status" => "ok",
-                   "actions" => [
-                     %{"rule_id" => "local-only", "action" => "restrict_routes"},
-                     %{"rule_id" => "strong-model", "action" => "switch_model"}
-                   ]
-                 }),
-                 Wardwright.RoutePlanner.select(
-                   %{
-                     "synthetic_model" => "unit-model",
-                     "version" => "unit-version",
-                     "targets" => [
-                       %{"model" => "cheap/model", "context_window" => 128},
-                       %{"model" => "strong/model", "context_window" => 128}
-                     ],
-                     "alloys" => [
-                       %{
-                         "id" => "blend",
-                         "strategy" => "all",
-                         "constituents" => ["cheap/model", "strong/model"]
-                       }
-                     ]
-                   },
-                   64
-                 ),
-                 Wardwright.RoutePlanner.select(
-                   %{
-                     "synthetic_model" => "unit-model",
-                     "version" => "unit-version",
-                     "targets" => [
-                       %{"model" => "small/model", "context_window" => 16},
-                       %{"model" => "medium/model", "context_window" => 64},
-                       %{"model" => "large/model", "context_window" => 256}
-                     ],
-                     "route_root" => "fit-dispatcher",
-                     "dispatchers" => [
-                       %{
-                         "id" => "fit-dispatcher",
-                         "models" => ["small/model", "medium/model", "large/model"]
-                       }
-                     ]
-                   },
-                   32
-                 ),
-                 Wardwright.RoutePlanner.select(
-                   %{
-                     "synthetic_model" => "unit-model",
-                     "version" => "unit-version",
-                     "targets" => [
-                       %{"model" => "fast/model", "context_window" => 16},
-                       %{"model" => "steady/model", "context_window" => 128},
-                       %{"model" => "reserve/model", "context_window" => 256}
-                     ],
-                     "route_root" => "local-then-reserve",
-                     "cascades" => [
-                       %{
-                         "id" => "local-then-reserve",
-                         "models" => ["fast/model", "steady/model", "reserve/model"]
-                       }
-                     ]
-                   },
-                   96
-                 )
-               ]
-             end)
-  end
+  test "Gleam policy cores produce representative route and policy decisions" do
+    assert Wardwright.Policy.StructuredCore.success_status(1) == "completed_after_guard"
 
-  defp in_core(core, fun), do: CoreRuntime.with_core(core, fun)
+    assert {:triggered, "session_id", 2, 2, 3, 3} =
+             Wardwright.Policy.HistoryCore.count_decision([true, false, true],
+               threshold: 2,
+               recent_limit: 3,
+               working_set_size: 3,
+               scope: "session_id"
+             )
+
+    assert %{outcome: "failed_closed"} =
+             Wardwright.Policy.AlertCore.decide_enqueue(
+               %{"capacity" => 1, "on_full" => "fail_closed"},
+               1,
+               false,
+               %{"idempotency_key" => "key-1", "rule_id" => "alert-rule"}
+             )
+
+    assert %{"action" => "block", "effect_type" => "terminal"} =
+             Wardwright.Policy.Action.normalize(%{
+               "rule_id" => "block-private",
+               "kind" => "request_guard",
+               "action" => "block",
+               "message" => "private data blocked"
+             })
+
+    assert %{route_type: "dispatcher", selected_model: "medium/model"} =
+             Wardwright.RoutePlanner.select(
+               %{
+                 "synthetic_model" => "unit-model",
+                 "version" => "unit-version",
+                 "targets" => [
+                   %{"model" => "small/model", "context_window" => 16},
+                   %{"model" => "medium/model", "context_window" => 64},
+                   %{"model" => "large/model", "context_window" => 256}
+                 ],
+                 "route_root" => "fit-dispatcher",
+                 "dispatchers" => [
+                   %{
+                     "id" => "fit-dispatcher",
+                     "models" => ["small/model", "medium/model", "large/model"]
+                   }
+                 ]
+               },
+               32
+             )
+  end
 end
