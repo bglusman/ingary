@@ -57,6 +57,7 @@ defmodule Wardwright do
     :persistent_term.put({__MODULE__, :config}, default_config())
     Wardwright.PolicyCache.configure(default_config()["policy_cache"])
     Wardwright.Policy.AlertDelivery.configure(default_config()["alert_delivery"])
+    Wardwright.ProviderRuntime.reset()
   end
 
   def put_config(config) when is_map(config) do
