@@ -181,7 +181,7 @@ predicates for:
   implementation accepts this directly or as `then.tool` when the sequence also
   names an action.
 - `within`: the maximum turn count, event count, or wall-clock age where the
-  prior fact still matters.
+  prior fact still matters. Wall-clock age accepts `ms` or `milliseconds`.
 - `until`: the state transition or later tool event that clears the condition.
 - `cache_scope`: the caller/session/run boundary for the sequence.
 - `then`: the ordinary policy action emitted when the later tool facet appears.
