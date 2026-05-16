@@ -163,6 +163,54 @@ session-scoped `tool_call` policy-cache event kind. Cross-session and
 tenant-level tool memory should wait for explicit durable storage, privacy, and
 retention rules.
 
+## Sequence Policy Target
+
+The current implementation records normalized tool facts and can count repeated
+equivalent tool facts. That is enough for loop thresholds, but not enough to
+claim full cross-tool sequence enforcement.
+
+Cross-tool sequence enforcement means policy over ordered relationships between
+different tool facts, state transitions, and time or turn windows. For example,
+"after a browser result from untrusted content, block shell or filesystem writes
+until a review step succeeds" is a sequence rule. It requires explicit
+predicates for:
+
+- `after`: the prior tool event, state, or receipt fact that starts the
+  condition.
+- `within`: the maximum turn count, event count, or wall-clock age where the
+  prior fact still matters.
+- `until`: the state transition or later tool event that clears the condition.
+- `scope`: the caller/session/run boundary for the sequence.
+- `then`: the ordinary policy action emitted when the later tool facet appears.
+
+Target shape:
+
+```yaml
+governance:
+  - id: untrusted-browser-before-shell
+    kind: tool_sequence
+    after:
+      tool:
+        namespace: browser
+        phase: result_interpretation
+    within:
+      turns: 3
+    until:
+      state: reviewed_untrusted_tool_result
+    then:
+      action: block
+      tool:
+        namespace: shell
+        risk_class: irreversible
+        phase: planning
+```
+
+The target may compile to explicit state-machine transitions plus scoped
+history predicates rather than remain a standalone runtime primitive. Either
+way, the UI should present the ordered event path, the active window, and the
+reset condition so the author can understand why the later tool was allowed or
+blocked.
+
 ## Receipts And Search
 
 Receipts include normalized tool context on the request and decision, selector

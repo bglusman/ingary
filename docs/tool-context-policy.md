@@ -61,10 +61,65 @@ Tool-aware governance currently has two built-in rule shapes:
 - `tool_loop_threshold` counts repeated normalized tool facts in bounded policy
   history and emits ordinary policy actions when the threshold fires.
 
+Those rule shapes cover current-event matching and repeated-tool counting. They
+do not yet express ordered relationships between different tool events, such as
+"a browser result happened, then a shell write was requested before review." That
+cross-tool sequence capability should be built on the same normalized event
+history, but it needs explicit state/window predicates so authors can see why a
+later tool was blocked.
+
 Receipts expose normalized `request.tool_context`, `decision.tool_context`,
 `decision.tool_policy_selectors`, and `final.tool_policy` when relevant. Receipt
 summaries can filter by tool namespace, name, phase, risk class, source, call
 ID, and tool-policy status.
+
+## Sequence Policy Target
+
+Searchable history is the foundation for sequence control, but not the complete
+policy model. Sequence-aware policy should make ordering, scope, windows, and
+reset conditions first-class:
+
+- `after`: a prior event or state that must have occurred.
+- `within`: the turn, event-count, or wall-clock window where the prior event is
+  still relevant.
+- `until`: the state transition or tool event that clears the condition.
+- `scope`: the caller/session/run boundary that owns the sequence.
+- `then`: the ordinary policy action applied when the later tool facet appears.
+
+Example target shape:
+
+```yaml
+state_machine:
+  initial_state: active
+  states:
+    - id: active
+    - id: reviewing_untrusted_tool_result
+
+governance:
+  - id: enter-untrusted-review
+    kind: tool_sequence
+    after:
+      tool:
+        namespace: browser
+        phase: result_interpretation
+    within:
+      turns: 1
+    transition_to: reviewing_untrusted_tool_result
+
+  - id: block-shell-while-reviewing
+    kind: tool_selector
+    state_scope: reviewing_untrusted_tool_result
+    action: block
+    tool:
+      namespace: shell
+      risk_class: irreversible
+      phase: planning
+```
+
+The current runtime records normalized tool events and supports bounded counts.
+It should not yet be treated as a complete sequence engine because it does not
+match arbitrary `A then B` patterns, reset hazard windows, or enforce
+`state_scope`.
 
 ## Problems To Validate
 
