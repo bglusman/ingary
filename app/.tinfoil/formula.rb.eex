@@ -47,12 +47,14 @@ class Wardwright < Formula
   end
 
   service do
+    secret_key_base = etc/"wardwright/secret_key_base"
+
     run [opt_bin/"wardwright"]
     keep_alive true
     working_dir var/"lib/wardwright"
     environment_variables(
       WARDWRIGHT_BIND: "127.0.0.1:8787",
-      WARDWRIGHT_SECRET_KEY_BASE: (etc/"wardwright/secret_key_base").read.strip,
+      WARDWRIGHT_SECRET_KEY_BASE: secret_key_base.exist? ? secret_key_base.read.strip : "",
       PATH: "#{opt_bin}:#{HOMEBREW_PREFIX}/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     )
     log_path var/"log/wardwright/wardwright.log"
