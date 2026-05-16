@@ -48,7 +48,9 @@ a clear error that names the missing capability.
   are normalized into receipt decision evidence and receipt-list filters. The
   workbench now has an explicit tool-governance projection for planning,
   result-interpretation, loop-governance, and receipt phases. These projections
-  still do not enforce tool selector/loop policies.
+  still do not enforce tool selector policies, but normalized request tool
+  context now records session-scoped `tool_call` cache events that existing
+  history-threshold policies can count.
 - Live provider smoke tests have an explicit non-CI profile. `mise run
   test:live-providers` fails clearly unless at least one live target is
   configured, then verifies streaming, receipt metadata, and non-mock provider
@@ -87,8 +89,8 @@ a clear error that names the missing capability.
   validation tools. Write tools are still HTTP-only until the MCP auth/review
   boundary is explicit.
 - Tool-context normalization is receipt/projection-only. It intentionally stops
-  short of selector enforcement, tool-scoped policy bundles, or cross-session
-  tool counters until the tool-policy contract settles.
+  short of selector enforcement, tool-scoped policy bundles, or trusted
+  cross-session tool counters until the tool-policy contract settles.
 - The policy workbench is mostly static projection plus live runtime/cache
   events. It can consume persisted scenario records, but does not yet execute
   user-authored scenarios or show artifact diffs.

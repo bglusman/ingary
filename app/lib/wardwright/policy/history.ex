@@ -3,6 +3,16 @@ defmodule Wardwright.Policy.History do
 
   alias Wardwright.Policy.Regex, as: PolicyRegex
 
+  @kind_key "kind"
+  @key_key "key"
+  @scope_key "scope"
+  @value_key "value"
+  @created_at_key "created_at_unix_ms"
+  @phase_key "phase"
+  @primary_tool_key "primary_tool"
+  @tool_call_id_key "tool_call_id"
+  @tool_call_kind "tool_call"
+
   def record_request(caller, request) do
     add_text_event(
       "request_text",
@@ -10,6 +20,8 @@ defmodule Wardwright.Policy.History do
       caller,
       request_text(Map.get(request, "messages", []))
     )
+
+    record_tool_context(caller, Wardwright.ToolContext.normalize(request))
   end
 
   def record_response(caller, content) when is_binary(content) and content != "" do
@@ -59,6 +71,37 @@ defmodule Wardwright.Policy.History do
       {:ok, _event} -> :ok
       {:error, _message} -> :ok
     end
+  end
+
+  defp record_tool_context(_caller, nil), do: :ok
+
+  defp record_tool_context(caller, tool_context) do
+    case Wardwright.ToolContext.cache_key(tool_context) do
+      nil ->
+        :ok
+
+      cache_key ->
+        case Wardwright.PolicyCache.add(%{
+               @kind_key => @tool_call_kind,
+               @key_key => cache_key,
+               @scope_key => caller_scope(caller),
+               @value_key => tool_cache_value(tool_context),
+               @created_at_key => System.system_time(:millisecond)
+             }) do
+          {:ok, _event} -> :ok
+          {:error, _message} -> :ok
+        end
+    end
+  end
+
+  defp tool_cache_value(tool_context) do
+    %{
+      @phase_key => Map.get(tool_context, @phase_key),
+      @primary_tool_key => Map.get(tool_context, @primary_tool_key),
+      @tool_call_id_key => Map.get(tool_context, @tool_call_id_key)
+    }
+    |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+    |> Map.new()
   end
 
   defp caller_scope(caller) do
