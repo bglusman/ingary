@@ -244,6 +244,44 @@ defmodule Wardwright.GleamPolicyCoreTest do
                    ]
                  },
                  64
+               ),
+               Wardwright.RoutePlanner.select(
+                 %{
+                   "synthetic_model" => "unit-model",
+                   "version" => "unit-version",
+                   "targets" => [
+                     %{"model" => "small/model", "context_window" => 16},
+                     %{"model" => "medium/model", "context_window" => 64},
+                     %{"model" => "large/model", "context_window" => 256}
+                   ],
+                   "route_root" => "fit-dispatcher",
+                   "dispatchers" => [
+                     %{
+                       "id" => "fit-dispatcher",
+                       "models" => ["small/model", "medium/model", "large/model"]
+                     }
+                   ]
+                 },
+                 32
+               ),
+               Wardwright.RoutePlanner.select(
+                 %{
+                   "synthetic_model" => "unit-model",
+                   "version" => "unit-version",
+                   "targets" => [
+                     %{"model" => "fast/model", "context_window" => 16},
+                     %{"model" => "steady/model", "context_window" => 128},
+                     %{"model" => "reserve/model", "context_window" => 256}
+                   ],
+                   "route_root" => "local-then-reserve",
+                   "cascades" => [
+                     %{
+                       "id" => "local-then-reserve",
+                       "models" => ["fast/model", "steady/model", "reserve/model"]
+                     }
+                   ]
+                 },
+                 96
                )
              ]
            end) ==
@@ -300,6 +338,44 @@ defmodule Wardwright.GleamPolicyCoreTest do
                      ]
                    },
                    64
+                 ),
+                 Wardwright.RoutePlanner.select(
+                   %{
+                     "synthetic_model" => "unit-model",
+                     "version" => "unit-version",
+                     "targets" => [
+                       %{"model" => "small/model", "context_window" => 16},
+                       %{"model" => "medium/model", "context_window" => 64},
+                       %{"model" => "large/model", "context_window" => 256}
+                     ],
+                     "route_root" => "fit-dispatcher",
+                     "dispatchers" => [
+                       %{
+                         "id" => "fit-dispatcher",
+                         "models" => ["small/model", "medium/model", "large/model"]
+                       }
+                     ]
+                   },
+                   32
+                 ),
+                 Wardwright.RoutePlanner.select(
+                   %{
+                     "synthetic_model" => "unit-model",
+                     "version" => "unit-version",
+                     "targets" => [
+                       %{"model" => "fast/model", "context_window" => 16},
+                       %{"model" => "steady/model", "context_window" => 128},
+                       %{"model" => "reserve/model", "context_window" => 256}
+                     ],
+                     "route_root" => "local-then-reserve",
+                     "cascades" => [
+                       %{
+                         "id" => "local-then-reserve",
+                         "models" => ["fast/model", "steady/model", "reserve/model"]
+                       }
+                     ]
+                   },
+                   96
                  )
                ]
              end)

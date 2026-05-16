@@ -96,6 +96,32 @@ defmodule Wardwright.RoutePlanner do
   end
 
   defp select_dispatcher(dispatcher, targets, estimated) do
+    CoreRuntime.dispatch(
+      :route_select_dispatcher,
+      fn ->
+        models =
+          dispatcher
+          |> models_for(targets, "models")
+          |> Enum.sort_by(fn model ->
+            {Map.fetch!(model, "context_window"), Map.fetch!(model, "model")}
+          end)
+          |> Enum.map(&target_for_core/1)
+
+        all_targets = all_targets_for_core(targets)
+
+        :wardwright@route_core.select_dispatcher(models, all_targets, estimated)
+        |> route_selection_decision(%{
+          route_type: "dispatcher",
+          route_id: Map.fetch!(dispatcher, "id"),
+          combine_strategy: "smallest_context_window",
+          rule: "select the smallest configured context window that fits the estimated prompt"
+        })
+      end,
+      fn -> select_dispatcher_elixir(dispatcher, targets, estimated) end
+    )
+  end
+
+  defp select_dispatcher_elixir(dispatcher, targets, estimated) do
     {eligible, skipped} =
       dispatcher
       |> models_for(targets, "models")
@@ -182,6 +208,25 @@ defmodule Wardwright.RoutePlanner do
   defp forced_failure_skips(_model, forced, estimated), do: [context_skip(forced, estimated)]
 
   defp select_cascade(cascade, targets, estimated) do
+    CoreRuntime.dispatch(
+      :route_select_cascade,
+      fn ->
+        models = cascade |> models_for(targets, "models") |> Enum.map(&target_for_core/1)
+        all_targets = all_targets_for_core(targets)
+
+        :wardwright@route_core.select_cascade(models, all_targets, estimated)
+        |> route_selection_decision(%{
+          route_type: "cascade",
+          route_id: Map.fetch!(cascade, "id"),
+          combine_strategy: "ordered_fallback",
+          rule: "try configured models in order, skipping models whose context window cannot fit"
+        })
+      end,
+      fn -> select_cascade_elixir(cascade, targets, estimated) end
+    )
+  end
+
+  defp select_cascade_elixir(cascade, targets, estimated) do
     {eligible, skipped} =
       cascade
       |> models_for(targets, "models")
@@ -200,6 +245,26 @@ defmodule Wardwright.RoutePlanner do
       reason: cascade_reason(skipped, selected),
       rule: "try configured models in order, skipping models whose context window cannot fit"
     })
+  end
+
+  defp route_selection_decision(
+         {:route_selection, selected_model, selected_context_window, selected_models,
+          fallback_models, skipped, route_blocked?, reason},
+         attrs
+       ) do
+    attrs
+    |> Map.put(:selected_model, selected_model)
+    |> Map.put(
+      :selected_context_window,
+      if(route_blocked?, do: nil, else: selected_context_window)
+    )
+    |> Map.put(:selected_provider, provider_from_model(selected_model))
+    |> Map.put(:selected_models, selected_models)
+    |> Map.put(:fallback_models, fallback_models)
+    |> Map.put(:skipped, Enum.map(skipped, &route_skip_from_core/1))
+    |> Map.put(:reason, reason)
+    |> Map.put_new(:fallback_used, false)
+    |> Map.put(:route_blocked, route_blocked?)
   end
 
   defp select_alloy(alloy, targets, estimated, attrs) do
@@ -323,6 +388,29 @@ defmodule Wardwright.RoutePlanner do
   end
 
   defp model_weight(model), do: integer_value(Map.get(model, "weight")) || 1
+
+  defp all_targets_for_core(targets) do
+    targets
+    |> Map.values()
+    |> Enum.sort_by(fn target ->
+      {Map.fetch!(target, "context_window"), Map.fetch!(target, "model")}
+    end)
+    |> Enum.map(&target_for_core/1)
+  end
+
+  defp target_for_core(model) do
+    {:target, Map.fetch!(model, "model"), Map.fetch!(model, "context_window"),
+     model_weight(model)}
+  end
+
+  defp route_skip_from_core({:context_too_small, target, context_window, estimated}) do
+    %{
+      "target" => target,
+      "reason" => "context_window_too_small",
+      "context_window" => context_window,
+      "estimated_prompt_tokens" => estimated
+    }
+  end
 
   defp split_by_context(models, estimated) do
     Enum.reduce(models, {[], []}, fn model, {eligible, skipped} ->
