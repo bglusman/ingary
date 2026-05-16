@@ -44,6 +44,9 @@ a clear error that names the missing capability.
   unsupported-options policy. Provider calls now fail loudly before contacting
   the upstream adapter when request fields such as OpenAI-compatible tool calls
   would otherwise be silently dropped.
+- Tool-context facts from OpenAI-compatible request fields and caller metadata
+  are normalized into receipt decision evidence. They do not yet drive policy
+  selection, routing, counters, or simulator projection nodes.
 - Live provider smoke tests have an explicit non-CI profile. `mise run
   test:live-providers` fails clearly unless at least one live target is
   configured, then verifies streaming, receipt metadata, and non-mock provider
@@ -81,6 +84,9 @@ a clear error that names the missing capability.
   server is mounted at `/mcp` for read-only projection, simulation, and artifact
   validation tools. Write tools are still HTTP-only until the MCP auth/review
   boundary is explicit.
+- Tool-context normalization is receipt-only. It intentionally stops short of
+  selector matching, tool-scoped policy bundles, or cross-session tool counters
+  until the tool-policy contract settles.
 - The policy workbench is mostly static projection plus live runtime/cache
   events. It can consume persisted scenario records, but does not yet execute
   user-authored scenarios or show artifact diffs.

@@ -308,6 +308,27 @@ defmodule Wardwright.StreamProviderTransportTest do
 
     assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == false
 
+    assert get_in(receipt, ["decision", "tool_context", "schema"]) ==
+             "wardwright.tool_context.v1"
+
+    assert get_in(receipt, ["decision", "tool_context", "phase"]) == "result_interpretation"
+    assert get_in(receipt, ["decision", "tool_context", "tool_call_id"]) == "call_1"
+    assert get_in(receipt, ["decision", "tool_context", "confidence"]) == "exact"
+
+    assert get_in(receipt, [
+             "decision",
+             "tool_context",
+             "primary_tool",
+             "name"
+           ]) == "create_pull_request"
+
+    assert get_in(receipt, [
+             "decision",
+             "tool_context",
+             "primary_tool",
+             "source"
+           ]) == "assistant_tool_call"
+
     assert get_in(receipt, ["attempts", Access.at(0), "provider_error"]) =~
              "does not support request fields"
   end

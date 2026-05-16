@@ -6,6 +6,7 @@ defmodule Wardwright.Router do
   @max_unpinned_key "max_unpinned"
   @regression_format_key "format"
   @json_format "json"
+  @tool_context_key "tool_context"
 
   plug(Plug.Logger)
 
@@ -797,6 +798,7 @@ defmodule Wardwright.Router do
         "reason" => decision.reason,
         "rule" => decision.rule,
         "governance" => Wardwright.current_config()["governance"],
+        @tool_context_key => Wardwright.ToolContext.normalize(request),
         "policy_actions" => policy["actions"],
         "policy_conflicts" => policy["conflicts"]
       },
