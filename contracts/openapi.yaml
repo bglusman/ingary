@@ -387,6 +387,9 @@ components:
           type: object
           additionalProperties: true
           description: Optional caller metadata. Header values win when trusted.
+          properties:
+            tool_context:
+              $ref: "#/components/schemas/ToolContext"
     ChatMessage:
       type: object
       required: [role]
@@ -405,6 +408,15 @@ components:
                 additionalProperties: true
         name:
           type: string
+        tool_call_id:
+          type: string
+          description: OpenAI-compatible ID linking a tool result message to an assistant tool call.
+        tool_calls:
+          type: array
+          description: OpenAI-compatible assistant-generated tool calls.
+          items:
+            type: object
+            additionalProperties: true
     ChatCompletionResponse:
       type: object
       required: [id, object, created, model, choices]
@@ -563,6 +575,58 @@ components:
       properties:
         receipt:
           $ref: "#/components/schemas/Receipt"
+    ToolContext:
+      type: object
+      description: Wardwright-normalized tool context for policy selection, simulation, and receipts.
+      required: [schema, phase]
+      additionalProperties: false
+      properties:
+        schema:
+          type: string
+          const: wardwright.tool_context.v1
+        phase:
+          type: string
+          enum: [planning, argument_repair, result_interpretation, loop_governance, unknown]
+        primary_tool:
+          $ref: "#/components/schemas/ToolIdentity"
+        tool_call_id:
+          type: string
+        available_tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolIdentity"
+        argument_hash:
+          type: string
+          description: Hash of normalized, redacted arguments when available.
+        result_hash:
+          type: string
+          description: Hash of normalized, redacted result content when available.
+        result_status:
+          type: string
+          enum: [success, error, timeout, rejected, unknown]
+        confidence:
+          type: string
+          enum: [exact, declared, inferred, ambiguous]
+    ToolIdentity:
+      type: object
+      required: [namespace, name]
+      additionalProperties: false
+      properties:
+        namespace:
+          type: string
+          description: Deployment-stable namespace, such as an MCP server or provider tool family.
+        name:
+          type: string
+        display_name:
+          type: string
+        source:
+          type: string
+          enum: [declared_tool, tool_choice, assistant_tool_call, tool_result, caller_metadata, inferred]
+        risk_class:
+          type: string
+          enum: [read_only, write, irreversible, external_side_effect, unknown]
+        schema_hash:
+          type: string
     CallerContext:
       type: object
       properties:

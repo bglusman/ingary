@@ -42,6 +42,7 @@ bounded release latency.
 | Policy graph and conflict workbench | Complex policies need visible ordering, parallel-safe groups, and conflict review. | Phase graph, rule cards, effect sets, arbitration badges, and conflict diagnostics. | UI can become too abstract unless grounded in examples and receipts. | Users can explain why a rule runs in parallel, ordered, or rejected before activation. |
 | Starlark AST and trace workbench | Code-first policy might be viable if behavior can be visualized through AST projection and simulation traces. | Small Starlark policy editor, parsed branch/call graph, source-span highlights, scenario trace overlay, and opaque-branch warnings. | Static AST can imply more understanding than exists; runtime traces must be authoritative. | Users can identify which code branch/action caused a scenario difference without reading the full policy. |
 | Structured-vs-code policy comparison | The primary authoring model is still an open product decision. | Build the same TTSR, cache-count, and model-switch policies in structured primitives and Starlark-first UIs against the same scenarios. | Parallel spikes can split focus unless they share scenarios and success criteria. | One approach clearly improves prediction, review, debugging, or trust for technical policy authors. |
+| Tool-context policy selectors | Tool intent may be a stronger policy axis than session for agentic work. | Normalize tool facts, attach policy bundles by tool namespace/name/risk/phase, and record selector evidence. | Tool identity and risk are provider-specific unless normalized carefully; raw tool payloads create privacy risk. | The same public model attaches different policies for write, read-only, repair, and result-interpretation tool contexts. |
 | Tool-loop detector | Retry loops are expensive and diagnosable from session facts. | Session rolling counter keyed by tool/args/result hashes. | Needs agent/tool metadata standardization. | Fewer repeated equivalent calls in generated traces. |
 | Async alert sinks | Makes policy value visible before full approval workflow exists. | Receipt event plus webhook/Telegram/Slack sink adapter. | Sink failure/backpressure semantics. | Policy trip reliably creates auditable delivery record. |
 | Approval gate | Valuable for irreversible operations, but not just a notification. | Pending request state, approve/edit/reject, timeout. | Requires durable state and client UX contract. | Resumable approval tests pass without duplicate side effects. |
@@ -62,7 +63,11 @@ The example policies should be intentionally boring before they are clever:
    released.
 4. **Repeated tool call**: count equivalent tool calls in a session and inject
    a reminder or alert after N repeats.
-5. **Budget step-up**: record when a route crosses from cheap/local to
+5. **Write-tool policy switch**: use the same public synthetic model for a
+   read-only browser tool and a write-capable GitHub or ticketing tool, but
+   prove the write tool attaches stricter argument validation and route
+   constraints.
+6. **Budget step-up**: record when a route crosses from cheap/local to
    expensive/managed and alert when a session crosses a configured spend window.
 
 Each example needs:
@@ -74,6 +79,10 @@ Each example needs:
 - a UI state that shows the trigger, action, latency, and release status
 - an assistant prompt fixture that can regenerate or explain the rule draft
 - a policy graph summary showing phase, effect set, and arbitration behavior
+
+The tool-context selector spike has a separate research note and contract:
+[Tool-Call-Aware Policy Spike](tool-call-policy-spike.html) and
+`contracts/tool-context-policy-contract.md`.
 
 ## What Not To Overbuild Yet
 

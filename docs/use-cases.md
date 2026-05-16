@@ -79,6 +79,8 @@ change, often consuming budget while appearing active.
 Wardwright policy:
 
 - track repeated calls, retries, or similar prompt fragments by session/run
+- normalize the tool namespace, tool name, phase, risk class, and redacted
+  argument/result hashes before policy code evaluates the loop
 - inject a reminder, reroute to a more capable model, or alert after a
   configured threshold
 - record the threshold crossing and decision path in receipts
@@ -88,6 +90,31 @@ Falsifiable value:
 - lower runaway token/tool spend
 - fewer hung agent sessions
 - earlier operator visibility
+
+### Tool-Specific Model Policy
+
+The same public synthetic model may need different governance depending on the
+tool context. A call preparing arguments for a write-capable ticket, shell,
+GitHub, or database tool should not necessarily use the same route and policy
+bundle as a call summarizing a read-only browser result.
+
+Wardwright policy:
+
+- classify model calls by normalized tool context, not provider-specific tool
+  payloads
+- attach policy bundles or route constraints by tool namespace, phase, and risk
+  class
+- record selector match/miss evidence in receipts and simulations
+- keep raw tool arguments and results out of receipts unless explicit redacted
+  capture is enabled
+
+Falsifiable value:
+
+- the same `model` ID behaves differently for read-only and write-capable tool
+  contexts
+- reviewers can see why a stricter policy bundle was attached
+- cross-session reports can group failures by tool family without exposing raw
+  tool payloads
 
 ### Structured Output Boundary
 
@@ -150,6 +177,7 @@ property generators.
 | Direction | Value hypothesis | Data needed | First test |
 |---|---|---|---|
 | JSON/XML repair gate | Reduces downstream parser and semantic-contract failures. | Output buffer, schema/parser errors, retry count. | Generate malformed and semantically incomplete outputs; assert retry or block before release. |
+| Tool-context policy selector | Lets one public model use different policies for different tool intents. | Normalized tool namespace/name/phase/risk, selector id, route constraints, redacted hashes. | Send two requests to the same model with different tool contexts; assert different policy bundles and receipt evidence. |
 | Session tool-loop detector | Reduces repeated tool/provider calls that spend tokens without changing state. | Session-scoped tool name, args hash, result hash, status. | Generate repeated identical tool facts; assert alert/inject/reroute at threshold. |
 | TTSR deprecated-pattern guard | Saves context until a rule matters while preventing known bad output from reaching consumers. | Stream ring buffer, trigger offset, one-shot rule state. | Generate streams with trigger split across chunks; assert trigger before release. |
 | Async operator alert sink | Improves visibility without claiming synchronous human approval. | Receipt event, sink status, delivery attempt metadata. | Trip a policy; assert receipt event and sink delivery record even if sink fails. |
