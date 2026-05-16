@@ -36,14 +36,7 @@ defmodule Wardwright.ToolContext do
   @type_key "type"
   @tool_role "tool"
 
-  @confidence_ambiguous "ambiguous"
   @confidence_declared "declared"
-  @confidence_exact "exact"
-  @confidence_inferred "inferred"
-  @namespace_openai_function "openai.function"
-  @namespace_openai_tool "openai.tool"
-  @phase_planning "planning"
-  @phase_result_interpretation "result_interpretation"
   @phase_unknown "unknown"
   @risk_unknown "unknown"
   @source_assistant_tool_call "assistant_tool_call"
@@ -52,8 +45,6 @@ defmodule Wardwright.ToolContext do
   @source_tool_choice "tool_choice"
 
   @hash_prefix "sha256:"
-
-  alias Wardwright.Policy.CoreRuntime
 
   @confidence_values MapSet.new(~w(exact declared inferred ambiguous))
   @phase_values MapSet.new(
@@ -341,32 +332,15 @@ defmodule Wardwright.ToolContext do
   end
 
   defp result_status(tool_result?) do
-    CoreRuntime.dispatch(
-      :tool_context_result_status,
-      fn -> :wardwright@tool_context_core.result_status(tool_result?) |> blank_to_nil() end,
-      fn -> if(tool_result?, do: "unknown") end
-    )
+    :wardwright@tool_context_core.result_status(tool_result?) |> blank_to_nil()
   end
 
   defp inferred_confidence(chosen_tool, assistant_tool, available_tools, tool_result?) do
-    CoreRuntime.dispatch(
-      :tool_context_inferred_confidence,
-      fn ->
-        :wardwright@tool_context_core.inferred_confidence(
-          chosen_tool != nil,
-          assistant_tool != nil,
-          length(available_tools),
-          tool_result?
-        )
-      end,
-      fn ->
-        cond do
-          chosen_tool != nil or assistant_tool != nil -> @confidence_exact
-          tool_result? -> @confidence_inferred
-          length(available_tools) == 1 -> @confidence_declared
-          true -> @confidence_ambiguous
-        end
-      end
+    :wardwright@tool_context_core.inferred_confidence(
+      chosen_tool != nil,
+      assistant_tool != nil,
+      length(available_tools),
+      tool_result?
     )
   end
 
@@ -377,17 +351,7 @@ defmodule Wardwright.ToolContext do
 
   defp default_namespace(tool) do
     type = text_value(Map.get(tool, @type_key)) || ""
-
-    CoreRuntime.dispatch(
-      :tool_context_default_namespace,
-      fn -> :wardwright@tool_context_core.default_namespace(false, type) end,
-      fn ->
-        case type do
-          "function" -> @namespace_openai_function
-          _ -> @namespace_openai_tool
-        end
-      end
-    )
+    :wardwright@tool_context_core.default_namespace(false, type)
   end
 
   defp messages(%{@messages_key => messages}) when is_list(messages),
@@ -427,12 +391,7 @@ defmodule Wardwright.ToolContext do
 
   defp list_matches?(expected, actual) do
     actual = text_value(actual) || ""
-
-    CoreRuntime.dispatch(
-      :tool_context_list_matches,
-      fn -> :wardwright@tool_context_core.list_matches(expected, actual) end,
-      fn -> expected == [] or (actual != "" and actual in expected) end
-    )
+    :wardwright@tool_context_core.list_matches(expected, actual)
   end
 
   defp schema_hash(%{} = function), do: content_hash(Map.get(function, @parameters_key))
@@ -474,24 +433,12 @@ defmodule Wardwright.ToolContext do
   end
 
   defp inferred_phase(has_primary_tool?, has_available_tools?, tool_result?) do
-    CoreRuntime.dispatch(
-      :tool_context_inferred_phase,
-      fn ->
-        :wardwright@tool_context_core.inferred_phase(
-          has_primary_tool?,
-          has_available_tools?,
-          tool_result?
-        )
-        |> blank_to_nil()
-      end,
-      fn ->
-        cond do
-          tool_result? -> @phase_result_interpretation
-          has_primary_tool? or has_available_tools? -> @phase_planning
-          true -> nil
-        end
-      end
+    :wardwright@tool_context_core.inferred_phase(
+      has_primary_tool?,
+      has_available_tools?,
+      tool_result?
     )
+    |> blank_to_nil()
   end
 
   defp blank_to_nil(""), do: nil
