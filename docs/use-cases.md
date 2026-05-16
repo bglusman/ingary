@@ -108,6 +108,15 @@ Wardwright policy:
 - keep raw tool arguments and results out of receipts unless explicit redacted
   capture is enabled
 
+Current BEAM prototype support:
+
+- `tool_selector` governance rules match normalized tool facts and emit ordinary
+  route, block, alert, or annotation actions
+- `tool_loop_threshold` rules count bounded ETS policy-cache facts by normalized
+  tool key and caller scope
+- receipt summaries expose tool filters for namespace, name, phase, risk class,
+  and tool-policy status
+
 Falsifiable value:
 
 - the same `model` ID behaves differently for read-only and write-capable tool

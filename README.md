@@ -24,7 +24,9 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `contracts/openapi.yaml` - draft HTTP/OpenAI-compatible contract.
 - `contracts/storage-provider-contract.md` - draft storage behavior contract.
 - `contracts/tool-context-policy-contract.md` - research-spike contract for
-  policy selection by normalized tool context.
+  policy selection by normalized tool context. The active app includes a v1
+  implementation for tool selectors, bounded tool-loop thresholds, and receipt
+  evidence.
 - `app` - active Elixir/Phoenix LiveView application, including Gleam policy
   core modules under `app/src/wardwright`.
 - `docs/rfcs/wardwright-extraction.md` - product and architecture draft.

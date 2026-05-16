@@ -195,6 +195,11 @@ Receipt queries must support filtering by:
 - final status
 - simulation/live flag
 - stream-policy action
+- tool namespace
+- tool name
+- tool phase
+- tool risk class
+- tool-policy status
 - time range
 
 Queries must support deterministic pagination. Cursor pagination is preferred

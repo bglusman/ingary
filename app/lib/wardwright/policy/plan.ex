@@ -10,10 +10,11 @@ defmodule Wardwright.Policy.Plan do
 
   def evaluate_request(request, caller, config \\ Wardwright.current_config()) do
     text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
+    tool_context = request_tool_context(request)
 
     config
     |> Map.get("governance", [])
-    |> Enum.reduce({request, empty_policy()}, fn rule, {request, policy} ->
+    |> Enum.reduce({request, empty_policy(tool_context)}, fn rule, {request, policy} ->
       apply_rule(rule, text, caller, request, policy)
     end)
     |> then(fn {request, policy} ->
@@ -21,6 +22,7 @@ defmodule Wardwright.Policy.Plan do
         policy
         |> Map.update!("actions", &Enum.reverse/1)
         |> Map.update!("events", &Enum.reverse/1)
+        |> Map.update!("tool_policy_selectors", &Enum.reverse/1)
         |> then(fn policy ->
           Map.put(policy, "conflicts", Wardwright.Policy.Action.conflicts(policy["actions"]))
         end)
@@ -30,13 +32,18 @@ defmodule Wardwright.Policy.Plan do
   end
 
   def empty_policy,
+    do: empty_policy(nil)
+
+  def empty_policy(tool_context),
     do: %{
       "actions" => [],
       "events" => [],
       "alert_count" => 0,
       "route_constraints" => %{},
       "blocked" => false,
-      "conflicts" => []
+      "conflicts" => [],
+      "tool_context" => tool_context,
+      "tool_policy_selectors" => []
     }
 
   defp apply_rule(rule, text, caller, request, policy) do
@@ -51,6 +58,12 @@ defmodule Wardwright.Policy.Plan do
 
       kind == "history_regex_threshold" ->
         apply_history_regex_threshold_rule(rule, caller, request, policy)
+
+      kind == "tool_selector" ->
+        apply_tool_selector_rule(rule, request, policy)
+
+      kind == "tool_loop_threshold" ->
+        apply_tool_loop_threshold_rule(rule, caller, request, policy)
 
       kind in ["request_guard", "request_transform", "receipt_annotation", "route_gate"] &&
           policy_rule_matches?(text, rule) ->
@@ -445,6 +458,151 @@ defmodule Wardwright.Policy.Plan do
     end
   end
 
+  defp apply_tool_selector_rule(rule, request, policy) do
+    tool_context = request_tool_context(request)
+
+    if Wardwright.ToolContext.matches?(tool_context, Map.get(rule, "tool", %{})) do
+      policy = record_tool_selector(policy, rule, true)
+      apply_primitive_governance_rule(rule, "tool_selector", request, policy)
+    else
+      {request, record_tool_selector(policy, rule, false)}
+    end
+  end
+
+  defp apply_tool_loop_threshold_rule(rule, caller, request, policy) do
+    tool_context = request_tool_context(request)
+    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+    tool_matcher = Map.get(rule, "tool", %{})
+
+    cache_key =
+      Map.get(rule, "cache_key") |> blank_to_nil() ||
+        Wardwright.ToolContext.cache_key(tool_context)
+
+    filter = %{
+      "kind" => "tool_context",
+      "key" => cache_key,
+      "scope" => cache_scope_from_caller(caller, Map.get(rule, "cache_scope", "session_id"))
+    }
+
+    count = if cache_key, do: Wardwright.PolicyCache.count(filter), else: 0
+
+    if cache_key == nil or
+         not Wardwright.ToolContext.matches?(tool_context, tool_matcher) or
+         not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
+      {request, policy}
+    else
+      action = Map.get(rule, "action", "annotate")
+      rule_id = Map.get(rule, "id", "tool-loop-threshold")
+
+      message =
+        rule |> Map.get("message", "tool policy threshold matched") |> blank_to_nil() ||
+          "tool policy threshold matched"
+
+      severity = rule |> Map.get("severity", "info") |> blank_to_nil() || "info"
+
+      action_record =
+        %{
+          "rule_id" => rule_id,
+          "kind" => "tool_loop_threshold",
+          "action" => action,
+          "matched" => true,
+          "message" => message,
+          "severity" => severity,
+          "cache_kind" => "tool_context",
+          "cache_key" => cache_key,
+          "cache_scope" => Map.get(rule, "cache_scope", "session_id"),
+          "history_count" => count,
+          "threshold" => threshold,
+          "tool_context" => tool_context
+        }
+        |> put_route_action_fields(rule)
+        |> Wardwright.Policy.Action.normalize(rule: rule)
+
+      policy =
+        policy
+        |> Map.update!("actions", &[action_record | &1])
+        |> put_tool_policy_status(action, rule_id, count, threshold, cache_key)
+
+      policy = apply_tool_loop_action_policy(policy, action, action_record)
+
+      if action in ["escalate", "alert_async"] do
+        event = %{
+          "type" => "policy.alert",
+          "rule_id" => rule_id,
+          "message" => message,
+          "severity" => severity,
+          "history_count" => count,
+          "threshold" => threshold,
+          "tool_context" => tool_context,
+          "idempotency_key" => Map.get(rule, "idempotency_key")
+        }
+
+        {request,
+         policy
+         |> Map.update!("events", &[event | &1])
+         |> Map.update!("alert_count", &(&1 + 1))}
+      else
+        {request, policy}
+      end
+    end
+  end
+
+  defp apply_tool_loop_action_policy(policy, action, action_record)
+       when action in ["restrict_routes", "switch_model", "reroute"] do
+    route_constraints = merge_route_constraints(policy["route_constraints"], action_record)
+    Map.put(policy, "route_constraints", route_constraints)
+  end
+
+  defp apply_tool_loop_action_policy(policy, "block", _action_record),
+    do: Map.put(policy, "blocked", true)
+
+  defp apply_tool_loop_action_policy(policy, _action, _action_record), do: policy
+
+  defp record_tool_selector(policy, rule, matched) do
+    selector =
+      %{
+        "id" => Map.get(rule, "id", "tool-selector"),
+        "matched" => matched,
+        "tool" => Map.get(rule, "tool", %{}),
+        "attached_policy_bundle" => Map.get(rule, "attach_policy_bundle"),
+        "action" => Map.get(rule, "action", "annotate"),
+        "allowed_targets" => normalize_string_list(Map.get(rule, "allowed_targets")),
+        "target_model" => blank_to_nil(Map.get(rule, "target_model", Map.get(rule, "model"))),
+        "allow_fallback" => Map.get(rule, "allow_fallback")
+      }
+      |> reject_blank()
+
+    Map.update!(policy, "tool_policy_selectors", &[selector | &1])
+  end
+
+  defp put_tool_policy_status(policy, action, rule_id, count, threshold, cache_key) do
+    status =
+      case action do
+        "block" -> "blocked"
+        "restrict_routes" -> "rerouted"
+        "switch_model" -> "rerouted"
+        "reroute" -> "rerouted"
+        action when action in ["escalate", "alert_async"] -> "alerted"
+        action when action in ["inject_reminder_and_retry", "transform"] -> "transformed"
+        _ -> "allowed"
+      end
+
+    Map.put(policy, "tool_policy", %{
+      "status" => status,
+      "rule_id" => rule_id,
+      "state_scope" => "session",
+      "counter_key_hash" => content_hash(cache_key),
+      "threshold" => threshold,
+      "observed_count" => count
+    })
+  end
+
+  defp request_tool_context(%{"metadata" => %{"tool_context" => tool_context}})
+       when is_map(tool_context),
+       do: tool_context
+
+  defp request_tool_context(_request), do: nil
+
   defp policy_match?(_text, value) when value in [nil, ""], do: false
 
   defp policy_match?(text, value) do
@@ -496,4 +654,21 @@ defmodule Wardwright.Policy.Plan do
   end
 
   defp integer_value(_), do: nil
+
+  defp content_hash(nil), do: nil
+
+  defp content_hash(value),
+    do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, to_string(value)), case: :lower)
+
+  defp reject_blank(map) when is_map(map) do
+    map
+    |> Enum.reject(fn
+      {_key, nil} -> true
+      {_key, ""} -> true
+      {_key, []} -> true
+      {_key, value} when is_map(value) and map_size(value) == 0 -> true
+      {_key, _value} -> false
+    end)
+    |> Map.new()
+  end
 end

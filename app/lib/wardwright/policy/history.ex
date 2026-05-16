@@ -18,6 +18,40 @@ defmodule Wardwright.Policy.History do
 
   def record_response(_caller, _content), do: :ok
 
+  def record_tool_context(_caller, nil), do: :ok
+
+  def record_tool_context(caller, tool_context) when is_map(tool_context) do
+    case Wardwright.ToolContext.cache_key(tool_context) do
+      nil ->
+        :ok
+
+      key ->
+        value =
+          tool_context
+          |> Map.take([
+            "phase",
+            "primary_tool",
+            "tool_call_id",
+            "argument_hash",
+            "result_hash",
+            "result_status",
+            "confidence"
+          ])
+          |> redact_tool_identity()
+
+        case Wardwright.PolicyCache.add(%{
+               "kind" => "tool_context",
+               "key" => key,
+               "scope" => caller_scope(caller),
+               "value" => value,
+               "created_at_unix_ms" => System.system_time(:millisecond)
+             }) do
+          {:ok, _event} -> :ok
+          {:error, _message} -> :ok
+        end
+    end
+  end
+
   def count(filter), do: Wardwright.PolicyCache.count(filter)
 
   def regex_count(filter, pattern, limit \\ nil) do
@@ -77,6 +111,17 @@ defmodule Wardwright.Policy.History do
       end
     end)
   end
+
+  defp redact_tool_identity(%{"primary_tool" => primary_tool} = value)
+       when is_map(primary_tool) do
+    Map.put(
+      value,
+      "primary_tool",
+      Map.take(primary_tool, ["namespace", "name", "risk_class", "source", "schema_hash"])
+    )
+  end
+
+  defp redact_tool_identity(value), do: value
 
   defp request_text(messages) when is_list(messages) do
     Enum.map_join(messages, "\n", fn message ->

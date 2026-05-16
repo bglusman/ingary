@@ -1,6 +1,6 @@
 # Tool Context Policy Contract
 
-Status: research spike
+Status: v1 prototype implemented in the BEAM app
 
 Wardwright currently treats session and run as the main hot policy scopes. Tool
 calls cut across those scopes: the same synthetic model may need stricter,
@@ -194,16 +194,41 @@ Generated tests should assert behavior and receipt fields: selected model,
 attached policy bundle, route constraints, threshold status, and redacted tool
 facts. They should not assert internal parser branches.
 
+## Implemented V1
+
+The active BEAM app now implements the first useful slice of this contract:
+
+- `Wardwright.ToolContext` normalizes trusted `metadata.tool_context`,
+  OpenAI-compatible `tools`, `tool_choice`, assistant `tool_calls`, and `tool`
+  result messages into `wardwright.tool_context.v1`.
+- `Wardwright.Policy.History.record_tool_context/2` records bounded
+  `tool_context` events in the existing ETS-backed policy cache. Cache keys use
+  `namespace:name:phase`; values keep tool identity, phase, status, and hashes,
+  not raw arguments or raw results.
+- Governance rules can use `kind: tool_selector` to attach selector evidence and
+  emit ordinary policy actions such as `restrict_routes`, `switch_model`,
+  `reroute`, `block`, `annotate`, or `alert_async`.
+- Governance rules can use `kind: tool_loop_threshold` to count repeated
+  normalized tool facts in a bounded caller scope and then emit ordinary policy
+  actions.
+- Receipts include normalized `request.tool_context`,
+  `decision.tool_context`, `decision.tool_policy_selectors`, and
+  `final.tool_policy` when relevant.
+- `/v1/receipts` summaries can filter by `tool_namespace`, `tool_name`,
+  `tool_phase`, `tool_risk_class`, and `tool_policy_status`.
+
+The implementation deliberately reuses the existing policy-plan, route
+constraint, receipt, and bounded policy-cache boundaries. It does not add a
+separate tool runtime or tool executor.
+
 ## Implementation Path
 
-1. Add a boundary parser that extracts normalized `tool_context` facts from
-   OpenAI-compatible request bodies and trusted caller metadata.
-2. Extend receipts and simulation fixtures with redacted tool context.
-3. Add policy selector compilation for exact tool namespace/name/risk/phase
-   matches.
-4. Add run/session-scoped tool counters with hashed argument/result keys.
-5. Add projection and LiveView review nodes for selector match/miss evidence.
-6. Only then consider cross-session `caller_tool` and `tenant_tool` durable
+1. Add projection and LiveView review nodes for selector match/miss evidence.
+2. Add argument-aware risk refinement for tools whose read/write behavior
+   depends on arguments.
+3. Add durable `caller_tool` queries after storage can expose bounded tool facts
+   without raw payload leakage.
+4. Only then consider cross-session `caller_tool` and `tenant_tool` durable
    queries.
 
 ## Open Questions

@@ -45,8 +45,10 @@ defmodule Wardwright.Router do
          {:ok, model} <- Wardwright.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
+      {request, tool_context} = Wardwright.ToolContext.normalize_request(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       Wardwright.Policy.History.record_request(caller, request)
+      Wardwright.Policy.History.record_tool_context(caller, tool_context)
       {request, policy} = apply_request_policies(request, caller)
       {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request, policy)
@@ -100,8 +102,10 @@ defmodule Wardwright.Router do
          {:ok, model} <- Wardwright.normalize_model(Map.get(request, "model")),
          :ok <- require_messages(request) do
       request = apply_prompt_transforms(request)
+      {request, tool_context} = Wardwright.ToolContext.normalize_request(request)
       caller = caller_context(conn, Map.get(request, "metadata", %{}))
       Wardwright.Policy.History.record_request(caller, request)
+      Wardwright.Policy.History.record_tool_context(caller, tool_context)
       {request, policy} = apply_request_policies(request, caller)
       {policy, fail_closed?} = deliver_policy_alerts(policy)
       decision = route_decision(request, policy)
@@ -150,6 +154,11 @@ defmodule Wardwright.Router do
           "selected_model",
           "simulation",
           "stream_policy_action",
+          "tool_namespace",
+          "tool_name",
+          "tool_phase",
+          "tool_risk_class",
+          "tool_policy_status",
           "created_at_min",
           "created_at_max"
         ])
@@ -425,6 +434,12 @@ defmodule Wardwright.Router do
   defp bearer_token("bearer " <> token), do: blank_to_nil(token)
   defp bearer_token(_value), do: nil
 
+  defp request_tool_context(%{"metadata" => %{"tool_context" => tool_context}})
+       when is_map(tool_context),
+       do: tool_context
+
+  defp request_tool_context(_request), do: nil
+
   defp route_decision(request, policy) do
     estimate = Wardwright.estimate_prompt_tokens(Map.get(request, "messages", []))
     Wardwright.select_route(estimate, Map.get(policy, "route_constraints", %{}))
@@ -557,35 +572,40 @@ defmodule Wardwright.Router do
       "synthetic_version" => Wardwright.current_config()["version"],
       "simulation" => status == "simulated",
       "caller" => caller,
-      "request" => %{
-        "model" => Map.get(request, "model"),
-        "normalized_model" => model,
-        "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
-        "stream" => Map.get(request, "stream", false),
-        "message_count" => length(Map.get(request, "messages", [])),
-        "prompt_transforms" => Wardwright.current_config()["prompt_transforms"],
-        "structured_output" => Wardwright.current_config()["structured_output"]
-      },
-      "decision" => %{
-        "strategy" => decision.combine_strategy,
-        "route_type" => decision.route_type,
-        "route_id" => decision.route_id,
-        "selected_provider" => decision.selected_provider,
-        "selected_model" => decision.selected_model,
-        "selected_context_window" => decision.selected_context_window,
-        "selected_models" => decision.selected_models,
-        "fallback_models" => decision.fallback_models,
-        "fallback_used" => decision.fallback_used,
-        "route_blocked" => decision.route_blocked,
-        "policy_route_constraints" => decision.policy_route_constraints,
-        "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
-        "skipped" => decision.skipped,
-        "reason" => decision.reason,
-        "rule" => decision.rule,
-        "governance" => Wardwright.current_config()["governance"],
-        "policy_actions" => policy["actions"],
-        "policy_conflicts" => policy["conflicts"]
-      },
+      "request" =>
+        %{
+          "model" => Map.get(request, "model"),
+          "normalized_model" => model,
+          "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
+          "stream" => Map.get(request, "stream", false),
+          "message_count" => length(Map.get(request, "messages", [])),
+          "prompt_transforms" => Wardwright.current_config()["prompt_transforms"],
+          "structured_output" => Wardwright.current_config()["structured_output"]
+        }
+        |> put_if_present("tool_context", request_tool_context(request)),
+      "decision" =>
+        %{
+          "strategy" => decision.combine_strategy,
+          "route_type" => decision.route_type,
+          "route_id" => decision.route_id,
+          "selected_provider" => decision.selected_provider,
+          "selected_model" => decision.selected_model,
+          "selected_context_window" => decision.selected_context_window,
+          "selected_models" => decision.selected_models,
+          "fallback_models" => decision.fallback_models,
+          "fallback_used" => decision.fallback_used,
+          "route_blocked" => decision.route_blocked,
+          "policy_route_constraints" => decision.policy_route_constraints,
+          "estimated_prompt_tokens" => decision.estimated_prompt_tokens,
+          "skipped" => decision.skipped,
+          "reason" => decision.reason,
+          "rule" => decision.rule,
+          "governance" => Wardwright.current_config()["governance"],
+          "policy_actions" => policy["actions"],
+          "policy_conflicts" => policy["conflicts"]
+        }
+        |> put_if_present("tool_context", Map.get(policy, "tool_context"))
+        |> put_if_present("tool_policy_selectors", Map.get(policy, "tool_policy_selectors")),
       "attempts" => [
         %{
           "provider_id" => decision.selected_model |> String.split("/") |> List.first(),
@@ -595,16 +615,18 @@ defmodule Wardwright.Router do
           "called_provider" => called_provider
         }
       ],
-      "final" => %{
-        "status" => status,
-        "selected_model" => decision.selected_model,
-        "stream_trigger_count" => 0,
-        "alert_count" => policy["alert_count"],
-        "alert_delivery" => Map.get(policy, "alert_delivery", []),
-        "events" => policy["events"],
-        "receipt_recorded_at" =>
-          DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
-      },
+      "final" =>
+        %{
+          "status" => status,
+          "selected_model" => decision.selected_model,
+          "stream_trigger_count" => 0,
+          "alert_count" => policy["alert_count"],
+          "alert_delivery" => Map.get(policy, "alert_delivery", []),
+          "events" => policy["events"],
+          "receipt_recorded_at" =>
+            DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+        }
+        |> put_if_present("tool_policy", Map.get(policy, "tool_policy")),
       "events" => receipt_events(receipt_id, created_at, status, decision, called_provider)
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)

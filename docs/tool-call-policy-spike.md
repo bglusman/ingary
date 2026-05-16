@@ -12,9 +12,10 @@ operational intent. For many workflows, "this model call is for a write-capable
 GitHub tool" or "this call is interpreting a failed browser result" is more
 actionable than "this call belongs to session 123."
 
-The core hypothesis: a stable public synthetic model should be able to attach
-different policy bundles and route constraints for the same caller, same
-session, and same model ID depending on the normalized tool context.
+The core hypothesis is now implemented as a v1 backend slice: a stable public
+synthetic model can attach different selector evidence, route constraints, and
+bounded history policy outcomes for the same caller, same session, and same
+model ID depending on normalized tool context.
 
 See the companion contract in `contracts/tool-context-policy-contract.md`.
 
@@ -146,19 +147,25 @@ Two selectors may match the same request: for example `github.write` and
 nodes with declared reads, effects, priorities, and conflict findings. Runtime
 code should not special-case these inside a router branch.
 
-## Proposed MVP
+## Implemented V1
 
-The smallest useful slice is:
+The first useful slice is in the BEAM app:
 
-1. Normalize OpenAI-compatible tool facts and trusted `metadata.tool_context`
-   into `wardwright.tool_context.v1`.
-2. Add exact-match policy selectors by namespace, tool name, risk class, and
-   phase.
-3. Record selector match evidence and redacted tool context in receipts.
-4. Add run/session-scoped loop counters keyed by tool name plus argument/result
-   hashes.
-5. Add simulation fixtures that prove the same synthetic model can attach
-   different policy bundles for different tool contexts.
+1. Normalize trusted `metadata.tool_context`, OpenAI-compatible `tools`,
+   `tool_choice`, assistant `tool_calls`, and `tool` result messages into
+   `wardwright.tool_context.v1`.
+2. Add `tool_selector` governance rules that match namespace, name, risk class,
+   and phase, then emit existing route/block/alert/annotation actions.
+3. Add `tool_loop_threshold` governance rules that count bounded ETS history by
+   normalized tool key and caller scope.
+4. Record selector match evidence, normalized tool context, and tool-policy
+   threshold outcomes in receipts.
+5. Keep raw tool arguments and raw tool results out of receipts and policy cache
+   by default; only hashes are recorded.
+6. Add behavior tests proving the same synthetic model can route differently for
+   different tool contexts, OpenAI tool fields can drive route constraints,
+   repeated tool facts can trigger a bounded history policy, and raw arguments
+   are not persisted.
 
 Cross-session durable tool facts should wait until storage can query them
 without raw payload leakage.

@@ -94,6 +94,20 @@ defmodule Wardwright.ReceiptStore do
       "simulation" => receipt["simulation"] || false,
       "stream_policy_action" => get_in(receipt, ["final", "stream_policy_action"])
     }
+    |> put_if_present(
+      "tool_namespace",
+      get_in(receipt, ["decision", "tool_context", "primary_tool", "namespace"])
+    )
+    |> put_if_present(
+      "tool_name",
+      get_in(receipt, ["decision", "tool_context", "primary_tool", "name"])
+    )
+    |> put_if_present("tool_phase", get_in(receipt, ["decision", "tool_context", "phase"]))
+    |> put_if_present(
+      "tool_risk_class",
+      get_in(receipt, ["decision", "tool_context", "primary_tool", "risk_class"])
+    )
+    |> put_if_present("tool_policy_status", get_in(receipt, ["final", "tool_policy", "status"]))
   end
 
   defp matches?(receipt, filters) do
@@ -129,7 +143,12 @@ defmodule Wardwright.ReceiptStore do
              "selected_provider",
              "selected_model",
              "status",
-             "stream_policy_action"
+             "stream_policy_action",
+             "tool_namespace",
+             "tool_name",
+             "tool_phase",
+             "tool_risk_class",
+             "tool_policy_status"
            ] ->
         summary[key] == value
 
@@ -160,6 +179,9 @@ defmodule Wardwright.ReceiptStore do
   end
 
   defp provider_from_model(_), do: nil
+
+  defp put_if_present(map, _key, nil), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
 
   defp sort_key(receipt), do: {receipt["created_at"] || 0, receipt["receipt_id"] || ""}
 
