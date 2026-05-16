@@ -40,7 +40,10 @@ a clear error that names the missing capability.
 - Provider records expose a versioned capability map for the currently
   supported adapter shapes. The map describes endpoint shape, stream format,
   auth scheme, terminal metadata support, cancellation confidence, unsupported
-  stream delta fields, and the current unsupported-options policy.
+  request fields, unsupported stream delta fields, and the current
+  unsupported-options policy. Provider calls now fail loudly before contacting
+  the upstream adapter when request fields such as OpenAI-compatible tool calls
+  would otherwise be silently dropped.
 - Live provider smoke tests have an explicit non-CI profile. `mise run
   test:live-providers` fails clearly unless at least one live target is
   configured, then verifies streaming, receipt metadata, and non-mock provider
@@ -110,9 +113,10 @@ a clear error that names the missing capability.
   handle provider variants that require extra stream options, alternate base
   paths, or nonstandard terminal frames.
 
-- Provider capability records are descriptive, not yet enforcement points.
-  Runtime option validation should eventually reject options that could affect
-  policy correctness when the selected adapter cannot honor them.
+- Provider capability records are partial enforcement points. Tool-call request
+  fields are rejected when a selected adapter cannot preserve them, but broader
+  provider-specific options still need capability checks when they affect policy
+  correctness.
 - Unsupported provider features should be ignored only when they cannot affect
   policy correctness. If they could affect safety, routing, stream release, or
   receipt truth, the adapter should fail clearly.

@@ -284,10 +284,16 @@ defmodule Wardwright do
         provider_outcome(nil, "completed", started, nil, false, true)
 
       target ->
-        Wardwright.ProviderRuntime.complete(target, request, fn ->
-          complete_target(target, request)
-        end)
-        |> provider_outcome_from_result(started)
+        case validate_provider_request(target, request) do
+          :ok ->
+            Wardwright.ProviderRuntime.complete(target, request, fn ->
+              complete_target(target, request)
+            end)
+            |> provider_outcome_from_result(started)
+
+          {:error, reason} ->
+            provider_outcome(nil, "provider_error", started, reason, false, false)
+        end
     end
   end
 
@@ -304,11 +310,17 @@ defmodule Wardwright do
         provider_outcome([], "completed", started, nil, false, true)
 
       target ->
-        Wardwright.ProviderRuntime.stream(target, request, fn ->
-          stream_target(target, request)
-        end)
-        |> provider_outcome_from_result(started)
-        |> normalize_stream_outcome()
+        case validate_provider_request(target, request) do
+          :ok ->
+            Wardwright.ProviderRuntime.stream(target, request, fn ->
+              stream_target(target, request)
+            end)
+            |> provider_outcome_from_result(started)
+            |> normalize_stream_outcome()
+
+          {:error, reason} ->
+            provider_outcome(nil, "provider_error", started, reason, false, false)
+        end
     end
   end
 
@@ -337,23 +349,35 @@ defmodule Wardwright do
         stream_each_outcome(acc, result, started, false, true)
 
       target ->
-        {result, acc} =
-          Wardwright.ProviderRuntime.stream_each(
-            target,
-            request,
-            fn emit -> stream_target_each(target, request, emit) end,
-            acc,
-            chunk_fun
-          )
+        case validate_provider_request(target, request) do
+          :ok ->
+            {result, acc} =
+              Wardwright.ProviderRuntime.stream_each(
+                target,
+                request,
+                fn emit -> stream_target_each(target, request, emit) end,
+                acc,
+                chunk_fun
+              )
 
-        stream_each_outcome(
-          acc,
-          result,
-          started,
-          provider_kind(target) != "mock",
-          provider_kind(target) == "mock"
-        )
+            stream_each_outcome(
+              acc,
+              result,
+              started,
+              provider_kind(target) != "mock",
+              provider_kind(target) == "mock"
+            )
+
+          {:error, reason} ->
+            {provider_outcome(nil, "provider_error", started, reason, false, false), acc}
+        end
     end
+  end
+
+  defp validate_provider_request(target, request) do
+    target
+    |> provider_kind()
+    |> Wardwright.ProviderCapabilities.validate_request(request)
   end
 
   defp complete_target(target, request) do

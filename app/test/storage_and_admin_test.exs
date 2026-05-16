@@ -80,6 +80,17 @@ defmodule Wardwright.StorageAndAdminTest do
              "logprobs"
            ]
 
+    assert get_in(providers, ["openai", "capabilities", "unsupported_request_fields"]) == [
+             "tools",
+             "tool_choice",
+             "message.tool_calls",
+             "message.tool_call_id",
+             "message.role:tool"
+           ]
+
+    assert get_in(providers, ["ollama", "capabilities", "unsupported_request_fields"]) ==
+             get_in(providers, ["openai", "capabilities", "unsupported_request_fields"])
+
     assert get_in(providers, ["ollama", "capabilities", "cancellation", "confidence"]) ==
              "needs_live_provider_smoke"
 

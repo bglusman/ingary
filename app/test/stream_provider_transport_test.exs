@@ -242,4 +242,73 @@ defmodule Wardwright.StreamProviderTransportTest do
     assert get_in(receipt, ["attempts", Access.at(0), "provider_metadata", "finish_reason"]) ==
              "stop"
   end
+
+  test "openai-compatible targets fail loudly instead of dropping tool request fields" do
+    System.put_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS", "1")
+
+    on_exit(fn ->
+      System.delete_env("WARDWRIGHT_ALLOW_TEST_CREDENTIALS")
+    end)
+
+    config =
+      unit_policy_config()
+      |> Map.put("targets", [
+        %{
+          "model" => "openai-compatible/live-test",
+          "context_window" => 256,
+          "provider_kind" => "openai-compatible",
+          "provider_base_url" => "http://127.0.0.1:9",
+          "credential_env" => "WARDWRIGHT_TEST_OPENAI_KEY"
+        }
+      ])
+      |> Map.put("governance", [])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    conn =
+      call(:post, "/v1/chat/completions", %{
+        model: "unit-model",
+        tools: [
+          %{
+            type: "function",
+            function: %{name: "create_pull_request", parameters: %{type: "object"}}
+          }
+        ],
+        tool_choice: "auto",
+        messages: [
+          %{role: "user", content: "prepare a pull request"},
+          %{
+            role: "assistant",
+            content: nil,
+            tool_calls: [
+              %{
+                id: "call_1",
+                type: "function",
+                function: %{name: "create_pull_request", arguments: "{}"}
+              }
+            ]
+          },
+          %{role: "tool", tool_call_id: "call_1", content: "created"}
+        ]
+      })
+
+    assert conn.status == 502
+
+    body = Jason.decode!(conn.resp_body)
+    assert get_in(body, ["wardwright", "status"]) == "provider_error"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "does not support request fields"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "tools"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "tool_choice"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "message.tool_calls"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "message.tool_call_id"
+    assert get_in(body, ["wardwright", "provider_error"]) =~ "message.role:tool"
+
+    [receipt_id] = get_resp_header(conn, "x-wardwright-receipt-id")
+    receipt = Wardwright.ReceiptStore.get(receipt_id)
+
+    assert get_in(receipt, ["attempts", Access.at(0), "called_provider"]) == false
+
+    assert get_in(receipt, ["attempts", Access.at(0), "provider_error"]) =~
+             "does not support request fields"
+  end
 end

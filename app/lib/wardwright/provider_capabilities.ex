@@ -13,6 +13,7 @@ defmodule Wardwright.ProviderCapabilities do
     :cancellation_mechanism,
     :cancellation_confidence,
     terminal_metadata: [],
+    unsupported_request_fields: [],
     unsupported_stream_delta_fields: [],
     unsupported_options_policy: "not_applicable"
   ]
@@ -26,8 +27,23 @@ defmodule Wardwright.ProviderCapabilities do
   @cancellation_key "cancellation"
   @mechanism_key "mechanism"
   @confidence_key "confidence"
+  @unsupported_request_fields_key "unsupported_request_fields"
   @unsupported_stream_delta_fields_key "unsupported_stream_delta_fields"
   @unsupported_options_policy_key "unsupported_options_policy"
+  @messages_key "messages"
+  @role_key "role"
+  @tool_calls_key "tool_calls"
+  @tool_call_id_key "tool_call_id"
+  @tool_choice_key "tool_choice"
+  @tools_key "tools"
+  @role_value_tool "tool"
+  @tool_request_fields [
+    "tools",
+    "tool_choice",
+    "message.tool_calls",
+    "message.tool_call_id",
+    "message.role:tool"
+  ]
 
   def for_provider("ollama", _credential_source) do
     %__MODULE__{
@@ -44,6 +60,7 @@ defmodule Wardwright.ProviderCapabilities do
       ],
       cancellation_mechanism: "task_cancel_httpc_request",
       cancellation_confidence: "needs_live_provider_smoke",
+      unsupported_request_fields: @tool_request_fields,
       unsupported_options_policy: "ignore_safe_options_fail_later_for_policy_relevant_options"
     }
     |> to_map()
@@ -64,7 +81,8 @@ defmodule Wardwright.ProviderCapabilities do
       ],
       cancellation_mechanism: "task_cancel_httpc_request",
       cancellation_confidence: "needs_live_provider_smoke",
-      unsupported_stream_delta_fields: ["role", "tool_calls", "logprobs"],
+      unsupported_request_fields: @tool_request_fields,
+      unsupported_stream_delta_fields: [@role_key, @tool_calls_key, "logprobs"],
       unsupported_options_policy: "ignore_safe_options_fail_later_for_policy_relevant_options"
     }
     |> to_map()
@@ -92,11 +110,63 @@ defmodule Wardwright.ProviderCapabilities do
         @mechanism_key => capabilities.cancellation_mechanism,
         @confidence_key => capabilities.cancellation_confidence
       },
+      @unsupported_request_fields_key => capabilities.unsupported_request_fields,
       @unsupported_stream_delta_fields_key => capabilities.unsupported_stream_delta_fields,
       @unsupported_options_policy_key => capabilities.unsupported_options_policy
     }
   end
 
+  def validate_request(kind, request) when is_binary(kind) and is_map(request) do
+    unsupported =
+      kind
+      |> for_provider("none")
+      |> Map.get(@unsupported_request_fields_key, [])
+      |> Enum.filter(&request_field_present?(&1, request))
+
+    case unsupported do
+      [] ->
+        :ok
+
+      fields ->
+        {:error,
+         "provider adapter #{inspect(kind)} does not support request fields: " <>
+           Enum.join(fields, ", ")}
+    end
+  end
+
+  def validate_request(_kind, _request), do: :ok
+
   defp bearer_auth_scheme("none"), do: "none"
   defp bearer_auth_scheme(_credential_source), do: "bearer"
+
+  defp request_field_present?("tools", request),
+    do: present?(Map.get(request, @tools_key))
+
+  defp request_field_present?("tool_choice", request),
+    do: present?(Map.get(request, @tool_choice_key))
+
+  defp request_field_present?("message.tool_calls", request) do
+    request |> messages() |> Enum.any?(&present?(Map.get(&1, @tool_calls_key)))
+  end
+
+  defp request_field_present?("message.tool_call_id", request) do
+    request |> messages() |> Enum.any?(&present?(Map.get(&1, @tool_call_id_key)))
+  end
+
+  defp request_field_present?("message.role:tool", request) do
+    request |> messages() |> Enum.any?(&(Map.get(&1, @role_key) == @role_value_tool))
+  end
+
+  defp request_field_present?(_field, _request), do: false
+
+  defp messages(%{@messages_key => messages}) when is_list(messages),
+    do: Enum.filter(messages, &is_map/1)
+
+  defp messages(_request), do: []
+
+  defp present?(nil), do: false
+  defp present?(""), do: false
+  defp present?([]), do: false
+  defp present?(%{}), do: false
+  defp present?(_value), do: true
 end
