@@ -144,6 +144,34 @@ defmodule Wardwright.RoutePlanner do
   end
 
   defp select_forced_model(model, config, targets, estimated, attrs) do
+    CoreRuntime.dispatch(
+      :route_select_forced_model,
+      fn ->
+        forced = targets |> Map.get(model) |> forced_target_for_core()
+
+        skipped_targets =
+          targets
+          |> Map.delete(model)
+          |> Map.values()
+          |> Enum.map(&target_for_core/1)
+
+        forced
+        |> :wardwright@route_core.select_forced_model(skipped_targets, estimated)
+        |> forced_selection_decision(%{
+          route_type: "policy_override",
+          route_id: "policy.forced_model",
+          combine_strategy: "policy_forced_model",
+          fallback_models: [],
+          fallback_used: false,
+          rule: "apply policy route override before provider selection"
+        })
+      end,
+      fn -> select_forced_model_elixir(model, config, targets, estimated, attrs) end
+    )
+    |> maybe_forced_fallback(model, config, targets, estimated, attrs)
+  end
+
+  defp select_forced_model_elixir(model, _config, targets, estimated, _attrs) do
     forced = Map.get(targets, model)
     skipped = targets |> Map.delete(model) |> Map.values() |> Enum.map(&policy_skip/1)
 
@@ -159,29 +187,33 @@ defmodule Wardwright.RoutePlanner do
           {forced, skipped, forced_model_reason(true, true)}
       end
 
-    if selected == nil and Map.get(attrs, "allow_fallback") == true do
+    selected_models = selected_models(selected, if(selected, do: [selected], else: []))
+
+    decision(selected, %{
+      route_type: "policy_override",
+      route_id: "policy.forced_model",
+      combine_strategy: "policy_forced_model",
+      selected_models: selected_models,
+      fallback_models: [],
+      skipped: skipped,
+      fallback_used: false,
+      reason: reason,
+      rule: "apply policy route override before provider selection"
+    })
+  end
+
+  defp maybe_forced_fallback(decision, model, config, targets, estimated, attrs) do
+    if decision.route_blocked == true and allow_fallback?(attrs) do
       select_forced_fallback(
         config,
         targets,
         estimated,
         attrs,
-        forced_failure_skips(model, forced, estimated),
-        reason
+        forced_failure_skips(model, Map.get(targets, model), estimated),
+        decision.reason
       )
     else
-      selected_models = selected_models(selected, if(selected, do: [selected], else: []))
-
-      decision(selected, %{
-        route_type: "policy_override",
-        route_id: "policy.forced_model",
-        combine_strategy: "policy_forced_model",
-        selected_models: selected_models,
-        fallback_models: [],
-        skipped: skipped,
-        fallback_used: false,
-        reason: reason,
-        rule: "apply policy route override before provider selection"
-      })
+      decision
     end
   end
 
@@ -206,6 +238,8 @@ defmodule Wardwright.RoutePlanner do
   end
 
   defp forced_failure_skips(_model, forced, estimated), do: [context_skip(forced, estimated)]
+
+  defp allow_fallback?(attrs), do: Map.fetch(attrs, "allow_fallback") == {:ok, true}
 
   defp select_cascade(cascade, targets, estimated) do
     CoreRuntime.dispatch(
@@ -264,6 +298,24 @@ defmodule Wardwright.RoutePlanner do
     |> Map.put(:skipped, Enum.map(skipped, &route_skip_from_core/1))
     |> Map.put(:reason, reason)
     |> Map.put_new(:fallback_used, false)
+    |> Map.put(:route_blocked, route_blocked?)
+  end
+
+  defp forced_selection_decision(
+         {:forced_selection, selected_model, selected_context_window, selected_models, skipped,
+          route_blocked?, reason},
+         attrs
+       ) do
+    attrs
+    |> Map.put(:selected_model, selected_model)
+    |> Map.put(
+      :selected_context_window,
+      if(route_blocked?, do: nil, else: selected_context_window)
+    )
+    |> Map.put(:selected_provider, provider_from_model(selected_model))
+    |> Map.put(:selected_models, selected_models)
+    |> Map.put(:skipped, Enum.map(skipped, &route_skip_from_core/1))
+    |> Map.put(:reason, reason)
     |> Map.put(:route_blocked, route_blocked?)
   end
 
@@ -403,6 +455,9 @@ defmodule Wardwright.RoutePlanner do
      model_weight(model)}
   end
 
+  defp forced_target_for_core(nil), do: []
+  defp forced_target_for_core(model), do: [target_for_core(model)]
+
   defp route_skip_from_core({:context_too_small, target, context_window, estimated}) do
     %{
       "target" => target,
@@ -410,6 +465,14 @@ defmodule Wardwright.RoutePlanner do
       "context_window" => context_window,
       "estimated_prompt_tokens" => estimated
     }
+  end
+
+  defp route_skip_from_core({:policy_route_gate, target, context_window}) do
+    Map.new([
+      {"target", target},
+      {"reason", "policy_route_gate"},
+      {"context_window", context_window}
+    ])
   end
 
   defp split_by_context(models, estimated) do

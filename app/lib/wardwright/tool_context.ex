@@ -53,6 +53,8 @@ defmodule Wardwright.ToolContext do
 
   @hash_prefix "sha256:"
 
+  alias Wardwright.Policy.CoreRuntime
+
   @confidence_values MapSet.new(~w(exact declared inferred ambiguous))
   @phase_values MapSet.new(
                   ~w(planning argument_repair result_interpretation loop_governance unknown)
@@ -184,11 +186,11 @@ defmodule Wardwright.ToolContext do
     primary_tool = chosen_tool || assistant_tool || single_tool(available_tools)
 
     phase =
-      cond do
-        tool_result? -> @phase_result_interpretation
-        primary_tool != nil or available_tools != [] -> @phase_planning
-        true -> nil
-      end
+      inferred_phase(
+        primary_tool != nil,
+        available_tools != [],
+        tool_result?
+      )
 
     if phase do
       %{
@@ -338,24 +340,55 @@ defmodule Wardwright.ToolContext do
     end)
   end
 
-  defp result_status(true), do: "unknown"
-  defp result_status(false), do: nil
+  defp result_status(tool_result?) do
+    CoreRuntime.dispatch(
+      :tool_context_result_status,
+      fn -> :wardwright@tool_context_core.result_status(tool_result?) |> blank_to_nil() end,
+      fn -> if(tool_result?, do: "unknown") end
+    )
+  end
 
   defp inferred_confidence(chosen_tool, assistant_tool, available_tools, tool_result?) do
-    cond do
-      chosen_tool != nil or assistant_tool != nil -> @confidence_exact
-      tool_result? -> @confidence_inferred
-      length(available_tools) == 1 -> @confidence_declared
-      true -> @confidence_ambiguous
-    end
+    CoreRuntime.dispatch(
+      :tool_context_inferred_confidence,
+      fn ->
+        :wardwright@tool_context_core.inferred_confidence(
+          chosen_tool != nil,
+          assistant_tool != nil,
+          length(available_tools),
+          tool_result?
+        )
+      end,
+      fn ->
+        cond do
+          chosen_tool != nil or assistant_tool != nil -> @confidence_exact
+          tool_result? -> @confidence_inferred
+          length(available_tools) == 1 -> @confidence_declared
+          true -> @confidence_ambiguous
+        end
+      end
+    )
   end
 
   defp single_tool([tool]), do: tool
   defp single_tool(_tools), do: nil
 
   defp default_namespace(%{@namespace_key => namespace}) when is_binary(namespace), do: namespace
-  defp default_namespace(%{@type_key => "function"}), do: @namespace_openai_function
-  defp default_namespace(_tool), do: @namespace_openai_tool
+
+  defp default_namespace(tool) do
+    type = text_value(Map.get(tool, @type_key)) || ""
+
+    CoreRuntime.dispatch(
+      :tool_context_default_namespace,
+      fn -> :wardwright@tool_context_core.default_namespace(false, type) end,
+      fn ->
+        case type do
+          "function" -> @namespace_openai_function
+          _ -> @namespace_openai_tool
+        end
+      end
+    )
+  end
 
   defp messages(%{@messages_key => messages}) when is_list(messages),
     do: Enum.filter(messages, &is_map/1)
@@ -392,13 +425,14 @@ defmodule Wardwright.ToolContext do
     |> Enum.reject(&is_nil/1)
   end
 
-  defp list_matches?([], _actual), do: true
-
   defp list_matches?(expected, actual) do
-    case text_value(actual) do
-      nil -> false
-      actual -> actual in expected
-    end
+    actual = text_value(actual) || ""
+
+    CoreRuntime.dispatch(
+      :tool_context_list_matches,
+      fn -> :wardwright@tool_context_core.list_matches(expected, actual) end,
+      fn -> expected == [] or (actual != "" and actual in expected) end
+    )
   end
 
   defp schema_hash(%{} = function), do: content_hash(Map.get(function, @parameters_key))
@@ -438,4 +472,28 @@ defmodule Wardwright.ToolContext do
     |> Enum.reject(fn {_key, value} -> value in [nil, [], %{}] end)
     |> Map.new()
   end
+
+  defp inferred_phase(has_primary_tool?, has_available_tools?, tool_result?) do
+    CoreRuntime.dispatch(
+      :tool_context_inferred_phase,
+      fn ->
+        :wardwright@tool_context_core.inferred_phase(
+          has_primary_tool?,
+          has_available_tools?,
+          tool_result?
+        )
+        |> blank_to_nil()
+      end,
+      fn ->
+        cond do
+          tool_result? -> @phase_result_interpretation
+          has_primary_tool? or has_available_tools? -> @phase_planning
+          true -> nil
+        end
+      end
+    )
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(value), do: value
 end

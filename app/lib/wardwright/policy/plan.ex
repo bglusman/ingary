@@ -65,6 +65,8 @@ defmodule Wardwright.Policy.Plan do
   @tool_context_schema "wardwright.tool_context.v1"
   @turns_window_key "turns"
 
+  alias Wardwright.Policy.PlanCore
+
   def evaluate_request(request, caller, config \\ Wardwright.current_config(), opts \\ []) do
     text = request |> Map.get("messages", []) |> request_text() |> String.downcase()
     tool_context = Wardwright.ToolContext.normalize(request, opts)
@@ -391,7 +393,7 @@ defmodule Wardwright.Policy.Plan do
   defp normalize_string_list(_values), do: []
 
   defp apply_history_threshold_rule(rule, caller, request, policy) do
-    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+    threshold = PlanCore.threshold(integer_value(Map.get(rule, "threshold", 1)) || 1)
 
     filter = %{
       "kind" => blank_to_nil(Map.get(rule, "cache_kind")),
@@ -401,7 +403,7 @@ defmodule Wardwright.Policy.Plan do
 
     count = Wardwright.PolicyCache.count(filter)
 
-    if not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
+    if not PlanCore.threshold_triggered?(count, threshold) do
       {request, policy}
     else
       action = Map.get(rule, "action", "annotate")
@@ -453,7 +455,7 @@ defmodule Wardwright.Policy.Plan do
   end
 
   defp apply_history_regex_threshold_rule(rule, caller, request, policy) do
-    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+    threshold = PlanCore.threshold(integer_value(Map.get(rule, "threshold", 1)) || 1)
 
     filter = %{
       "kind" => blank_to_nil(Map.get(rule, "cache_kind")),
@@ -468,7 +470,7 @@ defmodule Wardwright.Policy.Plan do
         Map.get(rule, "limit")
       )
 
-    if not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
+    if not PlanCore.threshold_triggered?(count, threshold) do
       {request, policy}
     else
       action = Map.get(rule, "action", "annotate")
@@ -533,7 +535,7 @@ defmodule Wardwright.Policy.Plan do
 
   defp apply_tool_loop_threshold_rule(rule, caller, request, policy, opts) do
     tool_context = request_tool_context(request, policy, opts)
-    threshold = max(1, integer_value(Map.get(rule, "threshold", 1)) || 1)
+    threshold = PlanCore.threshold(integer_value(Map.get(rule, "threshold", 1)) || 1)
     tool_matcher = Map.get(rule, "tool", %{})
 
     cache_key =
@@ -553,7 +555,7 @@ defmodule Wardwright.Policy.Plan do
 
     if cache_key == nil or
          not Wardwright.ToolContext.matches?(tool_context, tool_matcher) or
-         not Wardwright.Policy.HistoryCore.triggered_count?(count, threshold) do
+         not PlanCore.threshold_triggered?(count, threshold) do
       {request, policy}
     else
       action = Map.get(rule, "action", "annotate")
@@ -794,11 +796,10 @@ defmodule Wardwright.Policy.Plan do
   defp sequence_window_limit(rule) do
     within = Map.get(rule, @within_key, %{})
 
-    turn_limit =
-      integer_value(Map.get(within, @turns_window_key)) ||
-        integer_value(Map.get(within, @events_window_key))
-
-    max(2, (turn_limit || 20) + 1)
+    PlanCore.sequence_window_limit(
+      Map.get(within, @turns_window_key),
+      Map.get(within, @events_window_key)
+    )
   end
 
   defp within_wall_clock_window?(rule, current_event, prior_event) do
@@ -815,7 +816,11 @@ defmodule Wardwright.Policy.Plan do
           _ -> System.system_time(:millisecond)
         end
 
-      current_ms - Map.get(prior_event, @created_at_key, 0) <= max_ms
+      PlanCore.within_wall_clock_window?(
+        max_ms,
+        current_ms,
+        Map.get(prior_event, @created_at_key, 0)
+      )
     else
       true
     end
@@ -845,12 +850,16 @@ defmodule Wardwright.Policy.Plan do
         true
 
       @active_state ->
-        current_policy_state(caller, Map.get(rule, @cache_scope_key, @default_cache_scope)) ==
-          @active_state
+        PlanCore.state_scope_matches?(
+          @active_state,
+          current_policy_state(caller, Map.get(rule, @cache_scope_key, @default_cache_scope))
+        )
 
       state ->
-        current_policy_state(caller, Map.get(rule, @cache_scope_key, @default_cache_scope)) ==
-          state
+        PlanCore.state_scope_matches?(
+          state,
+          current_policy_state(caller, Map.get(rule, @cache_scope_key, @default_cache_scope))
+        )
     end
   end
 
@@ -909,7 +918,14 @@ defmodule Wardwright.Policy.Plan do
       },
       sequence_window_limit(rule)
     )
-    |> Enum.filter(&(event_order(&1) > event_order(prior_event)))
+    |> Enum.filter(fn event ->
+      PlanCore.event_after?(
+        Map.get(event, @created_at_key, 0),
+        Map.get(event, @sequence_key, 0),
+        Map.get(prior_event, @created_at_key, 0),
+        Map.get(prior_event, @sequence_key, 0)
+      )
+    end)
   end
 
   defp tool_event_matches?(
@@ -930,10 +946,6 @@ defmodule Wardwright.Policy.Plan do
 
   defp tool_event_matches?(_event, _matcher), do: false
 
-  defp event_order(event) do
-    {Map.get(event, @created_at_key, 0), Map.get(event, @sequence_key, 0)}
-  end
-
   defp record_tool_selector(policy, rule, matched) do
     selector =
       %{
@@ -952,21 +964,12 @@ defmodule Wardwright.Policy.Plan do
   end
 
   defp put_tool_policy_status(policy, action, rule_id, count, threshold, cache_key, cache_scope) do
-    status =
-      case action do
-        "block" -> "blocked"
-        "restrict_routes" -> "rerouted"
-        "switch_model" -> "rerouted"
-        "reroute" -> "rerouted"
-        action when action in ["escalate", "alert_async"] -> "alerted"
-        action when action in ["inject_reminder_and_retry", "transform"] -> "transformed"
-        _ -> "allowed"
-      end
+    status = PlanCore.tool_policy_status(action)
 
     Map.put(policy, "tool_policy", %{
       "status" => status,
       "rule_id" => rule_id,
-      "state_scope" => scope_label(cache_scope),
+      "state_scope" => PlanCore.scope_label(cache_scope),
       "counter_key_hash" => content_hash(cache_key),
       "threshold" => threshold,
       "observed_count" => count
@@ -1036,15 +1039,6 @@ defmodule Wardwright.Policy.Plan do
 
   defp content_hash(value),
     do: "sha256:" <> Base.encode16(:crypto.hash(:sha256, to_string(value)), case: :lower)
-
-  defp scope_label(value) do
-    case blank_to_nil(value) do
-      nil -> "session"
-      "session_id" -> "session"
-      "run_id" -> "run"
-      value -> value
-    end
-  end
 
   defp reject_blank(map) when is_map(map) do
     map

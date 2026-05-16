@@ -1,6 +1,8 @@
 defmodule Wardwright.Policy.Stream do
   @moduledoc false
 
+  alias Wardwright.Policy.CoreRuntime
+
   def evaluate(chunks, rules, opts \\ [])
 
   def evaluate(chunks, rules, opts) when is_list(chunks) and is_list(rules) do
@@ -147,8 +149,11 @@ defmodule Wardwright.Policy.Stream do
       |> Map.update!(:events, &(&1 ++ [event]))
       |> Map.put(:action, action)
 
-    case action do
-      action when action in ["rewrite", "rewrite_chunk"] ->
+    case stream_action_tag(action, match_info.match_scope) do
+      "rewrite_window" ->
+        {:cont, rewrite_stream_window(result, chunk, stream_window, rule, now_ms)}
+
+      "rewrite_chunk" ->
         if match_info.match_scope == "stream_window" do
           {:cont, rewrite_stream_window(result, chunk, stream_window, rule, now_ms)}
         else
@@ -158,13 +163,13 @@ defmodule Wardwright.Policy.Stream do
       "drop_chunk" ->
         {:cont, append_dropped_chunk(result, chunk, stream_window, now_ms)}
 
-      action when action in ["block", "block_final"] ->
+      "block" ->
         {:halt,
          terminal_result(result, chunk, stream_window, "stream_policy_blocked",
            blocked_bytes: byte_size(stream_window)
          )}
 
-      action when action in ["retry", "retry_with_reminder"] ->
+      "retry" ->
         {:halt, terminal_result(result, chunk, stream_window, "stream_policy_retry_required")}
 
       _ ->
@@ -384,7 +389,7 @@ defmodule Wardwright.Policy.Stream do
          started_at when is_integer(started_at) <- Map.get(result, :hold_started_at_ms) do
       observed_ms = max(0, now_ms - started_at)
 
-      if observed_ms > max_hold_ms do
+      if latency_exceeded?(observed_ms, max_hold_ms) do
         result =
           result
           |> Map.update!(:events, &(&1 ++ [latency_event(result, chunk_index, observed_ms)]))
@@ -536,7 +541,16 @@ defmodule Wardwright.Policy.Stream do
        do: nil
 
   defp rewritten_bytes(generated_chunk, released_chunk) do
-    if generated_chunk == released_chunk, do: 0, else: byte_size(generated_chunk)
+    CoreRuntime.dispatch(
+      :stream_rewritten_bytes,
+      fn ->
+        :wardwright@stream_core.rewritten_bytes(
+          byte_size(generated_chunk),
+          generated_chunk == released_chunk
+        )
+      end,
+      fn -> if generated_chunk == released_chunk, do: 0, else: byte_size(generated_chunk) end
+    )
   end
 
   defp stream_horizon_bytes([]), do: nil
@@ -574,7 +588,13 @@ defmodule Wardwright.Policy.Stream do
 
   defp release_horizon_prefix(stream_window, horizon_bytes)
        when is_integer(horizon_bytes) and horizon_bytes >= 0 do
-    release_budget = max(byte_size(stream_window) - horizon_bytes, 0)
+    release_budget =
+      CoreRuntime.dispatch(
+        :stream_release_budget,
+        fn -> :wardwright@stream_core.release_budget(byte_size(stream_window), horizon_bytes) end,
+        fn -> max(byte_size(stream_window) - horizon_bytes, 0) end
+      )
+
     split_prefix_at_byte_limit(stream_window, release_budget)
   end
 
@@ -623,5 +643,44 @@ defmodule Wardwright.Policy.Stream do
       integer when is_integer(integer) and integer >= 0 -> integer
       _ -> nil
     end
+  end
+
+  defp stream_action_tag(action, match_scope) do
+    CoreRuntime.dispatch(
+      :stream_action_tag,
+      fn -> :wardwright@stream_core.action_tag(action, match_scope) end,
+      fn ->
+        case {action, match_scope} do
+          {action, "stream_window"} when action in ["rewrite", "rewrite_chunk"] ->
+            "rewrite_window"
+
+          {action, _scope} when action in ["rewrite", "rewrite_chunk"] ->
+            "rewrite_chunk"
+
+          {"drop_chunk", _scope} ->
+            "drop_chunk"
+
+          {action, _scope} when action in ["block", "block_final"] ->
+            "block"
+
+          {action, _scope} when action in ["retry", "retry_with_reminder"] ->
+            "retry"
+
+          {"pass", _scope} ->
+            "pass"
+
+          {_action, _scope} ->
+            "annotate"
+        end
+      end
+    )
+  end
+
+  defp latency_exceeded?(observed_ms, max_hold_ms) do
+    CoreRuntime.dispatch(
+      :stream_latency_exceeded,
+      fn -> :wardwright@stream_core.latency_exceeded(observed_ms, max_hold_ms) end,
+      fn -> observed_ms > max_hold_ms end
+    )
   end
 end

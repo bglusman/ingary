@@ -14,6 +14,7 @@ pub type RouteSkip {
     context_window: Int,
     estimated_prompt_tokens: Int,
   )
+  PolicyRouteGate(target: String, context_window: Int)
 }
 
 pub type RouteSelection {
@@ -22,6 +23,17 @@ pub type RouteSelection {
     selected_context_window: Int,
     selected_models: List(String),
     fallback_models: List(String),
+    skipped: List(RouteSkip),
+    route_blocked: Bool,
+    reason: String,
+  )
+}
+
+pub type ForcedSelection {
+  ForcedSelection(
+    selected_model: String,
+    selected_context_window: Int,
+    selected_models: List(String),
     skipped: List(RouteSkip),
     route_blocked: Bool,
     reason: String,
@@ -119,6 +131,53 @@ pub fn select_cascade(
   let #(eligible, skipped) = split_by_context(models, estimated_prompt_tokens)
   let selected = first_or_largest(eligible, all_targets)
   route_selection(selected, eligible, skipped, cascade_reason(length(skipped)))
+}
+
+pub fn select_forced_model(
+  forced: List(Target),
+  policy_skipped_targets: List(Target),
+  estimated_prompt_tokens: Int,
+) -> ForcedSelection {
+  let policy_skips = policy_skips(policy_skipped_targets)
+
+  case forced {
+    [] ->
+      ForcedSelection(
+        selected_model: "unconfigured/no-target",
+        selected_context_window: 0,
+        selected_models: [],
+        skipped: policy_skips,
+        route_blocked: True,
+        reason: forced_model_reason(False, False),
+      )
+
+    [target, ..] if target.context_window < estimated_prompt_tokens ->
+      ForcedSelection(
+        selected_model: "unconfigured/no-target",
+        selected_context_window: 0,
+        selected_models: [],
+        skipped: [
+          ContextTooSmall(
+            target: target.model,
+            context_window: target.context_window,
+            estimated_prompt_tokens: estimated_prompt_tokens,
+          ),
+          ..policy_skips
+        ],
+        route_blocked: True,
+        reason: forced_model_reason(True, False),
+      )
+
+    [target, ..] ->
+      ForcedSelection(
+        selected_model: target.model,
+        selected_context_window: target.context_window,
+        selected_models: [target.model],
+        skipped: policy_skips,
+        route_blocked: False,
+        reason: forced_model_reason(True, True),
+      )
+  }
 }
 
 fn route_selection(
@@ -235,6 +294,19 @@ fn result_is_error(result: Result(a, b)) -> Bool {
   case result {
     Ok(_) -> False
     Error(_) -> True
+  }
+}
+
+fn policy_skips(targets: List(Target)) -> List(RouteSkip) {
+  case targets {
+    [] -> []
+    [target, ..rest] -> [
+      PolicyRouteGate(
+        target: target.model,
+        context_window: target.context_window,
+      ),
+      ..policy_skips(rest)
+    ]
   }
 }
 
