@@ -3,7 +3,7 @@ defmodule WardwrightWeb.MCPServer do
 
   use Hermes.Server,
     name: "wardwright-policy-authoring",
-    version: "0.1.0",
+    version: Mix.Project.config()[:version],
     capabilities: [:tools]
 
   component(WardwrightWeb.MCP.Tools.ExplainProjection, name: "explain_projection")

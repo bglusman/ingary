@@ -44,6 +44,22 @@ description = "Run app on 127.0.0.1:8791"
 env = { WARDWRIGHT_BIND = "127.0.0.1:8791", WARDWRIGHT_ALLOW_TEST_CREDENTIALS = "1" }
 run = "cd app && mix run --no-halt"
 
+[tasks."package:plan"]
+description = "Preview Wardwright Burrito/Tinfoil release artifacts"
+run = "cd app && mix tinfoil.plan"
+
+[tasks."package:build:darwin-arm64"]
+description = "Build a local Burrito-wrapped Wardwright binary for Apple Silicon"
+env = { MIX_ENV = "prod", BURRITO_TARGET = "darwin_arm64" }
+run = """
+ZIG15_PREFIX="$(brew --prefix zig@0.15 2>/dev/null)"
+if [ ! -x "$ZIG15_PREFIX/bin/zig" ]; then
+  echo "zig@0.15 is required for local Burrito builds on macOS. Install it with: brew install zig@0.15" >&2
+  exit 2
+fi
+cd app && PATH="$ZIG15_PREFIX/bin:$PATH" mix release --overwrite
+"""
+
 [tasks."config:app:local"]
 description = "Load ignored local provider targets into the app"
 run = "curl -fsS -X POST http://127.0.0.1:8791/__test/config -H 'Content-Type: application/json' --data-binary @.wardwright.local/provider-targets.json"

@@ -10,6 +10,8 @@
 
 # Elixir
 **/_build/
+**/_tinfoil/
+**/burrito_out/
 **/deps/
 **/cover/
 **/doc/
