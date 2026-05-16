@@ -66,6 +66,147 @@ Receipts expose normalized `request.tool_context`, `decision.tool_context`,
 summaries can filter by tool namespace, name, phase, risk class, source, call
 ID, and tool-policy status.
 
+## Problems To Validate
+
+These are the concrete problem hypotheses tool-aware policy should help test.
+They are not all proven product value yet; each should be evaluated with
+simulation, receipts, and eventually live traces.
+
+### Write-Tool Hardening
+
+Problem: a coding or ops agent may safely use read-only tools most of the time,
+then suddenly prepare a write-capable action such as `github.create_pull_request`,
+`filesystem.write`, `database.migrate`, `calendar.create_event`, or
+`shell.exec`. OWASP classifies unchecked autonomy as excessive agency, and
+insecure plugin/tool design can turn untrusted inputs into severe downstream
+effects.
+
+Tool policy hypothesis: keep the same public synthetic model, but attach stricter
+route, schema, audit, or approval rules only when the tool context implies write
+or external side effects.
+
+Example:
+
+```yaml
+governance:
+  - id: high-risk-write-tools
+    kind: tool_selector
+    action: switch_model
+    target_model: managed/strict-json
+    attach_policy_bundle: write_tool_validation_v1
+    tool:
+      risk_class: write
+      phase: planning
+```
+
+Falsify it if strict routing rarely catches malformed or risky arguments, adds
+too much latency, or policy authors cannot predict when it fires.
+
+### Prompt-Injection Containment
+
+Problem: browser, email, document, and MCP tools pull untrusted content into the
+agent loop. Anthropic's computer-use documentation explicitly describes an
+agent loop where the application executes tool requests and returns results, and
+warns that logged-in/browser use increases prompt-injection risk. Recent MCP
+research also reports prompt-injection and tool-poisoning failures across real
+AI-assisted development tools.
+
+Tool policy hypothesis: treat result interpretation after untrusted tools as a
+distinct phase. Route it through stronger review, block high-risk follow-on
+tools, or require a clean planning step before allowing writes.
+
+Example:
+
+```yaml
+governance:
+  - id: browser-result-before-write
+    kind: tool_selector
+    action: restrict_routes
+    routes: ["managed/injection-aware"]
+    tool:
+      namespace: browser
+      phase: result_interpretation
+
+  - id: no-shell-after-untrusted-page
+    kind: tool_selector
+    action: block
+    tool:
+      namespace: shell
+      risk_class: irreversible
+      phase: planning
+```
+
+The second rule is intentionally shown as a tool facet, not the full sequence
+condition. In a stateful policy, the UI should compile "after untrusted page
+result" into a post-result state or a bounded session-history predicate, then
+apply the shell facet inside that state.
+
+Falsify it if result-phase routing does not reduce bad follow-on tool proposals,
+or if the policy cannot distinguish malicious instructions from legitimate page
+content well enough to help.
+
+### Tool Loop And Cost Control
+
+Problem: tool-capable agents can loop on search, browser, shell, or API calls,
+causing cost, latency, rate-limit, or operational noise. Provider docs for
+computer use recommend explicit iteration limits. Hosted web search tools expose
+provider-side controls such as domain filters, and some providers expose search
+use caps such as `max_uses`.
+
+Tool policy hypothesis: normalized tool facts make repeated tool attempts
+visible in receipts and allow session/run-scoped budgets without hard-coding
+logic into every agent.
+
+Example:
+
+```yaml
+governance:
+  - id: repeated-searches
+    kind: tool_loop_threshold
+    action: switch_model
+    target_model: managed/diagnostic
+    threshold: 4
+    cache_scope: session_id
+    tool:
+      namespace: provider.web_search
+      phase: planning
+```
+
+Falsify it if loops are better controlled entirely by provider-native `max_uses`
+or by the application runtime, with no added value from Wardwright receipts or
+simulation.
+
+### Provider-Hosted Tool Visibility
+
+Problem: some tools run inside the provider backend, such as hosted web search
+or file search. When providers expose events like OpenAI `web_search_call` or
+Anthropic `server_tool_use` / `web_search_tool_result`, Wardwright can normalize
+those facts. When the provider hides internal tool steps, Wardwright cannot
+inspect or interrupt them.
+
+Tool policy hypothesis: provider capability records should declare which hosted
+tool events are visible, which controls can be set pre-call, and which parts are
+opaque. The UI can then show "controllable", "observable", and "opaque" tool
+regions instead of pretending all tool use is equally governable.
+
+Falsify it if most high-value hosted tools expose too little event data for
+receipts or simulation to improve operator decisions.
+
+### Least-Privilege Tool Surfaces
+
+Problem: agents often receive a broad tool list because it is easier than
+building a per-step tool surface. Tool-risk research describes both excessive
+agency, where agents retain unnecessary permissions, and insufficient agency,
+where missing needed tools hurts task completion.
+
+Tool policy hypothesis: tool context plus state/phase facets can compile a
+narrower tool surface for each step while preserving the same model contract.
+The operator should be able to compare "all tools available" versus
+"phase-scoped tools only" in simulation.
+
+Falsify it if narrowed tool surfaces break too many legitimate workflows, or if
+authors cannot understand why a tool was unavailable at a given step.
+
 ## Composition Examples
 
 The simplest tool-specific rule works in the default `active` state and only
@@ -145,9 +286,20 @@ The detailed boundary is recorded in
 
 ## Provider References
 
+- [OWASP Top 10 for LLM Applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/)
+  includes prompt injection, insecure plugin design, excessive agency, and
+  related risks for LLM applications.
 - [OpenAI web search](https://developers.openai.com/api/docs/guides/tools-web-search)
   exposes hosted search through Responses API tool configuration and
   `web_search_call` output items.
 - [Anthropic web search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool)
   exposes server-side search configuration plus `server_tool_use` and
   `web_search_tool_result` response blocks.
+- [Anthropic computer use](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)
+  describes the agent loop and security concerns around logged-in/browser
+  environments.
+- [AgenTRIM: Tool Risk Mitigation for Agentic AI](https://arxiv.org/abs/2601.12449)
+  frames tool-driven agency risks and proposes per-step least-privilege tool
+  access.
+- [Are AI-assisted Development Tools Immune to Prompt Injection?](https://arxiv.org/abs/2603.21642)
+  studies prompt-injection and tool-poisoning risks across MCP clients.
