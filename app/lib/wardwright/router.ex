@@ -272,6 +272,43 @@ defmodule Wardwright.Router do
     end
   end
 
+  get "/v1/policy-authoring/scenarios/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id) do
+      scenarios =
+        pattern_id
+        |> Wardwright.PolicyScenarioStore.list()
+        |> Enum.map(&Wardwright.PolicyScenario.to_map/1)
+
+      json(conn, 200, Map.new([{"data", scenarios}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+    end
+  end
+
+  post "/v1/policy-authoring/scenarios/:pattern_id" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, body} <- require_json_object(conn.body_params),
+         {:ok, scenario_body} <- scenario_payload(body),
+         {:ok, scenario} <- Wardwright.PolicyScenarioStore.create(pattern_id, scenario_body) do
+      json(conn, 201, Map.new([{"scenario", Wardwright.PolicyScenario.to_map(scenario)}]))
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_scenario")
+    end
+  end
+
   post "/v1/policy-authoring/validate" do
     with :ok <- require_protected_access(conn),
          {:ok, artifact, source} <- validation_artifact(conn.body_params) do
@@ -308,6 +345,7 @@ defmodule Wardwright.Router do
       with {:ok, config} <- require_json_object(conn.body_params),
            {:ok, config} <- Wardwright.put_config(config) do
         Wardwright.ReceiptStore.clear()
+        Wardwright.PolicyScenarioStore.clear()
 
         json(conn, 200, %{
           "status" => "ok",
@@ -328,6 +366,15 @@ defmodule Wardwright.Router do
 
   defp require_json_object(value) when is_map(value), do: {:ok, value}
   defp require_json_object(_), do: {:error, "request body must be a JSON object"}
+
+  defp scenario_payload(body) do
+    # boundary-map-ok
+    case Map.fetch(body, "scenario") do
+      {:ok, scenario} when is_map(scenario) -> {:ok, scenario}
+      {:ok, _scenario} -> {:error, "scenario must be a JSON object"}
+      :error -> {:ok, body}
+    end
+  end
 
   defp validation_artifact(body) when body == %{},
     do: {:ok, Wardwright.current_config(), "current_config"}
@@ -1434,12 +1481,15 @@ defmodule Wardwright.Router do
   end
 
   defp require_known_policy_pattern(pattern_id) do
-    if pattern_id in Wardwright.PolicyProjection.pattern_ids() do
+    if known_policy_pattern?(pattern_id) do
       :ok
     else
       {:error, "policy pattern not found"}
     end
   end
+
+  defp known_policy_pattern?(pattern_id),
+    do: pattern_id in Wardwright.PolicyProjection.pattern_ids()
 
   defp receipt_events(receipt_id, created_at, status, decision, called_provider) do
     [

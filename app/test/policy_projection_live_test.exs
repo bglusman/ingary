@@ -28,6 +28,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
   setup do
     Wardwright.reset_config()
     Wardwright.ReceiptStore.clear()
+    Wardwright.PolicyScenarioStore.clear()
     Wardwright.PolicyCache.reset()
     :ok
   end
@@ -85,6 +86,47 @@ defmodule Wardwright.PolicyProjectionLiveTest do
              projection["state_machine"]["simulation_steps"],
              &MapSet.member?(state_ids, &1["state"])
            )
+  end
+
+  test "projection simulations prefer persisted reviewed scenarios over fixtures" do
+    assert {:ok, _scenario} =
+             Wardwright.PolicyScenarioStore.create("tts-retry", %{
+               "scenario_id" => "reviewed-split-trigger",
+               "title" => "Reviewed split trigger",
+               "source" => "assistant",
+               "pinned" => true,
+               "input_summary" => "Reviewed request keeps OldClient split across stream chunks.",
+               "expected_behavior" =>
+                 "Retry is requested before any violating bytes are released.",
+               "verdict" => "passed",
+               "trace" => [
+                 %{
+                   "id" => "r1",
+                   "phase" => "response.streaming",
+                   "node_id" => "tts.no-old-client",
+                   "kind" => "match",
+                   "label" => "reviewed match",
+                   "detail" => "persisted scenario hit the stream rule",
+                   "severity" => "pass",
+                   "state_id" => "guarding"
+                 }
+               ],
+               "receipt_preview" => %{"final_status" => "simulated"}
+             })
+
+    [simulation] = Wardwright.PolicyProjection.simulations("tts-retry")
+    projection = Wardwright.PolicyProjection.projection("tts-retry")
+
+    assert simulation["scenario_id"] == "reviewed-split-trigger"
+    assert simulation["scenario_source"] == "persisted"
+    assert simulation["source"] == "assistant"
+    assert simulation["pinned"] == true
+    assert simulation["artifact_hash"] == projection["artifact"]["artifact_hash"]
+    assert get_in(simulation, ["trace", Access.at(0), "state_id"]) == "guarding"
+
+    assert Enum.map(projection["state_machine"]["simulation_steps"], & &1["state"]) == [
+             "guarding"
+           ]
   end
 
   test "route projection simulation is derived from configured policy plan actions" do

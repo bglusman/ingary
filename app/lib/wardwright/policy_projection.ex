@@ -31,6 +31,16 @@ defmodule Wardwright.PolicyProjection do
 
   def pattern_ids, do: Enum.map(@patterns, &Map.fetch!(&1, "id"))
 
+  def state_ids("tts-retry"), do: ["observing", "guarding", "retrying", "recording"]
+
+  def state_ids(pattern_id) when is_binary(pattern_id) do
+    if pattern_id in pattern_ids() do
+      ["active"]
+    else
+      []
+    end
+  end
+
   def pattern(pattern_id) do
     Enum.find(@patterns, &(&1["id"] == pattern_id)) || hd(@patterns)
   end
@@ -57,7 +67,7 @@ defmodule Wardwright.PolicyProjection do
     artifact_hash = artifact(pattern(pattern_id), config)["artifact_hash"]
 
     pattern_id
-    |> simulation_cases(config)
+    |> simulation_records(config)
     |> Enum.map(&Map.put(&1, "artifact_hash", artifact_hash))
   end
 
@@ -405,7 +415,7 @@ defmodule Wardwright.PolicyProjection do
 
   defp simulation_steps(pattern_id, config, states) do
     pattern_id
-    |> simulation_cases(config)
+    |> simulation_records(config)
     |> List.first(%{})
     |> Map.get("trace", [])
     |> Enum.with_index(1)
@@ -775,6 +785,13 @@ defmodule Wardwright.PolicyProjection do
   defp warnings(_pattern_id, _config),
     do: ["Adds stream latency up to the configured holdback horizon."]
 
+  defp simulation_records(pattern_id, config) do
+    case Wardwright.PolicyScenarioStore.list(pattern_id) do
+      [] -> simulation_cases(pattern_id, config)
+      scenarios -> Enum.map(scenarios, &Wardwright.PolicyScenario.to_map/1)
+    end
+  end
+
   defp simulation_cases("ambiguous-success", _config) do
     [
       %{
@@ -819,6 +836,7 @@ defmodule Wardwright.PolicyProjection do
           "final_status" => "completed_with_alert"
         }
       }
+      |> fixture_case()
     ]
   end
 
@@ -910,6 +928,7 @@ defmodule Wardwright.PolicyProjection do
           ]
         }
       }
+      |> fixture_case()
     ]
   end
 
@@ -939,6 +958,7 @@ defmodule Wardwright.PolicyProjection do
           "final_status" => "simulated"
         }
       }
+      |> fixture_case()
     ]
   end
 
@@ -969,7 +989,16 @@ defmodule Wardwright.PolicyProjection do
         "final_status" => "simulated"
       }
     }
+    |> fixture_case()
   end
+
+  defp fixture_case(simulation) do
+    simulation
+    |> put_string("scenario_source", "fixture")
+    |> put_string("source", "fixture")
+  end
+
+  defp put_string(map, key, value), do: Map.put(map, key, value)
 
   defp route_simulation_text([rule | _rules]) do
     cond do

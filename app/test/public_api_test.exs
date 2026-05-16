@@ -63,6 +63,7 @@ defmodule Wardwright.PublicApiTest do
 
     assert "explain_projection" in tool_names
     assert "simulate_policy" in tool_names
+    assert "record_scenario" in tool_names
     assert "propose_rule_change" in tool_names
     assert "validate_policy_artifact" in tool_names
 
@@ -79,6 +80,95 @@ defmodule Wardwright.PublicApiTest do
              Jason.decode!(simulations.resp_body)["data"]
 
     missing = call(:get, "/v1/policy-authoring/projections/not-real")
+    assert missing.status == 404
+  end
+
+  test "protected policy authoring API persists scenarios for simulation evidence" do
+    rejected =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{}, [], {203, 0, 113, 10})
+
+    assert rejected.status == 403
+
+    scenario = %{
+      "scenario_id" => "api-reviewed-trigger",
+      "title" => "API reviewed trigger",
+      "source" => "user",
+      "pinned" => true,
+      "input_summary" => "A reviewed stream scenario stores the split trigger.",
+      "expected_behavior" => "The stream retry rule fires before release.",
+      "verdict" => "passed",
+      "trace" => [
+        %{
+          "id" => "api-1",
+          "phase" => "response.streaming",
+          "node_id" => "tts.no-old-client",
+          "kind" => "match",
+          "label" => "persisted trace",
+          "detail" => "scenario came from the authoring API",
+          "severity" => "pass",
+          "state_id" => "guarding"
+        }
+      ],
+      "receipt_preview" => %{"final_status" => "simulated"}
+    }
+
+    created = call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => scenario})
+    assert created.status == 201
+
+    created_body = Jason.decode!(created.resp_body)
+    assert get_in(created_body, ["scenario", "scenario_id"]) == "api-reviewed-trigger"
+    assert get_in(created_body, ["scenario", "scenario_source"]) == "persisted"
+
+    listed = call(:get, "/v1/policy-authoring/scenarios/tts-retry")
+    assert listed.status == 200
+    assert [%{"scenario_id" => "api-reviewed-trigger"}] = Jason.decode!(listed.resp_body)["data"]
+
+    simulations = call(:get, "/v1/policy-authoring/simulations/tts-retry")
+    assert simulations.status == 200
+
+    assert [
+             %{
+               "scenario_id" => "api-reviewed-trigger",
+               "scenario_source" => "persisted",
+               "artifact_hash" => "sha256:" <> _hash
+             }
+           ] = Jason.decode!(simulations.resp_body)["data"]
+
+    malformed = call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"trace" => []})
+    assert malformed.status == 400
+
+    invalid_state =
+      put_in(scenario, ["trace", Access.at(0), "state_id"], "not-a-state")
+
+    invalid_state_conn =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => invalid_state})
+
+    assert invalid_state_conn.status == 400
+    assert get_in(Jason.decode!(invalid_state_conn.resp_body), ["error", "message"]) =~ "state_id"
+
+    invalid_trace =
+      put_in(scenario, ["trace", Access.at(0), "label"], "")
+
+    invalid_trace_conn =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => invalid_trace})
+
+    assert invalid_trace_conn.status == 400
+
+    assert get_in(Jason.decode!(invalid_trace_conn.resp_body), ["error", "message"]) =~
+             "trace event"
+
+    invalid_source =
+      Map.put(scenario, "source", "not-reviewed")
+
+    invalid_source_conn =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => invalid_source})
+
+    assert invalid_source_conn.status == 400
+
+    assert get_in(Jason.decode!(invalid_source_conn.resp_body), ["error", "message"]) =~
+             "source"
+
+    missing = call(:post, "/v1/policy-authoring/scenarios/not-real", %{"scenario" => scenario})
     assert missing.status == 404
   end
 

@@ -43,14 +43,15 @@ a clear error that names the missing capability.
 - History-aware policy cache behavior is backed by runtime storage and tests,
   not only projection fixtures.
 - The policy-authoring API has protected HTTP endpoints for tool discovery,
-  projections, and simulations. It is intentionally read-only except for future
-  draft tools.
+  projections, simulations, validation, and persisted authoring scenarios.
+  Scenario writes are minimal and in-memory, but they are real records consumed
+  by simulations instead of hard-coded UI-only state.
 
 ## Still Prototype Or Fixture Backed
 
-- Projection scenarios are canned examples. They are useful as contract
-  examples, but not yet generated from real persisted scenario records or live
-  receipts.
+- Projection simulations prefer persisted scenario records when present, then
+  fall back to explicit fixture examples. Persisted records are in-memory only
+  and do not yet replay live receipts or execute generated inputs.
 - The state-machine model is still embedded in projection code. It should move
   toward artifact-declared states/transitions or a compiler pass that emits a
   state projection from policy primitives and sandbox regions.
@@ -60,8 +61,8 @@ a clear error that names the missing capability.
 - Tool discovery is HTTP-shaped, not MCP-shaped. A Hermes or bespoke MCP adapter
   can wrap the same functions, but no MCP server is implemented yet.
 - The policy workbench is mostly static projection plus live runtime/cache
-  events. It does not yet run user-authored scenarios, persist pinned
-  simulations, or show artifact diffs.
+  events. It can consume persisted scenario records, but does not yet execute
+  user-authored scenarios, turn receipts into scenarios, or show artifact diffs.
 - Canned providers remain first-class in tests and local configs. That is useful
   for deterministic coverage, but remote MVP needs a clear way to distinguish
   demo targets from production targets in UI and API responses.
@@ -100,9 +101,10 @@ Interface expectation:
 
 ## Policy And Simulation Gaps Before Remote MVP
 
-- Scenario records need storage: user-written, assistant-generated, fixture,
-  and live-replay scenarios should be first-class records with source and pinned
-  regression status.
+- Scenario records have a first minimal store: user-written, assistant-generated,
+  fixture, and live-replay scenarios can be represented with source and pinned
+  status. The store is still memory-only and lacks retention, import, or durable
+  regression export.
 - Simulation should execute against compiled policy logic and selected scenario
   inputs instead of only returning canned projection examples.
 - Property/regression export should be wired from pinned scenarios so users can
@@ -140,9 +142,8 @@ Interface expectation:
 
 ## Suggested Next Slices
 
-1. Add persisted scenario records and make projection simulations read from
-   those records when present, falling back to built-in examples only for demo
-   mode.
+1. Add durable scenario storage and a receipt-to-scenario importer so production
+   surprises can become pinned simulations and regression fixtures.
 2. Normalize provider metadata capabilities beyond terminal fields and publish
    the supported metadata contract in provider capability records.
 3. Add a live-provider smoke test profile that is skipped by default but can run

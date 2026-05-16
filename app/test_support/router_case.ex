@@ -120,6 +120,7 @@ defmodule Wardwright.RouterCase do
   setup do
     Wardwright.reset_config()
     Wardwright.ReceiptStore.clear()
+    Wardwright.PolicyScenarioStore.clear()
     Wardwright.PolicyCache.reset()
     :ok
   end

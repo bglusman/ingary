@@ -13,7 +13,13 @@ defmodule WardwrightWeb.PolicyAuthoringTools do
         "simulate_policy",
         "GET",
         "/v1/policy-authoring/simulations/{pattern_id}",
-        "Return canned simulation evidence linked to projection node ids and the current artifact hash."
+        "Return persisted simulation scenarios when present, otherwise explicit fixture evidence linked to projection node ids and the current artifact hash."
+      ),
+      tool(
+        "record_scenario",
+        "POST",
+        "/v1/policy-authoring/scenarios/{pattern_id}",
+        "Persist a user, assistant, fixture, or live-replay scenario so simulations can use reviewed scenario records instead of demo fixtures."
       ),
       tool(
         "propose_rule_change",
