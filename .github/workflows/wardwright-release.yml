@@ -159,7 +159,10 @@ jobs:
 
       - name: Generate Homebrew SHA sidecars
         run: |
-          awk '{print $1 "  " $2 > ("artifacts/" $2 ".sha256")}' artifacts/checksums-sha256.txt
+          find artifacts -maxdepth 1 \( -name '*.tar.gz' -o -name '*.zip' \) -print0 |
+            while IFS= read -r -d '' archive; do
+              sha256sum "$archive" > "$archive.sha256"
+            done
 
       - name: Update Homebrew formula
         working-directory: app
