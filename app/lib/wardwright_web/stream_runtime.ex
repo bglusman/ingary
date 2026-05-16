@@ -29,7 +29,7 @@ defmodule WardwrightWeb.StreamRuntime do
       provider
       |> Map.put(:stream_policy, stream_policy)
       |> Map.put(:stream_chunks, stream_policy.chunks)
-      |> Map.put(:content, Enum.join(acc.chunks))
+      |> Map.put(:content, released_content(acc))
       |> Map.put_new(:structured_output, nil)
 
     Wardwright.Policy.History.record_response(caller, provider.content)
@@ -68,8 +68,7 @@ defmodule WardwrightWeb.StreamRuntime do
        ) do
     stream_acc =
       Map.merge(acc, %{
-        policy: Wardwright.Policy.Stream.start(rules, attempt_index: attempt_index),
-        attempt_released_chunks: []
+        policy: Wardwright.Policy.Stream.start(rules, attempt_index: attempt_index)
       })
 
     {provider, stream_acc} =
@@ -218,7 +217,7 @@ defmodule WardwrightWeb.StreamRuntime do
           |> Map.put(:mock, provider.mock)
           |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
 
-        {policy, %{provider | status: policy.status, content: Enum.join(stream_acc.chunks)},
+        {policy, %{provider | status: policy.status, content: released_content(stream_acc)},
          stream_acc}
 
       policy.status != "completed" and stream_acc.sent? ->
@@ -234,7 +233,7 @@ defmodule WardwrightWeb.StreamRuntime do
           |> Map.put(:mock, provider.mock)
           |> Map.put(:provider_latency_ms, stream_latency_ms(attempts))
 
-        {policy, %{provider | status: policy.status, content: Enum.join(stream_acc.chunks)},
+        {policy, %{provider | status: policy.status, content: released_content(stream_acc)},
          stream_acc}
 
       true ->
@@ -399,9 +398,11 @@ defmodule WardwrightWeb.StreamRuntime do
 
       {:ok, conn} = chunk(acc.conn, "data: #{Jason.encode!(payload)}\n\n")
 
-      %{acc | conn: conn, chunks: acc.chunks ++ [text]}
+      %{acc | conn: conn, chunks: [text | acc.chunks]}
     end)
   end
+
+  defp released_content(acc), do: acc.chunks |> Enum.reverse() |> Enum.join()
 
   defp ensure_sse_started(%{sent?: true} = acc), do: acc
 
