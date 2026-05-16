@@ -15,9 +15,9 @@ state scope + lifecycle phase + tool context + caller/session/history -> action
 
 The default state scope is the one-state `active` projection. More explicit
 state machines may narrow rules by state, but they should not create a separate
-nested policy tree for each tool. State-scoped rule enforcement is target
-contract behavior; the current runtime projects state machines and tool facets
-but does not yet enforce `state_scope`.
+nested policy tree for each tool. The current runtime enforces `state_scope`
+against the latest scoped `policy_state` fact, which is enough for simple
+approval/review flows while keeping the state model explicit.
 
 ## Tool Call Lifecycle
 
@@ -114,7 +114,7 @@ governance:
       phase: planning
 ```
 
-The target stateful contract adds state as one more rule facet:
+Stateful policy adds state as one more rule facet:
 
 ```yaml
 state_machine:
@@ -138,10 +138,9 @@ governance:
 
 The compiler and UI should present rule facets directly: state scope, phase,
 tool matcher, reads, writes, effects, and conflict findings. The current
-projection data already carries phase/tool reads, writes, effects, and conflict
-findings; state scope becomes the same kind of facet once runtime enforcement
-exists. That keeps simple tool policies simple while still allowing them to
-compose with stateful retry or approval flows.
+projection data already carries phase/tool reads, writes, effects, conflict
+findings, and enforced state scope. That keeps simple tool policies simple while
+still allowing them to compose with stateful retry or approval flows.
 
 Loop thresholds count normalized tool history within a declared caller scope:
 
@@ -170,20 +169,21 @@ equivalent tool facts, records scoped policy-state transitions, and can enforce
 ordered cross-tool sequences inside bounded history windows.
 
 Cross-tool sequence enforcement means policy over ordered relationships between
-different tool facts, state transitions, and time or turn windows. For example,
+tool facts, state transitions, and time or turn windows. For example,
 "after a browser result from untrusted content, block shell or filesystem writes
 until a review step succeeds" is a sequence rule. It requires explicit
 predicates for:
 
-- `after`: the prior tool event, state, or receipt fact that starts the
-  condition.
+- `after`: the prior tool event that starts the condition. Prior state and
+  receipt facts are useful future extensions, but are not runtime sequence
+  starters yet.
 - `before`: the later/current tool facet that is being governed. The current
   implementation accepts this directly or as `then.tool` when the sequence also
   names an action.
 - `within`: the maximum turn count, event count, or wall-clock age where the
   prior fact still matters.
 - `until`: the state transition or later tool event that clears the condition.
-- `scope`: the caller/session/run boundary for the sequence.
+- `cache_scope`: the caller/session/run boundary for the sequence.
 - `then`: the ordinary policy action emitted when the later tool facet appears.
 
 Supported shape:

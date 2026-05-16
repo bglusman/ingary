@@ -22,8 +22,8 @@ state scope + lifecycle phase + tool context + caller/session/history -> action
 
 Most policies use the default one-state state machine, named `active`. In that
 case a tool rule simply says "when this tool context appears, take this ordinary
-policy action." The target contract allows a more stateful policy to add
-`state_scope` later without changing what tool context means.
+policy action." A more stateful policy can add `state_scope` without changing
+what tool context means.
 
 ## Tool Lifecycle
 
@@ -80,13 +80,14 @@ ID, and tool-policy status.
 Searchable history is the foundation for sequence control. Sequence-aware policy
 makes ordering, scope, windows, and reset conditions first-class:
 
-- `after`: a prior event or state that must have occurred.
+- `after`: a prior tool event that must have occurred. Prior-state and receipt
+  predicates are useful future extensions, but are not sequence starters yet.
 - `before`: the later/current event facet that is being governed, usually
   expressed as `then.tool` when the rule also names an action.
 - `within`: the turn, event-count, or wall-clock window where the prior event is
   still relevant.
 - `until`: the state transition or tool event that clears the condition.
-- `scope`: the caller/session/run boundary that owns the sequence.
+- `cache_scope`: the caller/session/run boundary that owns the sequence.
 - `then`: the ordinary policy action applied when the later tool facet appears.
 
 Example:
