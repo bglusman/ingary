@@ -383,6 +383,19 @@ components:
         stream:
           type: boolean
           default: false
+        tools:
+          type: array
+          description: OpenAI-compatible tool definitions available to the model.
+          items:
+            type: object
+            additionalProperties: true
+        tool_choice:
+          description: OpenAI-compatible control over whether and which tool the model may call.
+          oneOf:
+            - type: string
+              enum: [none, auto, required]
+            - type: object
+              additionalProperties: true
         metadata:
           type: object
           additionalProperties: true
