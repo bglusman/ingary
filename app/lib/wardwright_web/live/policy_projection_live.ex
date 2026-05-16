@@ -32,13 +32,15 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     selected_simulation_input = default_simulation_input(simulation_inputs)
     simulation_user_input = simulation_field(selected_simulation_input, "user_input")
     simulation_model_response = simulation_field(selected_simulation_input, "model_response")
+    simulation_history_context = simulation_history_context(selected_simulation_input)
 
     selected_simulation =
       selected_simulation(
         pattern_id,
         simulations,
         simulation_user_input,
-        simulation_model_response
+        simulation_model_response,
+        simulation_history_context
       )
 
     simulation_boundary =
@@ -63,6 +65,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     |> assign(:selected_simulation_input_id, simulation_field(selected_simulation_input, "id"))
     |> assign(:simulation_user_input, simulation_user_input)
     |> assign(:simulation_model_response, simulation_model_response)
+    |> assign(:simulation_history_context, simulation_history_context)
     |> assign(:simulation_boundary, simulation_boundary)
     |> assign(:projection_stats, projection_stats(projection, simulations))
     |> assign(:selected_simulation, selected_simulation)
@@ -162,26 +165,34 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
     user_input = simulation_field(input, "user_input")
     model_response = simulation_field(input, "model_response")
+    history_context = simulation_history_context(input)
 
     {:noreply,
      socket
      |> assign(:selected_simulation_input_id, simulation_field(input, "id"))
      |> assign(:simulation_user_input, user_input)
      |> assign(:simulation_model_response, model_response)
-     |> assign_interactive_simulation(user_input, model_response)}
+     |> assign(:simulation_history_context, history_context)
+     |> assign_interactive_simulation(user_input, model_response, history_context)}
   end
 
   def handle_event(
         "edit-simulation-turn",
-        %{"simulation" => %{"user_input" => user_input, "model_response" => model_response}},
+        %{
+          "simulation" =>
+            %{"user_input" => user_input, "model_response" => model_response} = simulation
+        },
         socket
       ) do
+    history_context = simulation_history_context(simulation)
+
     {:noreply,
      socket
      |> assign(:selected_simulation_input_id, "custom")
      |> assign(:simulation_user_input, user_input)
      |> assign(:simulation_model_response, model_response)
-     |> assign_interactive_simulation(user_input, model_response)}
+     |> assign(:simulation_history_context, history_context)
+     |> assign_interactive_simulation(user_input, model_response, history_context)}
   end
 
   def handle_event("pause-simulation", _params, socket) do
@@ -332,6 +343,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             selected_simulation_input_id={@selected_simulation_input_id}
             simulation_user_input={@simulation_user_input}
             simulation_model_response={@simulation_model_response}
+            simulation_history_context={@simulation_history_context}
             simulation_boundary={@simulation_boundary}
             playback_step={@simulation_step}
             playing={@simulation_playing}
@@ -513,6 +525,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   attr(:selected_simulation_input_id, :string, required: true)
   attr(:simulation_user_input, :string, required: true)
   attr(:simulation_model_response, :string, required: true)
+  attr(:simulation_history_context, :map, required: true)
   attr(:simulation_boundary, :map, required: true)
   attr(:playback_step, :integer, required: true)
   attr(:playing, :boolean, required: true)
@@ -608,8 +621,21 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               <textarea name="simulation[model_response]" rows="5"><%= @simulation_model_response %></textarea>
             </label>
             <label :if={@simulation_boundary.output_changed}>
-              <span>User receives after Wardwright</span>
-              <textarea rows="5" readonly><%= @simulation_boundary.user_received_output %></textarea>
+              <span><%= if @simulation_boundary.output_withheld, do: "User-visible output", else: "User receives after Wardwright" %></span>
+              <div :if={@simulation_boundary.output_withheld} class="withheld_notice">
+                No output is released to the user in this simulated branch. Wardwright is holding the stream pending retry, review, or a terminal policy action.
+              </div>
+              <textarea :if={!@simulation_boundary.output_withheld} rows="5" readonly><%= @simulation_boundary.user_received_output %></textarea>
+            </label>
+          </div>
+          <div :if={map_size(@simulation_history_context) > 0} class="history_context_editor">
+            <div>
+              <strong>Referenced history</strong>
+              <span>Edit cached facts this policy reads, then watch the path and receipt recompute.</span>
+            </div>
+            <label :for={{key, value} <- Enum.sort(@simulation_history_context)}>
+              <span><%= history_context_label(key) %></span>
+              <input name={"simulation[history_context][#{key}]"} value={value} />
             </label>
           </div>
         </form>
@@ -977,7 +1003,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .node_annotation p { margin: 8px 0 4px; color: #4c5964; }
     .node_annotation small { color: #66727c; line-height: 1.4; }
     .diagram_trace { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 9px; }
-    .simulation_player { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 10px 14px; align-items: center; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .simulation_player { position: sticky; top: 10px; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 10px 14px; align-items: center; padding: 12px; border: 1px solid #c9d5df; border-radius: 8px; background: rgba(251, 252, 253, 0.96); box-shadow: 0 8px 24px rgba(38, 50, 60, 0.08); backdrop-filter: blur(8px); }
     .player_status, .player_event { display: grid; gap: 4px; min-width: 0; }
     .player_status span, .player_event span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
     .player_meter { grid-column: 1 / -1; height: 10px; overflow: hidden; border: 1px solid #bfd0df; border-radius: 999px; background: #edf2f7; }
@@ -997,6 +1023,13 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .turn_editor textarea { min-height: 116px; padding: 9px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; }
     .turn_editor_grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
     .turn_editor_grid label { display: grid; gap: 6px; min-width: 0; }
+    .history_context_editor { display: grid; gap: 10px; padding: 10px; border: 1px solid #d4dfda; border-radius: 8px; background: #f7fbf8; }
+    .history_context_editor > div { display: grid; gap: 4px; }
+    .history_context_editor strong { color: #263238; }
+    .history_context_editor span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .history_context_editor label { max-width: 420px; }
+    .history_context_editor input { width: 100%; border: 1px solid #cbd6dd; border-radius: 6px; padding: 9px 10px; font: inherit; background: #fff; color: #1d252c; }
+    .withheld_notice { min-height: 116px; padding: 12px; border: 1px solid #dfc1a1; border-radius: 6px; color: #6d4717; background: #fff8ec; font-size: 13px; line-height: 1.45; }
     .boundary_pair { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; border: 1px solid #e0e6ec; border-radius: 8px; background: #fbfcfd; }
     .boundary_pair.changed { grid-template-columns: repeat(2, minmax(0, 1fr)); border-color: #bfd0df; background: #f6f9fb; }
     .trace_event.pending { opacity: 0.46; }
@@ -1080,20 +1113,27 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     }
   end
 
-  defp selected_simulation(_pattern_id, simulations, "", "") do
+  defp selected_simulation(_pattern_id, simulations, "", "", history_context)
+       when history_context == %{} do
     List.first(simulations)
   end
 
-  defp selected_simulation(pattern_id, _simulations, user_input, model_response) do
-    Wardwright.PolicyProjection.simulate_turn(pattern_id, user_input, model_response)
+  defp selected_simulation(pattern_id, _simulations, user_input, model_response, history_context) do
+    Wardwright.PolicyProjection.simulate_turn_with_context(
+      pattern_id,
+      user_input,
+      model_response,
+      history_context
+    )
   end
 
-  defp assign_interactive_simulation(socket, user_input, model_response) do
+  defp assign_interactive_simulation(socket, user_input, model_response, history_context) do
     simulation =
-      Wardwright.PolicyProjection.simulate_turn(
+      Wardwright.PolicyProjection.simulate_turn_with_context(
         socket.assigns.selected_pattern_id,
         user_input,
-        model_response
+        model_response,
+        history_context
       )
 
     socket
@@ -1112,6 +1152,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     %{
       model_received_input: model_received_input,
       user_received_output: user_received_output,
+      output_withheld: Map.get(stream, "released_to_consumer") == false,
       input_changed: model_received_input != (user_input || ""),
       output_changed: user_received_output != (model_response || "")
     }
@@ -1127,7 +1168,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp model_received_input(_receipt, user_input), do: user_input || ""
 
   defp user_received_output(%{"released_to_consumer" => false}, _model_response) do
-    "[withheld by Wardwright pending retry, review, or terminal policy action]"
+    ""
   end
 
   defp user_received_output(%{"rewrites" => rewrites}, model_response) when is_list(rewrites) do
@@ -1151,6 +1192,22 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   defp simulation_field(nil, _field), do: ""
   defp simulation_field(input, field), do: Map.get(input, field, "")
+
+  defp simulation_history_context(nil), do: %{}
+
+  defp simulation_history_context(%{"history_context" => context}) when is_map(context) do
+    context
+    |> Enum.map(fn {key, value} -> {to_string(key), to_string(value)} end)
+    |> Map.new()
+  end
+
+  defp simulation_history_context(_input), do: %{}
+
+  defp history_context_label("recent_related_secret_matches"),
+    do: "Prior related secret matches"
+
+  defp history_context_label("policy_state"), do: "Cached policy state"
+  defp history_context_label(key), do: key |> String.replace("_", " ") |> String.capitalize()
 
   defp default_simulation_input(inputs) do
     Enum.find(inputs, &(&1["relationship"] == "direct")) || List.first(inputs)

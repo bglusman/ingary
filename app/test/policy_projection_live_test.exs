@@ -376,12 +376,12 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Editable turn"
     assert html =~ "Raw user input"
     assert html =~ "Raw model output / stream"
-    assert html =~ "User receives after Wardwright"
+    assert html =~ "User-visible output"
     refute html =~ "Model receives after Wardwright"
     assert html =~ "Relevant examples"
     assert html =~ "Cross-policy probes"
     assert html =~ "review_required"
-    assert html =~ "[withheld by Wardwright pending retry, review, or terminal policy action]"
+    assert html =~ "No output is released to the user in this simulated branch"
 
     changed =
       view
@@ -420,6 +420,39 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert selected =~ "account [account-id]"
     assert selected =~ "request context redacted"
     assert selected =~ "alex@example.test"
+  end
+
+  test "LiveView simulation lets authors edit referenced history that changes behavior" do
+    {:ok, view, _html} = live(build_conn(), "/policies/stream-rewrite-state/diagram")
+
+    selected =
+      view
+      |> element("form[phx-change='select-simulation-input']")
+      |> render_change(%{"simulation_input" => "rewrite-only"})
+
+    assert selected =~ "Referenced history"
+    assert selected =~ "Prior related secret matches"
+    assert selected =~ "rewritten stream released"
+    refute selected =~ "prior related matches read"
+
+    changed =
+      view
+      |> element("form.turn_editor_grid")
+      |> render_change(%{
+        "simulation" => %{
+          "user_input" => "Summarize the billing incident without exposing credentials.",
+          "model_response" => "account acct_4938 appears in the answer with no new token.",
+          "history_context" => %{
+            "recent_related_secret_matches" => "2",
+            "policy_state" => "observing"
+          }
+        }
+      })
+
+    assert changed =~ "prior related matches read"
+    assert changed =~ "2 related secret match"
+    assert changed =~ "review hold selected"
+    assert changed =~ "No output is released to the user in this simulated branch"
   end
 
   test "LiveView diagram keeps cross-policy scenarios selectable for every policy" do

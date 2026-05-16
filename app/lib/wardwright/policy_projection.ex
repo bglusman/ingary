@@ -140,7 +140,11 @@ defmodule Wardwright.PolicyProjection do
           "An account identifier is rewritten, then a related token forces review.",
         "user_input" => "Summarize the billing incident without exposing credentials.",
         "model_response" =>
-          "account acct_4938 appears in the answer\ntoken_live_4938 follows in the held horizon"
+          "account acct_4938 appears in the answer\ntoken_live_4938 follows in the held horizon",
+        "history_context" => %{
+          "recent_related_secret_matches" => "0",
+          "policy_state" => "observing"
+        }
       },
       %{
         "id" => "input-and-output-rewrite",
@@ -150,7 +154,11 @@ defmodule Wardwright.PolicyProjection do
         "user_input" =>
           "Summarize the incident. private_context{customer email is alex@example.test}",
         "model_response" =>
-          "The billing incident for account acct_4938 can be summarized without the private email."
+          "The billing incident for account acct_4938 can be summarized without the private email.",
+        "history_context" => %{
+          "recent_related_secret_matches" => "0",
+          "policy_state" => "observing"
+        }
       },
       %{
         "id" => "rewrite-only",
@@ -158,14 +166,22 @@ defmodule Wardwright.PolicyProjection do
         "description" =>
           "The account identifier is redacted and the rewritten stream is released.",
         "user_input" => "Summarize the billing incident without exposing credentials.",
-        "model_response" => "account acct_4938 appears in the answer\nno related secret follows"
+        "model_response" => "account acct_4938 appears in the answer\nno related secret follows",
+        "history_context" => %{
+          "recent_related_secret_matches" => "0",
+          "policy_state" => "observing"
+        }
       },
       %{
         "id" => "no-match",
         "title" => "Stream: no regex match",
         "description" => "No configured regex matches the held chunks.",
         "user_input" => "Write a neutral status update.",
-        "model_response" => "ordinary response text\nwith no account ids or secret tokens"
+        "model_response" => "ordinary response text\nwith no account ids or secret tokens",
+        "history_context" => %{
+          "recent_related_secret_matches" => "0",
+          "policy_state" => "observing"
+        }
       }
     ]
   end
@@ -195,7 +211,12 @@ defmodule Wardwright.PolicyProjection do
        do: "direct"
 
   defp simulation_input_relationship("stream-rewrite-state", input_id)
-       when input_id in ["rewrite-then-secret", "rewrite-only", "no-match"],
+       when input_id in [
+              "rewrite-then-secret",
+              "input-and-output-rewrite",
+              "rewrite-only",
+              "no-match"
+            ],
        do: "direct"
 
   defp simulation_input_relationship("ambiguous-success", input_id)
@@ -209,8 +230,23 @@ defmodule Wardwright.PolicyProjection do
   end
 
   def simulate_turn(pattern_id, user_input, model_response, config \\ Wardwright.current_config()) do
+    simulate_turn_with_context(pattern_id, user_input, model_response, %{}, config)
+  end
+
+  def simulate_turn_with_context(
+        pattern_id,
+        user_input,
+        model_response,
+        history_context,
+        config \\ Wardwright.current_config()
+      ) do
     artifact_hash = artifact(pattern(pattern_id), config)["artifact_hash"]
-    turn = %{"user_input" => user_input || "", "model_response" => model_response || ""}
+
+    turn = %{
+      "user_input" => user_input || "",
+      "model_response" => model_response || "",
+      "history_context" => normalize_history_context(history_context)
+    }
 
     pattern_id
     |> evaluated_simulation(turn, config)
@@ -1800,14 +1836,19 @@ defmodule Wardwright.PolicyProjection do
     text = turn_response(turn)
     account_match = Regex.run(~r/\bacct_[A-Za-z0-9_]+\b/, text)
     secret_match = Regex.run(~r/\b(token|secret)_[A-Za-z0-9_]+\b/i, text)
+    related_secret_history_count = related_secret_history_count(turn)
     {model_received_input, request_rewrites} = request_rewrite_result(turn_user_input(turn))
     input_preview = turn_input_preview(turn, model_received_input, request_rewrites)
     request_trace = request_rewrite_trace(request_rewrites)
+    history_trace = stream_history_trace(related_secret_history_count)
 
     cond do
-      account_match && secret_match ->
+      account_match && (secret_match || related_secret_history_count > 0) ->
         account = hd(account_match)
-        secret = hd(secret_match)
+        secret = if secret_match, do: hd(secret_match), else: "session history"
+
+        secret_detail =
+          stream_secret_transition_detail(secret_match, secret, related_secret_history_count)
 
         %{
           "simulation_schema" => "wardwright.policy_simulation.v1",
@@ -1820,6 +1861,7 @@ defmodule Wardwright.PolicyProjection do
           "verdict" => "passed",
           "trace" =>
             request_trace ++
+              history_trace ++
               [
                 trace(
                   "i1",
@@ -1847,7 +1889,7 @@ defmodule Wardwright.PolicyProjection do
                   "stream.secret-transition",
                   "match",
                   "related secret matched",
-                  "#{secret} appears after the account rewrite and triggers review_required",
+                  secret_detail,
                   "block",
                   state_id: "review_required"
                 ),
@@ -1883,7 +1925,10 @@ defmodule Wardwright.PolicyProjection do
                 }
               ],
               "state_transition" => "review_required",
-              "released_to_consumer" => false
+              "released_to_consumer" => false,
+              "history" => %{
+                "recent_related_secret_matches" => related_secret_history_count
+              }
             },
             "events" => [
               %{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"},
@@ -1907,6 +1952,7 @@ defmodule Wardwright.PolicyProjection do
           "verdict" => "passed",
           "trace" =>
             request_trace ++
+              history_trace ++
               [
                 trace(
                   "i1",
@@ -2214,6 +2260,31 @@ defmodule Wardwright.PolicyProjection do
     }
   end
 
+  defp stream_secret_transition_detail(nil, _secret, related_secret_history_count) do
+    "#{related_secret_history_count} prior related secret match(es) in session history trigger review_required after this account rewrite"
+  end
+
+  defp stream_secret_transition_detail(_secret_match, secret, _related_secret_history_count) do
+    "#{secret} appears after the account rewrite and triggers review_required"
+  end
+
+  defp stream_history_trace(0), do: []
+
+  defp stream_history_trace(count) do
+    [
+      trace(
+        "ih",
+        "response.streaming",
+        "stream.secret-transition",
+        "history_read",
+        "prior related matches read",
+        "#{count} related secret match(es) found in session history",
+        "info",
+        state_id: "observing"
+      )
+    ]
+  end
+
   defp request_rewrite_result(user_input) do
     Regex.scan(~r/private_context\{[^}]*\}/i, user_input)
     |> Enum.map(&hd/1)
@@ -2284,6 +2355,7 @@ defmodule Wardwright.PolicyProjection do
       "user_input" => turn_user_input(turn),
       "model_received_input" => model_received_input,
       "request_rewrites" => request_rewrites,
+      "history_context" => turn_history_context(turn),
       "model_response" => turn_response(turn),
       "response_chunks" => input_chunks(turn_response(turn))
     }
@@ -2295,6 +2367,43 @@ defmodule Wardwright.PolicyProjection do
   defp turn_response(%{"model_response" => value}) when is_binary(value), do: value
   defp turn_response(%{"text" => value}) when is_binary(value), do: value
   defp turn_response(_turn), do: ""
+
+  defp turn_history_context(%{"history_context" => value}) when is_map(value),
+    do: normalize_history_context(value)
+
+  defp turn_history_context(_turn), do: %{}
+
+  defp related_secret_history_count(turn) do
+    turn
+    |> turn_history_context()
+    |> Map.get("recent_related_secret_matches", "0")
+    |> parse_nonnegative_integer()
+  end
+
+  defp normalize_history_context(context) when is_map(context) do
+    context
+    |> Enum.map(fn {key, value} -> {to_string(key), history_context_value(value)} end)
+    |> Map.new()
+  end
+
+  defp normalize_history_context(_context), do: %{}
+
+  defp history_context_value(value) when is_binary(value), do: value
+  defp history_context_value(value) when is_integer(value), do: Integer.to_string(value)
+  defp history_context_value(value) when is_float(value), do: Float.to_string(value)
+  defp history_context_value(value) when is_boolean(value), do: to_string(value)
+  defp history_context_value(nil), do: ""
+  defp history_context_value(value), do: inspect(value)
+
+  defp parse_nonnegative_integer(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {integer, _rest} when integer > 0 -> integer
+      _ -> 0
+    end
+  end
+
+  defp parse_nonnegative_integer(value) when is_integer(value) and value > 0, do: value
+  defp parse_nonnegative_integer(_value), do: 0
 
   defp input_chunks(text) do
     text
