@@ -534,6 +534,224 @@ defmodule Wardwright.ToolContextPolicyTest do
     assert get_in(expired_receipt, ["decision", "policy_actions"]) == []
   end
 
+  test "tool sequence enforces wall-clock windows through ms and milliseconds aliases" do
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 16, "recent_limit" => 16})
+      |> Map.put("targets", [%{"model" => "local/read", "context_window" => 512}])
+      |> Map.put("governance", [
+        %{
+          "id" => "recent-browser-before-shell-ms",
+          "kind" => "tool_sequence",
+          "cache_scope" => "session_id",
+          "after" => %{
+            "tool" => %{"namespace" => "browser", "phase" => "result_interpretation"}
+          },
+          "within" => %{"ms" => 2_000},
+          "then" => %{
+            "action" => "block",
+            "tool" => %{"namespace" => "shell", "name" => "exec", "phase" => "planning"}
+          }
+        },
+        %{
+          "id" => "stale-browser-before-shell-milliseconds",
+          "kind" => "tool_sequence",
+          "cache_scope" => "session_id",
+          "after" => %{
+            "tool" => %{"namespace" => "browser", "phase" => "result_interpretation"}
+          },
+          "within" => %{"milliseconds" => 1},
+          "then" => %{
+            "action" => "block",
+            "tool" => %{"namespace" => "filesystem", "name" => "write", "phase" => "planning"}
+          }
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    recent_browser =
+      tool_request("sequence-recent-ms-session", "browser", "read_page", "result_interpretation",
+        risk_class: "read_only"
+      )
+
+    recent_shell =
+      tool_request("sequence-recent-ms-session", "shell", "exec", "planning",
+        risk_class: "irreversible"
+      )
+
+    call(:post, "/v1/synthetic/simulate", %{request: recent_browser})
+    recent_conn = call(:post, "/v1/synthetic/simulate", %{request: recent_shell})
+    recent_receipt = recent_conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+
+    assert get_in(recent_receipt, ["final", "status"]) == "policy_failed_closed"
+
+    assert [
+             %{
+               "kind" => "tool_sequence",
+               "rule_id" => "recent-browser-before-shell-ms",
+               "action" => "block"
+             }
+           ] = get_in(recent_receipt, ["decision", "policy_actions"])
+
+    stale_browser =
+      tool_request("sequence-stale-ms-session", "browser", "read_page", "result_interpretation",
+        risk_class: "read_only"
+      )
+
+    stale_write =
+      tool_request("sequence-stale-ms-session", "filesystem", "write", "planning",
+        risk_class: "irreversible"
+      )
+
+    call(:post, "/v1/synthetic/simulate", %{request: stale_browser})
+    Process.sleep(10)
+    stale_conn = call(:post, "/v1/synthetic/simulate", %{request: stale_write})
+    stale_receipt = stale_conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+
+    assert get_in(stale_receipt, ["final", "status"]) == "simulated"
+    assert get_in(stale_receipt, ["decision", "policy_actions"]) == []
+  end
+
+  test "tool sequence resets when an until state is recorded after the prior event" do
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 16, "recent_limit" => 16})
+      |> Map.put("targets", [%{"model" => "local/read", "context_window" => 512}])
+      |> Map.put("governance", [
+        %{
+          "id" => "mark-tool-result-reviewed",
+          "kind" => "tool_sequence",
+          "cache_scope" => "session_id",
+          "after" => %{"tool" => %{"namespace" => "review", "name" => "approve_tool_result"}},
+          "transition_to" => "reviewed_untrusted_tool_result"
+        },
+        %{
+          "id" => "browser-before-shell-until-reviewed-state",
+          "kind" => "tool_sequence",
+          "cache_scope" => "session_id",
+          "after" => %{
+            "tool" => %{"namespace" => "browser", "phase" => "result_interpretation"}
+          },
+          "until" => %{"state" => "reviewed_untrusted_tool_result"},
+          "then" => %{
+            "action" => "block",
+            "tool" => %{"namespace" => "shell", "name" => "exec", "phase" => "planning"}
+          }
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    browser_result =
+      tool_request(
+        "sequence-until-state-session",
+        "browser",
+        "read_page",
+        "result_interpretation",
+        risk_class: "read_only"
+      )
+
+    shell_request =
+      tool_request("sequence-until-state-session", "shell", "exec", "planning",
+        risk_class: "irreversible"
+      )
+
+    review_approval =
+      tool_request("sequence-until-state-session", "review", "approve_tool_result", "planning",
+        content: "review passed"
+      )
+
+    call(:post, "/v1/synthetic/simulate", %{request: browser_result})
+    blocked_conn = call(:post, "/v1/synthetic/simulate", %{request: shell_request})
+    blocked_receipt = blocked_conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+
+    assert get_in(blocked_receipt, ["final", "status"]) == "policy_failed_closed"
+
+    assert [
+             %{
+               "kind" => "tool_sequence",
+               "rule_id" => "browser-before-shell-until-reviewed-state",
+               "action" => "block"
+             }
+           ] = get_in(blocked_receipt, ["decision", "policy_actions"])
+
+    review_conn = call(:post, "/v1/synthetic/simulate", %{request: review_approval})
+    review_receipt = review_conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+
+    assert [
+             %{
+               "kind" => "tool_sequence",
+               "rule_id" => "mark-tool-result-reviewed",
+               "action" => "state_transition",
+               "state_transition" => "reviewed_untrusted_tool_result"
+             }
+           ] = get_in(review_receipt, ["decision", "policy_actions"])
+
+    reset_conn = call(:post, "/v1/synthetic/simulate", %{request: shell_request})
+    reset_receipt = reset_conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+
+    assert get_in(reset_receipt, ["final", "status"]) == "simulated"
+    assert get_in(reset_receipt, ["decision", "policy_actions"]) == []
+  end
+
+  test "tool sequence accepts direct before tool when then only names the action" do
+    config =
+      unit_policy_config()
+      |> Map.put("policy_cache", %{"max_entries" => 12, "recent_limit" => 12})
+      |> Map.put("targets", [%{"model" => "local/read", "context_window" => 512}])
+      |> Map.put("governance", [
+        %{
+          "id" => "browser-before-shell-alias",
+          "kind" => "tool_sequence",
+          "cache_scope" => "session_id",
+          "after" => %{
+            "tool" => %{"namespace" => "browser", "phase" => "result_interpretation"}
+          },
+          "before" => %{
+            "tool" => %{
+              "namespace" => "shell",
+              "name" => "exec",
+              "phase" => "planning",
+              "risk_class" => "irreversible"
+            }
+          },
+          "then" => %{"action" => "block"}
+        }
+      ])
+
+    assert call(:post, "/__test/config", config).status == 200
+
+    browser_result =
+      tool_request(
+        "sequence-before-alias-session",
+        "browser",
+        "read_page",
+        "result_interpretation",
+        risk_class: "read_only"
+      )
+
+    shell_request =
+      tool_request("sequence-before-alias-session", "shell", "exec", "planning",
+        risk_class: "irreversible"
+      )
+
+    call(:post, "/v1/synthetic/simulate", %{request: browser_result})
+    conn = call(:post, "/v1/synthetic/simulate", %{request: shell_request})
+    receipt = conn.resp_body |> Jason.decode!() |> get_in(["receipt"])
+
+    assert get_in(receipt, ["final", "status"]) == "policy_failed_closed"
+
+    assert [
+             %{
+               "kind" => "tool_sequence",
+               "rule_id" => "browser-before-shell-alias",
+               "action" => "block",
+               "sequence_after_key" => "browser:read_page:result_interpretation"
+             }
+           ] = get_in(receipt, ["decision", "policy_actions"])
+  end
+
   test "assistant tool calls produce redacted hashes instead of raw arguments" do
     config =
       unit_policy_config()
