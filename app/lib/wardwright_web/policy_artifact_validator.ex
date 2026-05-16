@@ -8,7 +8,10 @@ defmodule WardwrightWeb.PolicyArtifactValidator do
                           "receipt_annotation",
                           "route_gate",
                           "history_threshold",
-                          "history_regex_threshold"
+                          "history_regex_threshold",
+                          "tool_selector",
+                          "tool_loop_threshold",
+                          "tool_sequence"
                         ])
   @supported_stream_actions MapSet.new([
                               "pass",

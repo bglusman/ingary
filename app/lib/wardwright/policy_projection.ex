@@ -3,6 +3,18 @@ defmodule Wardwright.PolicyProjection do
 
   alias Wardwright.PolicyProjection.Contract
 
+  @kind_key "kind"
+  @transition_to_key "transition_to"
+  @then_key "then"
+  @action_key "action"
+  @tool_sequence_kind "tool_sequence"
+  @tool_loop_threshold_kind "tool_loop_threshold"
+  @state_transition_action "state_transition"
+  @decision_tool_context_read "decision.tool_context"
+  @policy_cache_tool_call_read "policy_cache.session.tool_call"
+  @policy_cache_state_read "policy_cache.session.policy_state"
+  @policy_actions_write "policy.actions"
+
   @patterns [
     %{
       "id" => "tts-retry",
@@ -589,6 +601,7 @@ defmodule Wardwright.PolicyProjection do
         "tool_allowlist",
         "tool_denylist",
         "tool_loop_threshold",
+        @tool_sequence_kind,
         "tool_result_guard"
       ] or
         phase in [
@@ -611,7 +624,7 @@ defmodule Wardwright.PolicyProjection do
   end
 
   defp tool_loop_rule?(rule) do
-    Map.get(rule, "kind") == "tool_loop_threshold" or
+    Map.get(rule, @kind_key) in [@tool_loop_threshold_kind, @tool_sequence_kind] or
       Map.get(rule, "phase") == "tool.loop_governing"
   end
 
@@ -746,6 +759,16 @@ defmodule Wardwright.PolicyProjection do
   end
 
   defp default_tool_action(%{"kind" => "tool_loop_threshold"}), do: "fail_closed"
+
+  defp default_tool_action(%{@kind_key => @tool_sequence_kind, @transition_to_key => _state}),
+    do: @state_transition_action
+
+  defp default_tool_action(%{
+         @kind_key => @tool_sequence_kind,
+         @then_key => %{@action_key => action}
+       }),
+       do: action
+
   defp default_tool_action(%{"kind" => "tool_result_guard"}), do: "review_result"
   defp default_tool_action(%{"kind" => "tool_denylist"}), do: "deny_tool"
   defp default_tool_action(_rule), do: "constrain_tools"
@@ -784,6 +807,13 @@ defmodule Wardwright.PolicyProjection do
   defp tool_governance_reads(%{"kind" => "tool_loop_threshold"}, _phase),
     do: ["decision.tool_context", "policy_cache.session.tool_call"]
 
+  defp tool_governance_reads(%{@kind_key => @tool_sequence_kind}, _phase),
+    do: [
+      @decision_tool_context_read,
+      @policy_cache_tool_call_read,
+      @policy_cache_state_read
+    ]
+
   defp tool_governance_reads(_rule, "tool.result_interpreting"),
     do: ["decision.tool_context", "tool.result_hash", "tool.result_status"]
 
@@ -793,6 +823,10 @@ defmodule Wardwright.PolicyProjection do
   defp tool_governance_writes("deny_tool"), do: ["decision.blocked", "tool.allowed"]
   defp tool_governance_writes("fail_closed"), do: ["decision.blocked", "final.status"]
   defp tool_governance_writes("review_result"), do: ["policy.actions", "receipt.events"]
+
+  defp tool_governance_writes(@state_transition_action),
+    do: [@policy_actions_write, @policy_cache_state_read]
+
   defp tool_governance_writes(_action), do: ["tool.allowed", "policy.actions"]
 
   defp no_tool_policy_node(phase, label) do

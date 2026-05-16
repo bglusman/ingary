@@ -163,11 +163,11 @@ session-scoped `tool_call` policy-cache event kind. Cross-session and
 tenant-level tool memory should wait for explicit durable storage, privacy, and
 retention rules.
 
-## Sequence Policy Target
+## Sequence Policy
 
-The current implementation records normalized tool facts and can count repeated
-equivalent tool facts. That is enough for loop thresholds, but not enough to
-claim full cross-tool sequence enforcement.
+The current implementation records normalized tool facts, counts repeated
+equivalent tool facts, records scoped policy-state transitions, and can enforce
+ordered cross-tool sequences inside bounded history windows.
 
 Cross-tool sequence enforcement means policy over ordered relationships between
 different tool facts, state transitions, and time or turn windows. For example,
@@ -177,13 +177,16 @@ predicates for:
 
 - `after`: the prior tool event, state, or receipt fact that starts the
   condition.
+- `before`: the later/current tool facet that is being governed. The current
+  implementation accepts this directly or as `then.tool` when the sequence also
+  names an action.
 - `within`: the maximum turn count, event count, or wall-clock age where the
   prior fact still matters.
 - `until`: the state transition or later tool event that clears the condition.
 - `scope`: the caller/session/run boundary for the sequence.
 - `then`: the ordinary policy action emitted when the later tool facet appears.
 
-Target shape:
+Supported shape:
 
 ```yaml
 governance:
@@ -205,11 +208,38 @@ governance:
         phase: planning
 ```
 
-The target may compile to explicit state-machine transitions plus scoped
-history predicates rather than remain a standalone runtime primitive. Either
-way, the UI should present the ordered event path, the active window, and the
-reset condition so the author can understand why the later tool was allowed or
-blocked.
+The implementation can also compile a sequence into explicit state transitions
+plus state-scoped selectors:
+
+```yaml
+governance:
+  - id: enter-untrusted-review
+    kind: tool_sequence
+    cache_scope: session_id
+    after:
+      tool:
+        namespace: browser
+        phase: result_interpretation
+    transition_to: reviewing_untrusted_tool_result
+
+  - id: block-shell-while-reviewing
+    kind: tool_selector
+    cache_scope: session_id
+    state_scope: reviewing_untrusted_tool_result
+    action: block
+    tool:
+      namespace: shell
+      risk_class: irreversible
+      phase: planning
+```
+
+The first implementation is deliberately bounded: sequence windows are recent
+event/turn windows, state is represented by the latest scoped `policy_state`
+fact, and raw tool arguments/results remain excluded from history. Multiple
+independent state machines in the same scope should use disjoint state names
+until a `state_machine_id` facet is added to the runtime contract. The UI should
+present the ordered event path, the active window, and the reset condition so the
+author can understand why the later tool was allowed or blocked.
 
 ## Receipts And Search
 

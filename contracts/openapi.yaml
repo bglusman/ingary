@@ -550,10 +550,10 @@ components:
         id: { type: string }
         kind:
           type: string
-          enum: [request_guard, request_transform, route_gate, stream_guard, structured_output, receipt_annotation, history_threshold, history_regex_threshold, tool_selector, tool_loop_threshold, custom]
+          enum: [request_guard, request_transform, route_gate, stream_guard, structured_output, receipt_annotation, history_threshold, history_regex_threshold, tool_selector, tool_loop_threshold, tool_sequence, custom]
         action:
           type: string
-          enum: [pass, transform, validate_or_block, inject_reminder_and_retry, restrict_routes, switch_model, reroute, escalate, alert_async, block, block_final, annotate]
+          enum: [pass, transform, validate_or_block, inject_reminder_and_retry, restrict_routes, switch_model, reroute, escalate, alert_async, block, block_final, annotate, state_transition]
         engine:
           type: string
           description: Optional implementation hint, such as builtin, starlark, dune, wasm, or sidecar. Not required for portable configs.

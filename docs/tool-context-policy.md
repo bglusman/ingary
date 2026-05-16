@@ -53,40 +53,43 @@ usage details, Wardwright can only govern the pre-call route/provider/tool
 configuration and the final visible response; it cannot inspect or stop each
 hidden internal step.
 
-Tool-aware governance currently has two built-in rule shapes:
+Tool-aware governance currently has three built-in rule shapes:
 
 - `tool_selector` matches normalized tool context and emits ordinary policy
   actions such as `restrict_routes`, `switch_model`, `reroute`, `block`,
   `annotate`, or `alert_async`.
 - `tool_loop_threshold` counts repeated normalized tool facts in bounded policy
   history and emits ordinary policy actions when the threshold fires.
+- `tool_sequence` evaluates ordered relationships between scoped tool/state
+  facts. It can transition policy state after a matched tool event, or apply a
+  later action when an `after` event is still inside the configured window and no
+  `until` reset has occurred.
 
-Those rule shapes cover current-event matching and repeated-tool counting. They
-do not yet express ordered relationships between different tool events, such as
-"a browser result happened, then a shell write was requested before review." That
-cross-tool sequence capability should be built on the same normalized event
-history, but it needs explicit state/window predicates so authors can see why a
-later tool was blocked.
+Those rule shapes cover current-event matching, repeated-tool counting, and a
+first pass at ordered sequence control. The sequence implementation deliberately
+uses explicit state/window predicates so authors can see why a later tool was
+blocked.
 
 Receipts expose normalized `request.tool_context`, `decision.tool_context`,
 `decision.tool_policy_selectors`, and `final.tool_policy` when relevant. Receipt
 summaries can filter by tool namespace, name, phase, risk class, source, call
 ID, and tool-policy status.
 
-## Sequence Policy Target
+## Sequence Policy
 
-Searchable history is the foundation for sequence control, but not the complete
-policy model. Sequence-aware policy should make ordering, scope, windows, and
-reset conditions first-class:
+Searchable history is the foundation for sequence control. Sequence-aware policy
+makes ordering, scope, windows, and reset conditions first-class:
 
 - `after`: a prior event or state that must have occurred.
+- `before`: the later/current event facet that is being governed, usually
+  expressed as `then.tool` when the rule also names an action.
 - `within`: the turn, event-count, or wall-clock window where the prior event is
   still relevant.
 - `until`: the state transition or tool event that clears the condition.
 - `scope`: the caller/session/run boundary that owns the sequence.
 - `then`: the ordinary policy action applied when the later tool facet appears.
 
-Example target shape:
+Example:
 
 ```yaml
 state_machine:
@@ -116,10 +119,12 @@ governance:
       phase: planning
 ```
 
-The current runtime records normalized tool events and supports bounded counts.
-It should not yet be treated as a complete sequence engine because it does not
-match arbitrary `A then B` patterns, reset hazard windows, or enforce
-`state_scope`.
+The current runtime supports this scoped shape for tool facts and policy-state
+facts. It is still intentionally narrow: windows are recent event/turn windows,
+state is represented by the latest scoped `policy_state` fact, and raw tool
+payloads stay out of history. Multiple independent state machines in the same
+session should use disjoint state names for now; a future `state_machine_id`
+facet should make that isolation explicit.
 
 ## Problems To Validate
 
