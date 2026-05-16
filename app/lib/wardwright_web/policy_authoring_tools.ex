@@ -28,6 +28,18 @@ defmodule WardwrightWeb.PolicyAuthoringTools do
         "Import an existing receipt as a pinned live-replay scenario for later simulation evidence and regression export."
       ),
       tool(
+        "export_regression_pack",
+        "GET",
+        "/v1/policy-authoring/scenarios/{pattern_id}/regression-export",
+        "Export pinned scenario records as a deterministic regression pack for review or downstream native test generation."
+      ),
+      tool(
+        "apply_scenario_retention",
+        "POST",
+        "/v1/policy-authoring/scenarios/{pattern_id}/retention",
+        "Prune oldest unpinned scenario records for a policy pattern while always preserving pinned regression scenarios."
+      ),
+      tool(
         "propose_rule_change",
         "not_implemented",
         nil,

@@ -3,6 +3,8 @@ defmodule Wardwright.Router do
 
   use Plug.Router
 
+  @max_unpinned_key "max_unpinned"
+
   plug(Plug.Logger)
 
   plug(Plug.Parsers,
@@ -332,6 +334,43 @@ defmodule Wardwright.Router do
     end
   end
 
+  get "/v1/policy-authoring/scenarios/:pattern_id/regression-export" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, export} <- Wardwright.PolicyScenarioStore.regression_export(pattern_id) do
+      json(conn, 200, export)
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_regression_export")
+    end
+  end
+
+  post "/v1/policy-authoring/scenarios/:pattern_id/retention" do
+    with :ok <- require_protected_access(conn),
+         true <- known_policy_pattern?(pattern_id),
+         {:ok, body} <- require_json_object(conn.body_params),
+         {:ok, max_unpinned} <- retention_max_unpinned(body),
+         {:ok, retention} <-
+           Wardwright.PolicyScenarioStore.enforce_retention(pattern_id, max_unpinned) do
+      json(conn, 200, retention)
+    else
+      {:error, :protected, message} ->
+        error(conn, 403, message, "forbidden", "protected_endpoint")
+
+      false ->
+        error(conn, 404, "policy pattern not found", "not_found", "policy_pattern_not_found")
+
+      {:error, message} when is_binary(message) ->
+        error(conn, 400, message, "invalid_request", "invalid_policy_scenario_retention")
+    end
+  end
+
   post "/v1/policy-authoring/validate" do
     with :ok <- require_protected_access(conn),
          {:ok, artifact, source} <- validation_artifact(conn.body_params) do
@@ -419,6 +458,13 @@ defmodule Wardwright.Router do
   end
 
   defp validation_artifact(_body), do: {:error, "request body must be a JSON object"}
+
+  defp retention_max_unpinned(body) do
+    case Map.get(body, @max_unpinned_key) do
+      value when is_integer(value) and value >= 0 -> {:ok, value}
+      _value -> {:error, "max_unpinned must be a non-negative integer"}
+    end
+  end
 
   defp override_model(request, nil), do: request
   defp override_model(request, ""), do: request

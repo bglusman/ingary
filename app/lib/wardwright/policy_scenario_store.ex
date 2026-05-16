@@ -7,6 +7,10 @@ defmodule Wardwright.PolicyScenarioStore do
 
   defstruct path: nil, scenarios: %{}
 
+  @pattern_id_key "pattern_id"
+  @max_unpinned_key "max_unpinned"
+  @pruned_count_key "pruned_count"
+
   def start_link(_opts) do
     path = Application.get_env(:wardwright, :policy_scenario_store_path)
     Agent.start_link(fn -> load_state!(path) end, name: __MODULE__)
@@ -42,6 +46,49 @@ defmodule Wardwright.PolicyScenarioStore do
       Map.get(state.scenarios, key(pattern_id, scenario_id))
     end)
   end
+
+  def regression_export(pattern_id) do
+    with :ok <- known_pattern(pattern_id) do
+      scenarios =
+        pattern_id
+        |> list()
+        |> Enum.filter(& &1.pinned)
+        |> Enum.map(&PolicyScenario.to_map/1)
+
+      {:ok,
+       Map.new([
+         {"schema", "wardwright.policy_regression_pack.v1"},
+         {"pattern_id", pattern_id},
+         {"generated_at",
+          DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()},
+         {"scenario_count", length(scenarios)},
+         {"scenarios", scenarios}
+       ])}
+    end
+  end
+
+  def enforce_retention(pattern_id, max_unpinned)
+      when is_integer(max_unpinned) and max_unpinned >= 0 do
+    with :ok <- known_pattern(pattern_id) do
+      result =
+        Agent.get_and_update(__MODULE__, fn %__MODULE__{} = state ->
+          {updated_scenarios, pruned} = prune_unpinned(state.scenarios, pattern_id, max_unpinned)
+          updated = %__MODULE__{state | scenarios: updated_scenarios}
+
+          case persist(updated) do
+            :ok -> {{:ok, retention_result(pattern_id, max_unpinned, pruned, updated)}, updated}
+            {:error, message} -> {{:error, message}, state}
+          end
+        end)
+
+      with {:ok, retention} <- result do
+        publish_retention(retention)
+      end
+    end
+  end
+
+  def enforce_retention(_pattern_id, _max_unpinned),
+    do: {:error, "max_unpinned must be a non-negative integer"}
 
   def clear do
     Agent.get_and_update(__MODULE__, fn %__MODULE__{} = state ->
@@ -80,6 +127,8 @@ defmodule Wardwright.PolicyScenarioStore do
            {"durable", durable},
            {"atomic_rewrite", durable},
            {"receipt_import", true},
+           {"regression_export", true},
+           {"unpinned_retention", true},
            {"scenario_replay", false}
          ])}
       ])
@@ -138,6 +187,20 @@ defmodule Wardwright.PolicyScenarioStore do
     )
 
     {:ok, scenario}
+  end
+
+  defp publish_retention(retention) do
+    Wardwright.Runtime.Events.publish(
+      Wardwright.Runtime.Events.topic(:simulations),
+      Map.new([
+        {"type", "policy_scenario.retention_applied"},
+        {"pattern_id", Map.get(retention, @pattern_id_key)},
+        {"max_unpinned", Map.get(retention, @max_unpinned_key)},
+        {"pruned_count", Map.get(retention, @pruned_count_key)}
+      ])
+    )
+
+    {:ok, retention}
   end
 
   defp load_state!(path) do
@@ -210,6 +273,45 @@ defmodule Wardwright.PolicyScenarioStore do
       {:error, %Jason.EncodeError{} = error} -> {:error, Exception.message(error)}
       {:error, message} when is_binary(message) -> {:error, message}
     end
+  end
+
+  defp prune_unpinned(scenarios, pattern_id, max_unpinned) do
+    {target_unpinned, rest} =
+      Enum.split_with(scenarios, fn {{scenario_pattern_id, _scenario_id}, scenario} ->
+        scenario_pattern_id == pattern_id and not scenario.pinned
+      end)
+
+    keep_ids =
+      target_unpinned
+      |> Enum.map(fn {key, scenario} -> {key, scenario_sort_key(scenario)} end)
+      |> Enum.sort_by(fn {_key, sort_key} -> sort_key end, :desc)
+      |> Enum.take(max_unpinned)
+      |> Enum.map(fn {key, _sort_key} -> key end)
+      |> MapSet.new()
+
+    {kept_unpinned, pruned} =
+      Enum.split_with(target_unpinned, fn {key, _scenario} -> MapSet.member?(keep_ids, key) end)
+
+    {Map.new(rest ++ kept_unpinned), Enum.map(pruned, fn {_key, scenario} -> scenario end)}
+  end
+
+  defp scenario_sort_key(scenario),
+    do: {scenario.created_at || "", scenario.updated_at || "", scenario.id}
+
+  defp retention_result(pattern_id, max_unpinned, pruned, %__MODULE__{} = state) do
+    remaining_unpinned =
+      state.scenarios
+      |> Map.values()
+      |> Enum.count(&(&1.pattern_id == pattern_id and not &1.pinned))
+
+    Map.new([
+      {"schema", "wardwright.policy_scenario_retention.v1"},
+      {"pattern_id", pattern_id},
+      {"max_unpinned", max_unpinned},
+      {"pruned_count", length(pruned)},
+      {"remaining_unpinned_count", remaining_unpinned},
+      {"pruned_scenario_ids", Enum.map(pruned, & &1.id)}
+    ])
   end
 
   defp json_get(map, key) when is_map(map), do: Map.get(map, key)

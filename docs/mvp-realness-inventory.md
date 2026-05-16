@@ -55,6 +55,9 @@ a clear error that names the missing capability.
   Scenario writes are minimal but real records consumed by simulations instead
   of hard-coded UI-only state. The store is memory-backed by default and can be
   configured to persist records to a local JSON file.
+- Pinned authoring scenarios can be exported as a versioned regression pack, and
+  retention can prune oldest unpinned scenario records without deleting pinned
+  regression evidence.
 
 ## Still Prototype Or Fixture Backed
 
@@ -112,12 +115,12 @@ a clear error that names the missing capability.
 
 - Scenario records have a first minimal store: user-written, assistant-generated,
   fixture, and live-replay scenarios can be represented with source and pinned
-  status. The store supports optional JSON-file durability and receipt import,
-  but still lacks retention policy and durable regression export.
+  status. The store supports optional JSON-file durability, receipt import,
+  pinned regression export, and unpinned retention pruning.
 - Simulation should execute against compiled policy logic and selected scenario
   inputs instead of only returning canned projection examples.
-- Property/regression export should be wired from pinned scenarios so users can
-  turn surprising behavior into reviewable tests.
+- Regression export is JSON-only. It does not yet generate native StreamData,
+  Hypothesis, or Gleam test modules from pinned scenarios.
 - State-machine projection needs source spans and artifact references, not only
   node ids, so the UI can explain which config or DSL clause created each
   state/transition.
@@ -155,4 +158,4 @@ Interface expectation:
    configured OpenAI-compatible target.
 2. Spike Hermes MCP over the protected authoring API without changing policy
    engine internals.
-3. Add retention and regression-export paths for pinned scenario records.
+3. Generate native regression test modules from pinned scenario packs.

@@ -65,6 +65,8 @@ defmodule Wardwright.PublicApiTest do
     assert "simulate_policy" in tool_names
     assert "record_scenario" in tool_names
     assert "import_receipt_scenario" in tool_names
+    assert "export_regression_pack" in tool_names
+    assert "apply_scenario_retention" in tool_names
     assert "propose_rule_change" in tool_names
     assert "validate_policy_artifact" in tool_names
 
@@ -239,6 +241,71 @@ defmodule Wardwright.PublicApiTest do
     assert missing_receipt.status == 404
   end
 
+  test "protected policy authoring API exports pinned scenarios and prunes unpinned records" do
+    pinned = scenario_fixture("pinned-regression", true)
+    old_unpinned = scenario_fixture("old-unpinned", false, "2026-05-01T00:00:00Z")
+    new_unpinned = scenario_fixture("new-unpinned", false, "2026-05-02T00:00:00Z")
+
+    assert call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => pinned}).status ==
+             201
+
+    assert call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => old_unpinned}).status ==
+             201
+
+    assert call(:post, "/v1/policy-authoring/scenarios/tts-retry", %{"scenario" => new_unpinned}).status ==
+             201
+
+    rejected_export =
+      call(
+        :get,
+        "/v1/policy-authoring/scenarios/tts-retry/regression-export",
+        nil,
+        [],
+        {203, 0, 113, 10}
+      )
+
+    assert rejected_export.status == 403
+
+    export = call(:get, "/v1/policy-authoring/scenarios/tts-retry/regression-export")
+    assert export.status == 200
+
+    export_body = Jason.decode!(export.resp_body)
+    assert export_body["schema"] == "wardwright.policy_regression_pack.v1"
+    assert export_body["scenario_count"] == 1
+    assert [%{"scenario_id" => "pinned-regression", "pinned" => true}] = export_body["scenarios"]
+
+    retention =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/retention", %{
+        "max_unpinned" => 1
+      })
+
+    assert retention.status == 200
+
+    retention_body = Jason.decode!(retention.resp_body)
+    assert retention_body["schema"] == "wardwright.policy_scenario_retention.v1"
+    assert retention_body["pruned_count"] == 1
+    assert retention_body["remaining_unpinned_count"] == 1
+    assert retention_body["pruned_scenario_ids"] == ["old-unpinned"]
+
+    listed = call(:get, "/v1/policy-authoring/scenarios/tts-retry")
+    assert listed.status == 200
+
+    scenario_ids =
+      listed.resp_body
+      |> Jason.decode!()
+      |> Map.fetch!("data")
+      |> Enum.map(& &1["scenario_id"])
+
+    assert scenario_ids == ["new-unpinned", "pinned-regression"]
+
+    invalid_retention =
+      call(:post, "/v1/policy-authoring/scenarios/tts-retry/retention", %{
+        "max_unpinned" => -1
+      })
+
+    assert invalid_retention.status == 400
+  end
+
   test "protected policy validation reports errors and explicit review gaps" do
     rejected =
       call(:post, "/v1/policy-authoring/validate", %{}, [], {203, 0, 113, 10})
@@ -320,5 +387,33 @@ defmodule Wardwright.PublicApiTest do
 
     body = Jason.decode!(conn.resp_body)
     assert get_in(body, ["receipt", "decision", "selected_model"]) == "managed/kimi-k2.6"
+  end
+
+  defp scenario_fixture(id, pinned, created_at \\ nil) do
+    [
+      {"scenario_id", id},
+      {"title", "Scenario #{id}"},
+      {"source", "user"},
+      {"pinned", pinned},
+      {"input_summary", "Input for #{id}."},
+      {"expected_behavior", "The stream retry rule remains linked to guarding."},
+      {"verdict", "passed"},
+      {"trace",
+       [
+         %{
+           "id" => "#{id}-trace",
+           "phase" => "response.streaming",
+           "node_id" => "tts.no-old-client",
+           "kind" => "match",
+           "label" => "persisted trace",
+           "detail" => "scenario fixture",
+           "severity" => "pass",
+           "state_id" => "guarding"
+         }
+       ]},
+      {"created_at", created_at}
+    ]
+    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
   end
 end

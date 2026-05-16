@@ -142,6 +142,70 @@ defmodule Wardwright.StorageAndAdminTest do
              Wardwright.PolicyScenarioStore.list("tts-retry")
 
     assert Wardwright.PolicyScenarioStore.health()["capabilities"]["durable"] == true
+    assert Wardwright.PolicyScenarioStore.health()["capabilities"]["regression_export"] == true
+    assert Wardwright.PolicyScenarioStore.health()["capabilities"]["unpinned_retention"] == true
+  end
+
+  test "policy scenario retention persists pruning while preserving pinned records" do
+    path =
+      Path.join(System.tmp_dir!(), "wardwright-policy-retention-#{System.unique_integer()}.json")
+
+    on_exit(fn ->
+      Wardwright.PolicyScenarioStore.configure_storage(nil)
+      File.rm(path)
+      File.rm("#{path}.tmp")
+    end)
+
+    assert {:ok, _state} = Wardwright.PolicyScenarioStore.configure_storage(path)
+
+    for {id, pinned, created_at} <- [
+          {"retention-pinned", true, "2026-05-01T00:00:00Z"},
+          {"retention-old-unpinned", false, "2026-05-02T00:00:00Z"},
+          {"retention-new-unpinned", false, "2026-05-03T00:00:00Z"}
+        ] do
+      assert {:ok, _scenario} =
+               Wardwright.PolicyScenarioStore.create("tts-retry", %{
+                 "scenario_id" => id,
+                 "title" => "Retention #{id}",
+                 "source" => "assistant",
+                 "pinned" => pinned,
+                 "created_at" => created_at,
+                 "input_summary" => "A retained scenario survives pruning.",
+                 "expected_behavior" =>
+                   "Pinned evidence remains while old unpinned records prune.",
+                 "verdict" => "passed",
+                 "trace" => [
+                   %{
+                     "id" => "#{id}-trace",
+                     "node_id" => "tts.no-old-client",
+                     "label" => "retention fixture",
+                     "severity" => "pass",
+                     "state_id" => "guarding"
+                   }
+                 ]
+               })
+    end
+
+    assert {:ok,
+            %{
+              "pruned_count" => 1,
+              "remaining_unpinned_count" => 1,
+              "pruned_scenario_ids" => ["retention-old-unpinned"]
+            }} = Wardwright.PolicyScenarioStore.enforce_retention("tts-retry", 1)
+
+    assert {:ok, _state} = Wardwright.PolicyScenarioStore.configure_storage(nil)
+    assert Wardwright.PolicyScenarioStore.list("tts-retry") == []
+
+    assert {:ok, _state} = Wardwright.PolicyScenarioStore.configure_storage(path)
+
+    assert Wardwright.PolicyScenarioStore.list("tts-retry")
+           |> Enum.map(& &1.id)
+           |> MapSet.new() ==
+             MapSet.new(["retention-new-unpinned", "retention-pinned"])
+
+    assert {:ok,
+            %{"scenario_count" => 1, "scenarios" => [%{"scenario_id" => "retention-pinned"}]}} =
+             Wardwright.PolicyScenarioStore.regression_export("tts-retry")
   end
 
   test "protected prototype endpoints reject non-local callers without an admin token" do
