@@ -41,6 +41,10 @@ a clear error that names the missing capability.
   supported adapter shapes. The map describes endpoint shape, stream format,
   auth scheme, terminal metadata support, cancellation confidence, unsupported
   stream delta fields, and the current unsupported-options policy.
+- Live provider smoke tests have an explicit non-CI profile. `mise run
+  test:live-providers` fails clearly unless at least one live target is
+  configured, then verifies streaming, receipt metadata, and non-mock provider
+  execution against those configured targets.
 - Policy retry loops are real for stream guards. A retry can inject a reminder,
   reroute when the retry prompt exceeds the current model context window, and
   record the attempt path in receipts.
@@ -74,9 +78,10 @@ a clear error that names the missing capability.
 
 ## Provider Streaming Gaps Before Remote MVP
 
-- Real-provider smoke tests should run outside CI against at least local Ollama
-  and one OpenAI-compatible provider. Current tests use local fake HTTP
-  providers, which prove transport shape but not provider-specific drift.
+- Real-provider smoke tests now have a local profile, but they still need to be
+  run and reviewed against the operator's actual Ollama and OpenAI-compatible
+  targets before remote MVP. Baseline CI still uses local fake HTTP providers,
+  which prove transport shape but not provider-specific drift.
 - Upstream stream metadata is only minimally preserved. OpenAI `finish_reason`,
   usage chunks, refusal fields, and common Ollama terminal timing/count fields
   are allowlisted in receipts and advertised in provider capability records, but
@@ -146,8 +151,8 @@ Interface expectation:
 
 ## Suggested Next Slices
 
-1. Add a live-provider smoke test profile that is skipped by default but can run
-   against local Ollama and one configured OpenAI-compatible target.
+1. Run and harden the live-provider smoke profile against local Ollama and one
+   configured OpenAI-compatible target.
 2. Spike Hermes MCP over the protected authoring API without changing policy
    engine internals.
 3. Add retention and regression-export paths for pinned scenario records.

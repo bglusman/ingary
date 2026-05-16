@@ -41,6 +41,18 @@ Run the active native suite with:
 (cd app && mise exec -- mix format --check-formatted && mise exec -- mix test)
 ```
 
+Live provider smoke tests are outside the default suite. Configure at least one
+target, then run:
+
+```bash
+WARDWRIGHT_LIVE_OLLAMA_MODEL=qwen2.5-coder:latest mise run test:live-providers
+
+WARDWRIGHT_LIVE_OPENAI_MODEL=gpt-4.1-mini \
+WARDWRIGHT_LIVE_OPENAI_BASE_URL=https://api.openai.com/v1 \
+WARDWRIGHT_LIVE_OPENAI_API_KEY=... \
+mise run test:live-providers
+```
+
 ## Local Development
 
 Run the active app:
