@@ -49,6 +49,8 @@ defmodule Wardwright.Application do
         |> Application.get_env(WardwrightWeb.Endpoint, [])
         |> Keyword.merge(
           http: [ip: host, port: port],
+          url: [host: endpoint_host(host), port: port],
+          check_origin: check_origins(host, port),
           server: true,
           secret_key_base: secret_key_base()
         )
@@ -72,6 +74,24 @@ defmodule Wardwright.Application do
   end
 
   defp serve_http?, do: Application.get_env(:wardwright, :serve_http, true)
+
+  defp endpoint_host(host) do
+    case :inet.ntoa(host) |> to_string() do
+      "0.0.0.0" -> "localhost"
+      "::" -> "localhost"
+      host -> host
+    end
+  end
+
+  defp check_origins(host, port) do
+    host = endpoint_host(host)
+
+    ["localhost", "127.0.0.1", host]
+    |> Enum.uniq()
+    |> Enum.flat_map(fn origin_host ->
+      ["http://#{origin_host}:#{port}", "//#{origin_host}:#{port}"]
+    end)
+  end
 
   defp bind do
     raw = System.get_env("WARDWRIGHT_BIND", "127.0.0.1:8787")

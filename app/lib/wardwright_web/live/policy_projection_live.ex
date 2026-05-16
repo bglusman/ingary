@@ -3,7 +3,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   use Phoenix.LiveView
 
-  @modes ["phase_map", "state_machine", "effect_matrix", "trace_overlay"]
+  @modes ["diagram", "phase_map", "state_machine", "effect_matrix", "trace_overlay"]
 
   @impl true
   def mount(params, _session, socket) do
@@ -24,22 +24,51 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp assign_projection(socket, params) do
     pattern_id = normalize_pattern(Map.get(params, "pattern"))
     mode = normalize_mode(Map.get(params, "mode"))
+    recipe_source_id = normalize_recipe_source(Map.get(params, "source"))
+    recipe_catalog = recipe_catalog(recipe_source_id)
     projection = Wardwright.PolicyProjection.projection(pattern_id)
     simulations = Wardwright.PolicyProjection.simulations(pattern_id)
+    simulation_inputs = Wardwright.PolicyProjection.simulation_inputs(pattern_id)
+    selected_simulation_input = default_simulation_input(simulation_inputs)
+    simulation_user_input = simulation_field(selected_simulation_input, "user_input")
+    simulation_model_response = simulation_field(selected_simulation_input, "model_response")
+
+    selected_simulation =
+      selected_simulation(
+        pattern_id,
+        simulations,
+        simulation_user_input,
+        simulation_model_response
+      )
+
+    simulation_boundary =
+      simulation_boundary(selected_simulation, simulation_user_input, simulation_model_response)
+
     selected_node = first_node(projection)
+    simulation_step = normalize_step(Map.get(params, "step"), selected_simulation)
 
     socket
     |> assign(:page_title, "Policy Workbench")
     |> assign(:modes, @modes)
-    |> assign(:patterns, Wardwright.PolicyProjection.patterns())
+    |> assign(:recipe_sources, recipe_sources())
+    |> assign(:selected_recipe_source_id, recipe_source_id)
+    |> assign(:recipe_catalog, recipe_catalog)
+    |> assign(:patterns, recipe_catalog["recipes"])
     |> assign(:selected_pattern, Wardwright.PolicyProjection.pattern(pattern_id))
     |> assign(:selected_pattern_id, pattern_id)
     |> assign(:mode, mode)
     |> assign(:projection, projection)
     |> assign(:simulations, simulations)
+    |> assign(:simulation_inputs, simulation_inputs)
+    |> assign(:selected_simulation_input_id, simulation_field(selected_simulation_input, "id"))
+    |> assign(:simulation_user_input, simulation_user_input)
+    |> assign(:simulation_model_response, simulation_model_response)
+    |> assign(:simulation_boundary, simulation_boundary)
     |> assign(:projection_stats, projection_stats(projection, simulations))
-    |> assign(:selected_simulation, List.first(simulations))
+    |> assign(:selected_simulation, selected_simulation)
     |> assign(:selected_node, selected_node)
+    |> assign(:simulation_playing, false)
+    |> assign(:simulation_step, simulation_step)
     |> assign_new(:runtime_status, fn -> Wardwright.Runtime.status() end)
     |> assign_new(:runtime_events, fn -> [] end)
     |> assign_new(:policy_cache_status, fn -> Wardwright.PolicyCache.status() end)
@@ -60,6 +89,126 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   @impl true
+  def handle_info(:advance_simulation, socket) do
+    if socket.assigns.simulation_playing do
+      trace_count = trace_count(socket.assigns.selected_simulation)
+      next_step = min(socket.assigns.simulation_step + 1, trace_count)
+      playing = next_step < trace_count
+
+      socket =
+        socket
+        |> assign(:simulation_step, next_step)
+        |> assign(:simulation_playing, playing)
+
+      if playing do
+        schedule_simulation_tick()
+      end
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("play-simulation", _params, socket) do
+    trace_count = trace_count(socket.assigns.selected_simulation)
+
+    simulation_step =
+      if socket.assigns.simulation_step >= trace_count do
+        0
+      else
+        socket.assigns.simulation_step
+      end
+
+    socket =
+      socket
+      |> assign(
+        :simulation_step,
+        simulation_step
+      )
+      |> assign(
+        :simulation_playing,
+        trace_count > 0
+      )
+
+    if socket.assigns.simulation_playing do
+      schedule_simulation_tick()
+    end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("select-recipe-source", %{"recipe_source" => source_id}, socket) do
+    {:noreply,
+     push_patch(socket,
+       to:
+         path(
+           socket.assigns.selected_pattern_id,
+           socket.assigns.mode,
+           normalize_recipe_source(source_id)
+         )
+     )}
+  end
+
+  def handle_event("select-simulation-input", %{"simulation_input" => input_id}, socket) do
+    input =
+      socket.assigns.simulation_inputs
+      |> Enum.find(&(&1["id"] == input_id))
+      |> case do
+        nil -> List.first(socket.assigns.simulation_inputs)
+        found -> found
+      end
+
+    user_input = simulation_field(input, "user_input")
+    model_response = simulation_field(input, "model_response")
+
+    {:noreply,
+     socket
+     |> assign(:selected_simulation_input_id, simulation_field(input, "id"))
+     |> assign(:simulation_user_input, user_input)
+     |> assign(:simulation_model_response, model_response)
+     |> assign_interactive_simulation(user_input, model_response)}
+  end
+
+  def handle_event(
+        "edit-simulation-turn",
+        %{"simulation" => %{"user_input" => user_input, "model_response" => model_response}},
+        socket
+      ) do
+    {:noreply,
+     socket
+     |> assign(:selected_simulation_input_id, "custom")
+     |> assign(:simulation_user_input, user_input)
+     |> assign(:simulation_model_response, model_response)
+     |> assign_interactive_simulation(user_input, model_response)}
+  end
+
+  def handle_event("pause-simulation", _params, socket) do
+    {:noreply, assign(socket, :simulation_playing, false)}
+  end
+
+  def handle_event("reset-simulation", _params, socket) do
+    {:noreply, assign(socket, simulation_playing: false, simulation_step: 0)}
+  end
+
+  def handle_event("step-simulation", _params, socket) do
+    trace_count = trace_count(socket.assigns.selected_simulation)
+
+    next_step =
+      if socket.assigns.simulation_step >= trace_count do
+        0
+      else
+        socket.assigns.simulation_step + 1
+      end
+
+    {:noreply,
+     socket
+     |> assign(:simulation_playing, false)
+     |> assign(:simulation_step, next_step)}
+  end
+
+  @impl true
   def render(assigns) do
     ~H"""
     <aside class="sidebar">
@@ -72,14 +221,34 @@ defmodule WardwrightWeb.PolicyProjectionLive do
       </div>
 
       <nav>
+        <form class="recipe_source" phx-change="select-recipe-source">
+          <label for="recipe_source">Recipe source</label>
+          <select id="recipe_source" name="recipe_source">
+            <option
+              :for={source <- @recipe_sources}
+              value={source["id"]}
+              selected={source["id"] == @selected_recipe_source_id}
+            >
+              <%= source["label"] %>
+            </option>
+          </select>
+          <small><%= @recipe_catalog["source"]["endpoint"] || "compiled into this build" %></small>
+          <small>Community hub: wardwright.dev/recipes</small>
+          <span class="recipe_source_status"><%= recipe_catalog_status(@recipe_catalog) %></span>
+        </form>
+
         <a
           :for={pattern <- @patterns}
-          class={if pattern["id"] == @selected_pattern_id, do: "active", else: ""}
-          href={path(pattern["id"], @mode)}
+          class={if pattern["pattern_id"] == @selected_pattern_id, do: "active", else: ""}
+          href={path(pattern["pattern_id"], @mode, @selected_recipe_source_id)}
         >
           <strong><%= pattern["title"] %></strong>
           <span><%= pattern["category"] %></span>
         </a>
+        <div :if={@patterns == []} class="recipe_empty">
+          <strong>No recipes loaded</strong>
+          <span><%= recipe_catalog_status(@recipe_catalog) %></span>
+        </div>
       </nav>
 
       <div class="sidebar_footer">
@@ -145,11 +314,29 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         </div>
 
         <div class="mode_tabs">
-          <a :for={mode <- @modes} class={if mode == @mode, do: "active", else: ""} href={path(@selected_pattern_id, mode)}>
-            <%= mode_label(mode) %>
+          <a
+            :for={mode <- @modes}
+            class={if mode == @mode, do: "active", else: ""}
+            href={path(@selected_pattern_id, mode, @selected_recipe_source_id)}
+          >
+            <strong><%= mode_label(mode) %></strong>
+            <small><%= mode_hint(mode) %></small>
           </a>
         </div>
 
+        <%= if @mode == "diagram" do %>
+          <.policy_diagram
+            projection={@projection}
+            simulation={@selected_simulation}
+            simulation_inputs={@simulation_inputs}
+            selected_simulation_input_id={@selected_simulation_input_id}
+            simulation_user_input={@simulation_user_input}
+            simulation_model_response={@simulation_model_response}
+            simulation_boundary={@simulation_boundary}
+            playback_step={@simulation_step}
+            playing={@simulation_playing}
+          />
+        <% else %>
         <%= if @mode == "effect_matrix" do %>
           <.effect_matrix projection={@projection} />
         <% else %>
@@ -162,6 +349,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               <.phase_map projection={@projection} />
             <% end %>
           <% end %>
+        <% end %>
         <% end %>
       </section>
 
@@ -199,6 +387,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             <div>
               <h2>Selected Node</h2>
               <p><%= @selected_node["summary"] %></p>
+              <details class="node_annotation">
+                <summary>Why this exists</summary>
+                <p><%= node_annotation(@selected_node, "why") %></p>
+                <small><%= node_annotation(@selected_node, "change_when") %></small>
+              </details>
             </div>
             <.badge value={@selected_node["confidence"]} />
           </div>
@@ -315,8 +508,185 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   attr(:projection, :map, required: true)
+  attr(:simulation, :map, required: true)
+  attr(:simulation_inputs, :list, required: true)
+  attr(:selected_simulation_input_id, :string, required: true)
+  attr(:simulation_user_input, :string, required: true)
+  attr(:simulation_model_response, :string, required: true)
+  attr(:simulation_boundary, :map, required: true)
+  attr(:playback_step, :integer, required: true)
+  attr(:playing, :boolean, required: true)
+
+  def policy_diagram(assigns) do
+    assigns =
+      assigns
+      |> assign(:diagram, diagram(assigns.projection, assigns.simulation, assigns.playback_step))
+      |> assign(:current_event, current_trace_event(assigns.simulation, assigns.playback_step))
+      |> assign(:trace_count, trace_count(assigns.simulation))
+
+    ~H"""
+    <div class="diagram_shell">
+      <div class="diagram_header">
+        <div>
+          <strong>Projection graph</strong>
+          <span>Nodes are backend projection facts; edges show order, state transitions, effects, conflicts, and simulated execution.</span>
+        </div>
+        <div class="diagram_legend">
+          <span><i class="legend_shape primitive"></i>primitive</span>
+          <span><i class="legend_shape arbiter"></i>arbiter</span>
+          <span><i class="legend_shape rule"></i>rule</span>
+          <span><i class="legend_shape receipt"></i>receipt</span>
+          <span><i class="legend_dot exact"></i>exact</span>
+          <span><i class="legend_dot inferred"></i>declared</span>
+          <span><i class="legend_line trace"></i>simulated path</span>
+          <span><i class="legend_line conflict"></i>conflict</span>
+        </div>
+      </div>
+
+      <div class="simulation_player" aria-label="Simulation playback">
+        <div class="player_status">
+          <strong>Simulated stream playback</strong>
+          <span><%= simulation_status(@current_event, @playback_step, @trace_count) %></span>
+        </div>
+        <div class="player_meter" aria-label={"Simulation step #{@playback_step} of #{@trace_count}"}>
+          <span style={"width: #{simulation_progress(@playback_step, @trace_count)}%;"}></span>
+        </div>
+        <div class="player_controls">
+          <button type="button" phx-click={if @playing, do: "pause-simulation", else: "play-simulation"}>
+            <%= if @playing, do: "Pause", else: "Play" %>
+          </button>
+          <button type="button" phx-click="step-simulation">Step</button>
+          <button type="button" phx-click="reset-simulation">Reset</button>
+        </div>
+        <div class="player_event">
+          <.badge value={if @current_event, do: @current_event["kind"], else: "ready"} />
+          <strong><%= if @current_event, do: @current_event["label"], else: "waiting at input boundary" %></strong>
+          <span><%= if @current_event, do: @current_event["detail"], else: @simulation["input_summary"] %></span>
+        </div>
+      </div>
+
+      <div :if={@simulation_inputs != []} class="turn_editor">
+        <div class="turn_editor_header">
+          <div>
+            <strong>Editable turn</strong>
+            <span>Change either side of the simulated exchange to recompute the highlighted path.</span>
+          </div>
+          <form phx-change="select-simulation-input">
+            <label for="simulation_input">Scenario</label>
+            <select id="simulation_input" name="simulation_input">
+              <option value="custom" selected={@selected_simulation_input_id == "custom"}>Custom edited turn</option>
+              <optgroup
+                :for={{relationship, inputs} <- simulation_input_groups(@simulation_inputs)}
+                label={simulation_relationship_label(relationship)}
+              >
+                <option
+                  :for={input <- inputs}
+                  value={input["id"]}
+                  selected={input["id"] == @selected_simulation_input_id}
+                >
+                  <%= input["title"] %>
+                </option>
+              </optgroup>
+            </select>
+          </form>
+        </div>
+
+        <form phx-change="edit-simulation-turn" class="turn_editor_grid">
+          <div class={boundary_pair_class(@simulation_boundary.input_changed)}>
+            <label>
+              <span>Raw user input</span>
+              <textarea name="simulation[user_input]" rows="5"><%= @simulation_user_input %></textarea>
+            </label>
+            <label :if={@simulation_boundary.input_changed}>
+              <span>Model receives after Wardwright</span>
+              <textarea rows="5" readonly><%= @simulation_boundary.model_received_input %></textarea>
+            </label>
+          </div>
+          <div class={boundary_pair_class(@simulation_boundary.output_changed)}>
+            <label>
+              <span>Raw model output / stream</span>
+              <textarea name="simulation[model_response]" rows="5"><%= @simulation_model_response %></textarea>
+            </label>
+            <label :if={@simulation_boundary.output_changed}>
+              <span>User receives after Wardwright</span>
+              <textarea rows="5" readonly><%= @simulation_boundary.user_received_output %></textarea>
+            </label>
+          </div>
+        </form>
+      </div>
+
+      <div class="diagram_canvas">
+        <svg
+          role="img"
+          aria-label="Policy projection graph"
+          viewBox={"0 0 #{@diagram.width} #{@diagram.height}"}
+          preserveAspectRatio="xMinYMin meet"
+        >
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="arrow_fill" />
+            </marker>
+            <marker id="trace-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="trace_fill" />
+            </marker>
+          </defs>
+
+          <g class="phase_bands">
+            <g :for={phase <- @diagram.phases}>
+              <rect x={phase.x} y="42" width={phase.width} height={@diagram.height - 92} rx="10" class="phase_band" />
+              <text x={phase.x + 16} y="70" class="phase_title"><%= phase.title %></text>
+              <text x={phase.x + 16} y="91" class="phase_caption"><%= phase.id %></text>
+            </g>
+          </g>
+
+          <g class="diagram_edges">
+            <line
+              :for={edge <- @diagram.edges}
+              x1={edge.x1}
+              y1={edge.y1}
+              x2={edge.x2}
+              y2={edge.y2}
+              class={"diagram_edge #{edge.kind} #{if edge.active, do: "active", else: ""}"}
+              marker-end={edge.marker}
+            />
+          </g>
+
+          <g class="diagram_effects">
+            <g :for={effect <- @diagram.effects}>
+              <path d={pill_path(effect)} class={"effect_node #{effect.confidence}"} />
+              <text x={effect.x + 10} y={effect.y + 18} class="effect_title"><%= effect.effect %></text>
+              <text x={effect.x + 10} y={effect.y + 35} class="effect_caption"><%= effect.target %></text>
+            </g>
+          </g>
+
+          <g class="diagram_nodes">
+            <g :for={node <- @diagram.nodes}>
+              <path d={node_path(node)} class={"diagram_node #{node.shape} #{node.confidence} #{if node.executed, do: "executed", else: ""} #{if node.active, do: "active", else: ""}"} />
+              <title><%= node.tooltip %></title>
+              <text x={node.x + 12} y={node.y + 21} class="node_title"><%= node.label %></text>
+              <text x={node.x + 12} y={node.y + 42} class="node_kind"><%= node.kind %></text>
+            </g>
+          </g>
+        </svg>
+      </div>
+
+      <div class="diagram_trace">
+        <article :for={{event, index} <- Enum.with_index(@simulation["trace"], 1)} class={"trace_event #{event["severity"]} #{trace_step_class(index, @playback_step)}"}>
+          <span><%= event["phase"] %></span>
+          <strong><%= event["label"] %></strong>
+          <.badge value={event["kind"]} />
+          <small><%= event["detail"] %></small>
+        </article>
+      </div>
+    </div>
+    """
+  end
+
+  attr(:projection, :map, required: true)
 
   def state_machine_view(assigns) do
+    assigns = assign(assigns, :state_diagram, state_diagram(assigns.projection["state_machine"]))
+
     ~H"""
     <div class="state_machine">
       <div class="state_machine_summary">
@@ -325,6 +695,34 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <span><%= @projection["state_machine"]["summary"] %></span>
         </div>
         <.badge value={if @projection["state_machine"]["default_projection"], do: "default one-state", else: "explicit stateful"} />
+      </div>
+
+      <div class="state_diagram_canvas">
+        <svg
+          role="img"
+          aria-label="State machine transition graph"
+          viewBox={"0 0 #{@state_diagram.width} #{@state_diagram.height}"}
+          preserveAspectRatio="xMidYMid meet"
+        >
+          <defs>
+            <marker id="state-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" class="state_arrow_fill" />
+            </marker>
+          </defs>
+          <g class="state_diagram_edges">
+            <g :for={edge <- @state_diagram.edges}>
+              <line x1={edge.x1} y1={edge.y1} x2={edge.x2} y2={edge.y2} class="state_diagram_edge" marker-end="url(#state-arrow)" />
+              <text x={(edge.x1 + edge.x2) / 2} y={edge.y1 - 12} class="state_edge_label"><%= edge.trigger %></text>
+            </g>
+          </g>
+          <g class="state_diagram_nodes">
+            <g :for={state <- @state_diagram.states}>
+              <rect x={state.x} y={state.y} width={state.width} height={state.height} rx="8" class={"state_diagram_node #{state.role}"} />
+              <text x={state.x + 12} y={state.y + 25} class="state_node_title"><%= state.label %></text>
+              <text x={state.x + 12} y={state.y + 47} class="state_node_caption"><%= state.id %></text>
+            </g>
+          </g>
+        </svg>
       </div>
 
       <div class="state_grid">
@@ -500,6 +898,10 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     nav a { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid transparent; border-radius: 6px; }
     nav a span { color: #adbac5; font-size: 12px; }
     nav a.active, nav a:hover { border-color: #6f7f8e; background: #34424e; }
+    .recipe_source, .recipe_empty { display: grid; gap: 6px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; }
+    .recipe_source label, .recipe_source span, .recipe_source small, .recipe_empty span { color: #adbac5; font-size: 12px; font-weight: 700; }
+    .recipe_source select { min-width: 0; min-height: 32px; border: 1px solid #657583; border-radius: 6px; color: #e6ebef; background: #25313b; font-weight: 800; }
+    .recipe_source_status { line-height: 1.35; }
     .sidebar_footer { margin-top: auto; padding: 14px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; overflow-wrap: anywhere; }
     .workspace { min-width: 0; padding: 28px; }
     .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
@@ -519,9 +921,86 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .scan_strip span { color: #66727c; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .scan_strip strong { color: #17202a; font-size: 18px; line-height: 1.2; }
     .scan_strip small { color: #5e6b76; line-height: 1.35; overflow-wrap: anywhere; }
-    .mode_tabs { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid #d5dde4; border-radius: 8px; background: #f3f6f8; }
-    .mode_tabs a { border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; }
+    .mode_tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid #d5dde4; border-radius: 8px; background: #f3f6f8; }
+    .mode_tabs a { display: grid; gap: 2px; min-width: 118px; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; }
+    .mode_tabs small { color: #66727c; font-size: 11px; font-weight: 700; line-height: 1.25; }
     .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; }
+    .diagram_shell { display: grid; gap: 12px; }
+    .diagram_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .diagram_header > div:first-child { display: grid; gap: 4px; min-width: 0; }
+    .diagram_header span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .diagram_legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 12px; max-width: 560px; }
+    .diagram_legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .legend_shape { display: inline-block; width: 18px; height: 12px; border: 1.5px solid #7f8d99; background: #fff; }
+    .legend_shape.primitive { border-radius: 2px; border-color: #6f9fd1; background: #eef6ff; }
+    .legend_shape.arbiter { clip-path: polygon(12% 0, 88% 0, 100% 50%, 88% 100%, 12% 100%, 0 50%); border-color: transparent; background: #e7ddf7; }
+    .legend_shape.rule { border-radius: 8px; border-color: #72ad99; background: #edf8f3; }
+    .legend_shape.receipt { border-radius: 1px; border-color: #9a8c65; background: #fff7df; }
+    .legend_dot { width: 11px; height: 11px; border: 1px solid #94a3af; border-radius: 999px; background: #edf2f7; }
+    .legend_dot.exact { border-color: #78b59f; background: #cfeee2; }
+    .legend_dot.inferred { border-color: #d2aa49; background: #f7df9a; }
+    .legend_dot.opaque { border-color: #cf7777; background: #f0b5b5; }
+    .legend_line { width: 22px; height: 0; border-top: 3px solid #64748b; }
+    .legend_line.trace { border-top-color: #2f74b5; }
+    .legend_line.conflict { border-top-color: #b4232e; border-top-style: dashed; }
+    .diagram_canvas { overflow: auto; border: 1px solid #d5dde4; border-radius: 8px; background: linear-gradient(180deg, #f8fafc, #f2f5f7); }
+    .diagram_canvas svg { display: block; min-width: 860px; width: 100%; height: auto; }
+    .phase_band { fill: #ffffff; stroke: #dbe3ea; stroke-width: 1; }
+    .phase_title { fill: #26323c; font-size: 14px; font-weight: 800; }
+    .phase_caption { fill: #6b7883; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .diagram_edge { stroke: #8392a0; stroke-width: 2; }
+    .diagram_edge.effect { stroke: #66727c; stroke-dasharray: 4 4; }
+    .diagram_edge.state { stroke: #6e55a8; stroke-width: 2.4; }
+    .diagram_edge.trace { stroke: #2f74b5; stroke-width: 4; stroke-linecap: round; opacity: 0.82; }
+    .diagram_edge.trace.active { stroke: #0b5cad; stroke-width: 6; opacity: 1; }
+    .diagram_edge.conflict { stroke: #b4232e; stroke-width: 2.4; stroke-dasharray: 7 5; }
+    .arrow_fill { fill: #66727c; }
+    .trace_fill { fill: #2f74b5; }
+    .diagram_node { fill: #f7f9fb; stroke: #aebbc6; stroke-width: 1.4; }
+    .diagram_node.primitive { fill: #eef6ff; stroke: #6f9fd1; }
+    .diagram_node.arbiter { fill: #f3effb; stroke: #876cbd; }
+    .diagram_node.rule { fill: #edf8f3; stroke: #72ad99; }
+    .diagram_node.receipt { fill: #fff7df; stroke: #c5a650; }
+    .diagram_node.plan_gap { fill: #f7f9fb; stroke: #9aa8b4; stroke-dasharray: 6 4; }
+    .diagram_node.declared, .diagram_node.inferred { stroke-width: 1.8; }
+    .diagram_node.opaque { fill: #fff1f1; stroke: #cf7777; }
+    .diagram_node.executed { stroke: #2f74b5; stroke-width: 3; }
+    .diagram_node.active { fill: #e4f1ff; stroke: #0b5cad; stroke-width: 4; }
+    .effect_node { fill: #ffffff; stroke: #b7c2cc; stroke-width: 1.2; }
+    .effect_node.exact { fill: #f0faf6; stroke: #94c7b5; }
+    .effect_node.declared, .effect_node.inferred { fill: #fffaf0; stroke: #d9bd72; }
+    .effect_node.opaque { fill: #fff5f5; stroke: #df9a9a; }
+    .node_title, .effect_title { fill: #17202a; font-size: 13px; font-weight: 800; }
+    .node_kind, .effect_caption { fill: #5e6b76; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .node_annotation { margin-top: 8px; color: #4c5964; }
+    .node_annotation summary { width: fit-content; cursor: pointer; color: #2f5f87; font-size: 13px; font-weight: 800; }
+    .node_annotation p { margin: 8px 0 4px; color: #4c5964; }
+    .node_annotation small { color: #66727c; line-height: 1.4; }
+    .diagram_trace { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 9px; }
+    .simulation_player { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 10px 14px; align-items: center; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .player_status, .player_event { display: grid; gap: 4px; min-width: 0; }
+    .player_status span, .player_event span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .player_meter { grid-column: 1 / -1; height: 10px; overflow: hidden; border: 1px solid #bfd0df; border-radius: 999px; background: #edf2f7; }
+    .player_meter span { display: block; height: 100%; border-radius: inherit; background: #2f74b5; transition: width 180ms ease; }
+    .player_controls { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+    .player_controls button { min-height: 32px; padding: 5px 10px; border: 1px solid #c5d0d9; border-radius: 6px; color: #26323c; background: #fff; font-weight: 800; cursor: pointer; }
+    .player_controls button:hover { border-color: #8fa1b2; background: #f3f6f8; }
+    .player_event { grid-column: 1 / -1; grid-template-columns: max-content minmax(0, 0.3fr) minmax(0, 1fr); align-items: center; padding: 10px; border: 1px solid #dbe2e8; border-radius: 8px; background: #fff; }
+    .turn_editor { display: grid; gap: 10px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fff; }
+    .turn_editor_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .turn_editor_header > div { display: grid; gap: 4px; min-width: 0; }
+    .turn_editor_header span, .turn_editor label span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .turn_editor_header form { display: grid; gap: 4px; min-width: 220px; }
+    .turn_editor_header label, .turn_editor label span { font-weight: 800; }
+    .turn_editor select, .turn_editor textarea { width: 100%; border: 1px solid #cbd5df; border-radius: 6px; color: #17202a; background: #fbfcfd; font: inherit; }
+    .turn_editor select { min-height: 34px; padding: 5px 8px; font-weight: 800; }
+    .turn_editor textarea { min-height: 116px; padding: 9px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; }
+    .turn_editor_grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+    .turn_editor_grid label { display: grid; gap: 6px; min-width: 0; }
+    .boundary_pair { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; border: 1px solid #e0e6ec; border-radius: 8px; background: #fbfcfd; }
+    .boundary_pair.changed { grid-template-columns: repeat(2, minmax(0, 1fr)); border-color: #bfd0df; background: #f6f9fb; }
+    .trace_event.pending { opacity: 0.46; }
+    .trace_event.active { border-color: #84b9e8; background: #eef6ff; }
     .phase_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
     .phase_column, .node_stack, .timeline, .finding_list, .trace_overlay, .effect_matrix, .chips, .state_machine, .transition_list, .state_steps { display: grid; gap: 9px; }
     .phase_header, .node_card, .finding, .trace_event, .trace_summary, .effect_row, .state_machine_summary, .state_card, .transition_row, .state_step, .assistant_boundary { padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
@@ -550,6 +1029,16 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .trace_summary span { grid-column: 2; }
     .state_machine_summary, .assistant_boundary { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
     .state_machine_summary > div, .assistant_boundary > div:first-child { display: grid; gap: 4px; min-width: 0; }
+    .state_diagram_canvas { overflow: auto; border: 1px solid #d5dde4; border-radius: 8px; background: linear-gradient(180deg, #fbfcfd, #f3f6f8); }
+    .state_diagram_canvas svg { display: block; min-width: 720px; width: 100%; height: auto; }
+    .state_diagram_edge { stroke: #6e55a8; stroke-width: 2.4; }
+    .state_arrow_fill { fill: #6e55a8; }
+    .state_edge_label { fill: #55456f; font-size: 12px; font-weight: 800; text-anchor: middle; }
+    .state_diagram_node { fill: #f7f9fb; stroke: #aebbc6; stroke-width: 1.5; }
+    .state_diagram_node.initial { fill: #eef6ff; stroke: #6f9fd1; stroke-width: 2.2; }
+    .state_diagram_node.terminal { fill: #f0faf6; stroke: #78b59f; stroke-width: 2.2; }
+    .state_node_title { fill: #17202a; font-size: 14px; font-weight: 800; }
+    .state_node_caption { fill: #5e6b76; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
     .state_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
     .state_card { display: grid; gap: 8px; min-height: 126px; }
     .state_card div { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
@@ -570,7 +1059,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .badge.opaque, .badge.failed, .badge.block, .badge.conflicting { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
     pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
-    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary { display: grid; } .effect_row, .trace_event, .state_step { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
+    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; } .diagram_legend, .player_controls { justify-content: flex-start; } .effect_row, .trace_event, .state_step { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card, .turn_editor_header form { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
     """
   end
 
@@ -590,6 +1079,94 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           length(projection["warnings"])
     }
   end
+
+  defp selected_simulation(_pattern_id, simulations, "", "") do
+    List.first(simulations)
+  end
+
+  defp selected_simulation(pattern_id, _simulations, user_input, model_response) do
+    Wardwright.PolicyProjection.simulate_turn(pattern_id, user_input, model_response)
+  end
+
+  defp assign_interactive_simulation(socket, user_input, model_response) do
+    simulation =
+      Wardwright.PolicyProjection.simulate_turn(
+        socket.assigns.selected_pattern_id,
+        user_input,
+        model_response
+      )
+
+    socket
+    |> assign(:selected_simulation, simulation)
+    |> assign(:simulation_boundary, simulation_boundary(simulation, user_input, model_response))
+    |> assign(:simulation_playing, false)
+    |> assign(:simulation_step, 0)
+  end
+
+  defp simulation_boundary(simulation, user_input, model_response) do
+    receipt = Map.get(simulation, "receipt_preview", %{})
+    stream = Map.get(receipt, "stream", %{})
+    model_received_input = model_received_input(receipt, user_input)
+    user_received_output = user_received_output(stream, model_response)
+
+    %{
+      model_received_input: model_received_input,
+      user_received_output: user_received_output,
+      input_changed: model_received_input != (user_input || ""),
+      output_changed: user_received_output != (model_response || "")
+    }
+  end
+
+  defp boundary_pair_class(true), do: "boundary_pair changed"
+  defp boundary_pair_class(false), do: "boundary_pair"
+
+  defp model_received_input(%{"input" => %{"model_received_input" => value}}, _user_input)
+       when is_binary(value),
+       do: value
+
+  defp model_received_input(_receipt, user_input), do: user_input || ""
+
+  defp user_received_output(%{"released_to_consumer" => false}, _model_response) do
+    "[withheld by Wardwright pending retry, review, or terminal policy action]"
+  end
+
+  defp user_received_output(%{"rewrites" => rewrites}, model_response) when is_list(rewrites) do
+    Enum.reduce(rewrites, model_response || "", fn rewrite, output ->
+      case rewrite do
+        %{"match" => match, "replacement" => replacement}
+        when is_binary(match) and is_binary(replacement) ->
+          String.replace(output, match, replacement)
+
+        %{"rule_id" => "account-redactor", "replacement" => replacement}
+        when is_binary(replacement) ->
+          Regex.replace(~r/\bacct_[A-Za-z0-9_]+\b/, output, replacement)
+
+        _ ->
+          output
+      end
+    end)
+  end
+
+  defp user_received_output(_stream, model_response), do: model_response || ""
+
+  defp simulation_field(nil, _field), do: ""
+  defp simulation_field(input, field), do: Map.get(input, field, "")
+
+  defp default_simulation_input(inputs) do
+    Enum.find(inputs, &(&1["relationship"] == "direct")) || List.first(inputs)
+  end
+
+  defp simulation_input_groups(inputs) do
+    direct = Enum.filter(inputs, &(&1["relationship"] == "direct"))
+    probes = Enum.reject(inputs, &(&1["relationship"] == "direct"))
+
+    [{"direct", direct}, {"cross_policy_probe", probes}]
+    |> Enum.reject(fn {_relationship, grouped_inputs} -> grouped_inputs == [] end)
+  end
+
+  defp simulation_relationship_label("direct"), do: "Relevant examples"
+  defp simulation_relationship_label("cross_policy_probe"), do: "Cross-policy probes"
+  defp simulation_relationship_label(_relationship), do: "Other scenarios"
 
   defp first_node(projection) do
     projection["phases"]
@@ -628,6 +1205,50 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     end
   end
 
+  defp schedule_simulation_tick do
+    Process.send_after(self(), :advance_simulation, 900)
+  end
+
+  defp trace_count(nil), do: 0
+
+  defp trace_count(simulation) do
+    simulation
+    |> Map.get("trace", [])
+    |> length()
+  end
+
+  defp current_trace_event(_simulation, 0), do: nil
+  defp current_trace_event(nil, _step), do: nil
+
+  defp current_trace_event(simulation, step) do
+    simulation
+    |> Map.get("trace", [])
+    |> Enum.at(max(step - 1, 0))
+  end
+
+  defp simulation_status(_event, 0, trace_count) do
+    "Ready: #{trace_count} trace events available for playback."
+  end
+
+  defp simulation_status(event, step, trace_count) do
+    state =
+      event
+      |> Map.get("state_id")
+      |> case do
+        nil -> "state unavailable"
+        state_id -> "state #{state_id}"
+      end
+
+    "Step #{step} of #{trace_count}: #{state}, #{event["phase"]}."
+  end
+
+  defp simulation_progress(_step, 0), do: 0
+  defp simulation_progress(step, trace_count), do: div(min(step, trace_count) * 100, trace_count)
+
+  defp trace_step_class(index, playback_step) when index < playback_step, do: "completed"
+  defp trace_step_class(index, playback_step) when index == playback_step, do: "active"
+  defp trace_step_class(_index, _playback_step), do: "pending"
+
   defp normalize_pattern(nil), do: "tts-retry"
 
   defp normalize_pattern(pattern_id) do
@@ -641,12 +1262,400 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp normalize_mode(mode) when mode in @modes, do: mode
   defp normalize_mode(_), do: "phase_map"
 
+  defp normalize_recipe_source(nil), do: "built_in"
+
+  defp normalize_recipe_source(source_id) do
+    if source_id in Wardwright.PolicyRecipeCatalog.source_ids() do
+      source_id
+    else
+      "built_in"
+    end
+  end
+
+  defp recipe_sources do
+    Wardwright.PolicyRecipeCatalog.sources()
+    |> Enum.map(&Wardwright.PolicyRecipeCatalog.to_map/1)
+  end
+
+  defp recipe_catalog(source_id) do
+    case Wardwright.PolicyRecipeCatalog.list(source_id) do
+      {:ok, catalog} ->
+        Wardwright.PolicyRecipeCatalog.to_map(catalog)
+
+      {:error, catalog} ->
+        catalog
+        |> Wardwright.PolicyRecipeCatalog.to_map()
+        |> then(&Map.put(&1, "warnings", [&1["error"]]))
+    end
+  end
+
+  defp recipe_catalog_status(%{"error" => error}), do: error
+
+  defp recipe_catalog_status(%{"recipes" => recipes, "warnings" => [warning | _]}) do
+    "#{length(recipes)} recipes. #{warning}"
+  end
+
+  defp recipe_catalog_status(%{"recipes" => recipes}), do: "#{length(recipes)} recipes available."
+
+  defp node_annotation(%{"annotations" => annotations}, key) when is_map(annotations) do
+    Map.get(annotations, key, "No annotation provided.")
+  end
+
+  defp node_annotation(_node, _key), do: "No annotation provided."
+
+  defp normalize_step(nil, _simulation), do: 0
+
+  defp normalize_step(step, simulation) when is_binary(step) do
+    case Integer.parse(step) do
+      {parsed, ""} -> normalize_step(parsed, simulation)
+      _ -> 0
+    end
+  end
+
+  defp normalize_step(step, simulation) when is_integer(step) do
+    step
+    |> max(0)
+    |> min(trace_count(simulation))
+  end
+
+  defp normalize_step(_step, _simulation), do: 0
+
   defp path(pattern_id, mode), do: "/policies/#{pattern_id}/#{mode}"
 
-  defp mode_label("phase_map"), do: "Phase map"
-  defp mode_label("state_machine"), do: "State machine"
-  defp mode_label("effect_matrix"), do: "Effect matrix"
-  defp mode_label("trace_overlay"), do: "Trace overlay"
+  defp path(pattern_id, mode, "built_in"), do: path(pattern_id, mode)
+
+  defp path(pattern_id, mode, source_id) do
+    path(pattern_id, mode) <> "?" <> URI.encode_query(%{"source" => source_id})
+  end
+
+  defp mode_label("diagram"), do: "Diagram"
+  defp mode_label("phase_map"), do: "Policy parts"
+  defp mode_label("state_machine"), do: "States"
+  defp mode_label("effect_matrix"), do: "Actions"
+  defp mode_label("trace_overlay"), do: "Trace"
+
+  defp mode_hint("diagram"), do: "whole graph"
+  defp mode_hint("phase_map"), do: "rules by moment"
+  defp mode_hint("state_machine"), do: "state changes"
+  defp mode_hint("effect_matrix"), do: "what can happen"
+  defp mode_hint("trace_overlay"), do: "why this run"
+
+  defp state_diagram(state_machine) do
+    states =
+      state_machine
+      |> Map.get("states", [])
+      |> Enum.with_index()
+      |> Enum.map(fn {state, index} ->
+        %{
+          id: state["id"],
+          label: state["label"],
+          x: 34 + index * 190,
+          y: 72,
+          width: 146,
+          height: 64,
+          role: state_role(state_machine, state)
+        }
+      end)
+
+    state_index = Map.new(states, &{&1.id, &1})
+
+    edges =
+      state_machine
+      |> Map.get("transitions", [])
+      |> Enum.flat_map(fn transition ->
+        with from when not is_nil(from) <- Map.get(state_index, transition["from"]),
+             to when not is_nil(to) <- Map.get(state_index, transition["to"]) do
+          [
+            %{
+              x1: from.x + from.width,
+              y1: from.y + div(from.height, 2),
+              x2: to.x,
+              y2: to.y + div(to.height, 2),
+              trigger: transition["trigger"]
+            }
+          ]
+        else
+          _ -> []
+        end
+      end)
+
+    %{
+      width: max(length(states) * 190 + 34, 760),
+      height: 210,
+      states: states,
+      edges: edges
+    }
+  end
+
+  defp state_role(state_machine, state) do
+    cond do
+      state["terminal"] -> "terminal"
+      state["id"] == state_machine["initial_state"] -> "initial"
+      true -> "normal"
+    end
+  end
+
+  defp diagram(projection, simulation, playback_step) do
+    phases = diagram_phases(projection["phases"])
+    nodes = diagram_nodes(projection["phases"], phases, simulation, playback_step)
+    node_index = Map.new(nodes, &{&1.id, &1})
+    effects = diagram_effects(projection["effects"], node_index)
+
+    %{
+      width: diagram_width(phases),
+      height: diagram_height(nodes, effects),
+      phases: phases,
+      nodes: nodes,
+      effects: effects,
+      edges:
+        diagram_sequence_edges(nodes) ++
+          diagram_effect_edges(effects, node_index) ++
+          diagram_state_edges(
+            projection["state_machine"]["transitions"],
+            projection["state_machine"]["states"],
+            node_index
+          ) ++
+          diagram_conflict_edges(projection["conflicts"], node_index) ++
+          diagram_trace_edges(simulation["trace"], node_index, playback_step)
+    }
+  end
+
+  defp diagram_phases(phases) do
+    phases
+    |> Enum.with_index()
+    |> Enum.map(fn {phase, index} ->
+      %{
+        id: phase["id"],
+        title: phase["title"],
+        x: 32 + index * 366,
+        width: 330
+      }
+    end)
+  end
+
+  defp diagram_nodes(projection_phases, phases, simulation, playback_step) do
+    executed =
+      simulation["trace"]
+      |> Enum.take(playback_step)
+      |> Enum.map(& &1["node_id"])
+      |> Enum.reject(&is_nil/1)
+      |> MapSet.new()
+
+    active_node_id = current_trace_event(simulation, playback_step) |> active_node_id()
+    phase_x = Map.new(phases, &{&1.id, &1.x})
+
+    projection_phases
+    |> Enum.flat_map(fn phase ->
+      phase["nodes"]
+      |> Enum.with_index()
+      |> Enum.map(fn {node, index} ->
+        %{
+          id: node["id"],
+          label: node["label"],
+          kind: node["kind"],
+          shape: node_shape(node["kind"]),
+          phase: phase["id"],
+          confidence: node["confidence"],
+          executed: MapSet.member?(executed, node["id"]),
+          active: node["id"] == active_node_id,
+          x: Map.fetch!(phase_x, phase["id"]) + 18,
+          y: 112 + index * 112,
+          width: 196,
+          height: 74,
+          tooltip: node_tooltip(node)
+        }
+      end)
+    end)
+  end
+
+  defp node_tooltip(node) do
+    [
+      node["summary"],
+      node_annotation(node, "why"),
+      node_annotation(node, "review_hint")
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n\n")
+  end
+
+  defp active_node_id(nil), do: nil
+  defp active_node_id(event), do: event["node_id"]
+
+  defp node_shape(kind) when kind in ["primitive", "tool_selector"], do: "primitive"
+  defp node_shape(kind) when kind in ["arbiter", "tool_loop_threshold"], do: "arbiter"
+  defp node_shape("receipt_rule"), do: "receipt"
+  defp node_shape("plan_gap"), do: "plan_gap"
+  defp node_shape(_kind), do: "rule"
+
+  defp node_path(%{shape: "arbiter"} = node) do
+    x = node.x
+    y = node.y
+    w = node.width
+    h = node.height
+    notch = 18
+
+    "M #{x + notch} #{y} L #{x + w - notch} #{y} L #{x + w} #{y + div(h, 2)} L #{x + w - notch} #{y + h} L #{x + notch} #{y + h} L #{x} #{y + div(h, 2)} Z"
+  end
+
+  defp node_path(%{shape: "receipt"} = node) do
+    x = node.x
+    y = node.y
+    w = node.width
+    h = node.height
+    fold = 18
+
+    "M #{x} #{y} L #{x + w - fold} #{y} L #{x + w} #{y + fold} L #{x + w} #{y + h} L #{x} #{y + h} Z"
+  end
+
+  defp node_path(node) do
+    rounded_rect_path(node.x, node.y, node.width, node.height, 12)
+  end
+
+  defp pill_path(node) do
+    rounded_rect_path(node.x, node.y, node.width, node.height, div(node.height, 2))
+  end
+
+  defp rounded_rect_path(x, y, width, height, radius) do
+    right = x + width
+    bottom = y + height
+
+    "M #{x + radius} #{y} L #{right - radius} #{y} Q #{right} #{y} #{right} #{y + radius} L #{right} #{bottom - radius} Q #{right} #{bottom} #{right - radius} #{bottom} L #{x + radius} #{bottom} Q #{x} #{bottom} #{x} #{bottom - radius} L #{x} #{y + radius} Q #{x} #{y} #{x + radius} #{y} Z"
+  end
+
+  defp diagram_effects(effects, node_index) do
+    effects
+    |> Enum.group_by(& &1["node_id"])
+    |> Enum.flat_map(fn {node_id, grouped_effects} ->
+      node = Map.get(node_index, node_id)
+
+      grouped_effects
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {effect, index} ->
+        if node do
+          [
+            %{
+              id: effect["id"],
+              node_id: node_id,
+              effect: effect["effect"],
+              target: effect["target"],
+              confidence: effect["confidence"],
+              x: node.x + node.width + 20,
+              y: node.y + index * 62,
+              width: 96,
+              height: 52
+            }
+          ]
+        else
+          []
+        end
+      end)
+    end)
+  end
+
+  defp diagram_width([]), do: 720
+
+  defp diagram_width(phases) do
+    phases
+    |> List.last()
+    |> then(&max(&1.x + &1.width + 32, 860))
+  end
+
+  defp diagram_height(nodes, effects) do
+    bottom =
+      (nodes ++ effects)
+      |> Enum.map(&(&1.y + &1.height))
+      |> Enum.max(fn -> 260 end)
+
+    max(bottom + 58, 340)
+  end
+
+  defp diagram_sequence_edges([]), do: []
+
+  defp diagram_sequence_edges(nodes) do
+    nodes
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.map(fn [from, to] ->
+      edge(right_center(from), left_center(to), "sequence", "url(#arrow)")
+    end)
+  end
+
+  defp diagram_effect_edges(effects, node_index) do
+    effects
+    |> Enum.flat_map(fn effect_node ->
+      case Map.fetch(node_index, effect_node.node_id) do
+        {:ok, node} ->
+          [edge(right_center(node), left_center(effect_node), "effect", "url(#arrow)")]
+
+        :error ->
+          []
+      end
+    end)
+  end
+
+  defp diagram_state_edges(transitions, states, node_index) do
+    state_first_node =
+      states
+      |> Enum.flat_map(fn state ->
+        case List.first(state["node_ids"]) do
+          nil -> []
+          node_id -> [{state["id"], node_id}]
+        end
+      end)
+      |> Map.new()
+
+    transitions
+    |> Enum.flat_map(fn transition ->
+      with from_id when is_binary(from_id) <- transition["node_id"],
+           to_id when is_binary(to_id) <- Map.get(state_first_node, transition["to"]),
+           from when not is_nil(from) <- Map.get(node_index, from_id),
+           to when not is_nil(to) <- Map.get(node_index, to_id),
+           false <- from.id == to.id do
+        [edge(bottom_center(from), top_center(to), "state", "url(#arrow)")]
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  defp diagram_conflict_edges(conflicts, node_index) do
+    conflicts
+    |> Enum.flat_map(fn conflict ->
+      conflict["node_ids"]
+      |> Enum.map(&Map.get(node_index, &1))
+      |> Enum.reject(&is_nil/1)
+      |> Enum.take(2)
+      |> case do
+        [from, to] -> [edge(top_center(from), top_center(to), "conflict", nil)]
+        _ -> []
+      end
+    end)
+  end
+
+  defp diagram_trace_edges(trace, node_index, playback_step) do
+    trace
+    |> Enum.take(playback_step)
+    |> Enum.map(& &1["node_id"])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.chunk_by(& &1)
+    |> Enum.map(&hd/1)
+    |> Enum.map(&Map.get(node_index, &1))
+    |> Enum.reject(&is_nil/1)
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.map(fn [from, to] ->
+      edge(bottom_center(from), bottom_center(to), "trace", "url(#trace-arrow)", true)
+    end)
+  end
+
+  defp edge(from, to, kind, marker, active \\ false)
+
+  defp edge({x1, y1}, {x2, y2}, kind, marker, active) do
+    %{x1: x1, y1: y1, x2: x2, y2: y2, kind: kind, marker: marker, active: active}
+  end
+
+  defp left_center(box), do: {box.x, box.y + div(box.height, 2)}
+  defp right_center(box), do: {box.x + box.width, box.y + div(box.height, 2)}
+  defp top_center(box), do: {box.x + div(box.width, 2), box.y}
+  defp bottom_center(box), do: {box.x + div(box.width, 2), box.y + box.height}
 
   defp node_label(projection, node_id) do
     projection["phases"]

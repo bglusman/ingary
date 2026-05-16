@@ -24,6 +24,13 @@ defmodule Wardwright.PolicyProjection do
         "Hold a bounded stream horizon, catch prohibited output before release, then retry once with a precise reminder."
     },
     %{
+      "id" => "stream-rewrite-state",
+      "title" => "Regex rewrite and state transition",
+      "category" => "response.streaming",
+      "promise" =>
+        "Show related stream regex matches where one rewrites held output and a later match transitions the session into review."
+    },
+    %{
       "id" => "ambiguous-success",
       "title" => "Ambiguous success alert",
       "category" => "output.finalizing",
@@ -51,6 +58,9 @@ defmodule Wardwright.PolicyProjection do
   def pattern_ids, do: Enum.map(@patterns, &Map.fetch!(&1, "id"))
 
   def state_ids("tts-retry"), do: ["observing", "guarding", "retrying", "recording"]
+
+  def state_ids("stream-rewrite-state"),
+    do: ["observing", "rewriting", "review_required", "recording"]
 
   def state_ids(pattern_id) when is_binary(pattern_id) do
     if pattern_id in pattern_ids() do
@@ -88,6 +98,125 @@ defmodule Wardwright.PolicyProjection do
     pattern_id
     |> simulation_records(config)
     |> Enum.map(&Map.put(&1, "artifact_hash", artifact_hash))
+  end
+
+  def simulation_inputs(pattern_id) do
+    Enum.map(simulation_inputs(), fn input ->
+      Map.put(input, "relationship", simulation_input_relationship(pattern_id, input["id"]))
+    end)
+  end
+
+  def simulation_inputs do
+    tts_simulation_inputs() ++
+      stream_rewrite_simulation_inputs() ++
+      ambiguous_success_simulation_inputs()
+  end
+
+  defp tts_simulation_inputs do
+    [
+      %{
+        "id" => "split-old-client",
+        "title" => "TTSR: split prohibited span",
+        "description" => "OldClient( appears across held stream chunks and should trigger retry.",
+        "user_input" => "Show me the legacy adapter name in a migration note.",
+        "model_response" => "avoid introducing Old\nClient( into the final answer"
+      },
+      %{
+        "id" => "safe-stream",
+        "title" => "TTSR: safe stream",
+        "description" => "No prohibited span appears, so the stream can release normally.",
+        "user_input" => "Write a migration note that avoids deprecated constructors.",
+        "model_response" => "Use the current client adapter.\nAvoid legacy constructor names."
+      }
+    ]
+  end
+
+  defp stream_rewrite_simulation_inputs do
+    [
+      %{
+        "id" => "rewrite-then-secret",
+        "title" => "Stream: rewrite then transition",
+        "description" =>
+          "An account identifier is rewritten, then a related token forces review.",
+        "user_input" => "Summarize the billing incident without exposing credentials.",
+        "model_response" =>
+          "account acct_4938 appears in the answer\ntoken_live_4938 follows in the held horizon"
+      },
+      %{
+        "id" => "input-and-output-rewrite",
+        "title" => "Stream: input and output rewrite",
+        "description" =>
+          "Private request context is withheld from the provider, then an account identifier is redacted before release.",
+        "user_input" =>
+          "Summarize the incident. private_context{customer email is alex@example.test}",
+        "model_response" =>
+          "The billing incident for account acct_4938 can be summarized without the private email."
+      },
+      %{
+        "id" => "rewrite-only",
+        "title" => "Stream: rewrite only",
+        "description" =>
+          "The account identifier is redacted and the rewritten stream is released.",
+        "user_input" => "Summarize the billing incident without exposing credentials.",
+        "model_response" => "account acct_4938 appears in the answer\nno related secret follows"
+      },
+      %{
+        "id" => "no-match",
+        "title" => "Stream: no regex match",
+        "description" => "No configured regex matches the held chunks.",
+        "user_input" => "Write a neutral status update.",
+        "model_response" => "ordinary response text\nwith no account ids or secret tokens"
+      }
+    ]
+  end
+
+  defp ambiguous_success_simulation_inputs do
+    [
+      %{
+        "id" => "claim-without-artifact",
+        "title" => "Artifact: claim without artifact",
+        "description" =>
+          "The final text claims completion but does not include artifact evidence.",
+        "user_input" => "Export the policy audit report as a spreadsheet.",
+        "model_response" => "Done, the export is ready for download."
+      },
+      %{
+        "id" => "claim-with-artifact",
+        "title" => "Artifact: claim with metadata",
+        "description" => "The completion claim is backed by an artifact identifier.",
+        "user_input" => "Export the policy audit report as a spreadsheet.",
+        "model_response" => "Done, the export is ready. Artifact: report-2026-05-16.xlsx"
+      }
+    ]
+  end
+
+  defp simulation_input_relationship("tts-retry", input_id)
+       when input_id in ["split-old-client", "safe-stream"],
+       do: "direct"
+
+  defp simulation_input_relationship("stream-rewrite-state", input_id)
+       when input_id in ["rewrite-then-secret", "rewrite-only", "no-match"],
+       do: "direct"
+
+  defp simulation_input_relationship("ambiguous-success", input_id)
+       when input_id in ["claim-without-artifact", "claim-with-artifact"],
+       do: "direct"
+
+  defp simulation_input_relationship(_pattern_id, _input_id), do: "cross_policy_probe"
+
+  def simulate_input(pattern_id, text, config \\ Wardwright.current_config()) do
+    simulate_turn(pattern_id, "", text, config)
+  end
+
+  def simulate_turn(pattern_id, user_input, model_response, config \\ Wardwright.current_config()) do
+    artifact_hash = artifact(pattern(pattern_id), config)["artifact_hash"]
+    turn = %{"user_input" => user_input || "", "model_response" => model_response || ""}
+
+    pattern_id
+    |> evaluated_simulation(turn, config)
+    |> Map.put("artifact_hash", artifact_hash)
+    |> Map.put("scenario_source", "interactive")
+    |> Map.put("source", "interactive")
   end
 
   defp artifact(pattern, config) do
@@ -316,6 +445,88 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
+  defp phases("stream-rewrite-state", _config) do
+    [
+      %{
+        "id" => "request.preparing",
+        "title" => "Request",
+        "description" => "Rewrite or remove request-side spans before the provider sees them.",
+        "nodes" => [
+          node(
+            "request.rewrite-context",
+            "context redactor",
+            "primitive",
+            "request.preparing",
+            "Remove private context spans from the model-facing prompt while keeping receipt evidence.",
+            "exact",
+            ["request.messages", "policy_cache.session.regex_match"],
+            ["request.model_input", "policy.events"],
+            ["match_regex", "rewrite_span"]
+          )
+        ]
+      },
+      %{
+        "id" => "response.streaming",
+        "title" => "Stream",
+        "description" =>
+          "Evaluate related regex matches over held chunks before bytes are released.",
+        "nodes" => [
+          node(
+            "stream.redact-account",
+            "account redactor",
+            "primitive",
+            "response.streaming",
+            "Rewrite account-like spans inside the holdback window before release.",
+            "exact",
+            ["stream.window", "policy_cache.session.regex_match"],
+            ["stream.rewrite_patch", "policy.events"],
+            ["match_regex", "rewrite_span"]
+          ),
+          node(
+            "stream.secret-transition",
+            "secret transition",
+            "primitive",
+            "response.streaming",
+            "Escalate if a related secret-token pattern appears after the account rewrite.",
+            "exact",
+            ["stream.window", "policy_cache.session.regex_match"],
+            ["policy.state", "final.status"],
+            ["match_regex", "state_transition"]
+          ),
+          node(
+            "stream.rewrite-arbiter",
+            "rewrite arbiter",
+            "arbiter",
+            "response.streaming",
+            "Applies rewrite patches while preserving enough held context to detect related later matches.",
+            "declared",
+            ["stream.rewrite_patch", "policy.state"],
+            ["stream.release_decision", "request.review_required"],
+            ["release_rewritten", "hold_for_review"]
+          )
+        ]
+      },
+      %{
+        "id" => "receipt.finalized",
+        "title" => "Receipt",
+        "description" => "Persist rewrite, transition, and review evidence.",
+        "nodes" => [
+          node(
+            "stream.rewrite-receipt",
+            "rewrite receipt",
+            "receipt_rule",
+            "receipt.finalized",
+            "Record regex matches, applied rewrite ranges, state transition, and withheld bytes hash.",
+            "exact",
+            ["policy.events", "stream.rewrite_patch", "policy.state"],
+            ["receipt.events"],
+            ["annotate_receipt"]
+          )
+        ]
+      }
+    ]
+  end
+
   defp phases(_pattern_id, config) do
     stream_rules = Map.get(config, "stream_rules", [])
 
@@ -392,9 +603,48 @@ defmodule Wardwright.PolicyProjection do
       reads: reads,
       writes: writes,
       actions: actions,
+      annotations: node_annotations(kind, actions, confidence),
       source_span: source_span
     }
     |> Contract.to_map()
+  end
+
+  defp node_annotations("plan_gap", _actions, _confidence) do
+    %Contract.Annotation{
+      why: "This marks an explicit gap where no configured rule currently applies.",
+      change_when: "Add or import a recipe when this gap represents a real governance need.",
+      review_hint: "Safe as a reminder, but unsafe if operators assume enforcement is active."
+    }
+  end
+
+  defp node_annotations(_kind, [], "opaque") do
+    %Contract.Annotation{
+      why:
+        "This part exists because the projection could not reduce the policy into exact primitives.",
+      change_when:
+        "Replace opaque policy code with declared primitives when visual review matters.",
+      review_hint: "Treat simulation evidence as required before trusting this branch."
+    }
+  end
+
+  defp node_annotations(_kind, [], confidence) do
+    %Contract.Annotation{
+      why: "This node records evidence or context used by nearby policy decisions.",
+      change_when:
+        "Review when the policy needs different evidence, receipt fields, or routing context.",
+      review_hint:
+        "Confidence is #{confidence}; inspect reads and writes before changing this rule."
+    }
+  end
+
+  defp node_annotations(_kind, actions, confidence) do
+    %Contract.Annotation{
+      why: "This node explains when Wardwright may #{Enum.join(actions, ", ")}.",
+      change_when:
+        "Review when provider behavior, tool permissions, route costs, or policy intent changes.",
+      review_hint:
+        "Confidence is #{confidence}; inspect reads and writes before changing this rule."
+    }
   end
 
   defp compiled_plan(pattern_id, config, phases) do
@@ -470,6 +720,81 @@ defmodule Wardwright.PolicyProjection do
         )
       ],
       simulation_steps: simulation_steps("tts-retry", config, states)
+    }
+    |> Contract.to_map()
+    |> attach_state_node_fallback(phases)
+  end
+
+  defp state_machine("stream-rewrite-state", phases, config) do
+    states = [
+      state(
+        "observing",
+        "Observing",
+        "Rewrite request-side private context, then hold chunks and scan for related regex matches.",
+        ["request.rewrite-context", "stream.redact-account"]
+      ),
+      state(
+        "rewriting",
+        "Rewriting",
+        "A safe rewrite patch is available but more related stream context is still held.",
+        ["stream.redact-account", "stream.rewrite-arbiter"]
+      ),
+      state(
+        "review_required",
+        "Review Required",
+        "A later related secret-token match prevents normal release.",
+        ["stream.secret-transition", "stream.rewrite-arbiter"]
+      ),
+      state(
+        "recording",
+        "Recording",
+        "Persist rewrite and transition evidence for review and regression fixtures.",
+        ["stream.rewrite-receipt"],
+        terminal: true
+      )
+    ]
+
+    %Contract.StateMachine{
+      initial_state: "observing",
+      default_projection: false,
+      summary:
+        "Explicit projection for related stream regex matches, rewrite, state transition, and receipt recording.",
+      states: states,
+      transitions: [
+        transition(
+          "request.rewrite",
+          "observing",
+          "observing",
+          "private context is removed before provider dispatch",
+          "rewrite_span",
+          "request.rewrite-context"
+        ),
+        transition(
+          "regex.rewrite",
+          "observing",
+          "rewriting",
+          "account-like regex match is safe to rewrite",
+          "rewrite_span",
+          "stream.redact-account"
+        ),
+        transition(
+          "regex.related-secret",
+          "rewriting",
+          "review_required",
+          "related secret-token regex appears after a rewrite",
+          "state_transition",
+          "stream.secret-transition"
+        ),
+        transition(
+          "receipt.write",
+          "review_required",
+          "recording",
+          "review outcome is known",
+          "annotate_receipt",
+          "stream.rewrite-receipt"
+        )
+      ],
+      simulation_steps: simulation_steps("stream-rewrite-state", config, states)
     }
     |> Contract.to_map()
     |> attach_state_node_fallback(phases)
@@ -935,6 +1260,51 @@ defmodule Wardwright.PolicyProjection do
       ]
   end
 
+  defp effects("stream-rewrite-state", _config) do
+    [
+      effect(
+        "effect.request-rewrite",
+        "request.rewrite-context",
+        "request.preparing",
+        "rewrite_span",
+        "request",
+        "exact"
+      ),
+      effect(
+        "effect.stream-rewrite",
+        "stream.redact-account",
+        "response.streaming",
+        "rewrite_span",
+        "stream",
+        "exact"
+      ),
+      effect(
+        "effect.stream-transition",
+        "stream.secret-transition",
+        "response.streaming",
+        "state_transition",
+        "policy_state",
+        "exact"
+      ),
+      effect(
+        "effect.stream-review",
+        "stream.rewrite-arbiter",
+        "response.streaming",
+        "hold_for_review",
+        "request",
+        "declared"
+      ),
+      effect(
+        "effect.stream-receipt",
+        "stream.rewrite-receipt",
+        "receipt.finalized",
+        "annotate_receipt",
+        "receipt",
+        "exact"
+      )
+    ]
+  end
+
   defp effects(_pattern_id, _config) do
     [
       effect(
@@ -1064,6 +1434,20 @@ defmodule Wardwright.PolicyProjection do
     end)
   end
 
+  defp conflicts("stream-rewrite-state", _config) do
+    [
+      %{
+        "id" => "conflict.rewrite-before-transition",
+        "class" => "ordered",
+        "node_ids" => ["stream.redact-account", "stream.secret-transition"],
+        "summary" =>
+          "The safe rewrite may run, but a later related secret-token match can still force review before release.",
+        "required_resolution" =>
+          "preserve enough held context after rewriting to evaluate related transition rules"
+      }
+    ]
+  end
+
   defp conflicts(_pattern_id, _config) do
     [
       %{
@@ -1147,7 +1531,33 @@ defmodule Wardwright.PolicyProjection do
     end
   end
 
-  defp simulation_cases("ambiguous-success", _config) do
+  defp simulation_cases("ambiguous-success", config),
+    do: ambiguous_success_simulation_cases(config)
+
+  defp simulation_cases("route-privacy", config), do: route_privacy_simulation_cases(config)
+  defp simulation_cases("tool-governance", config), do: tool_governance_simulation_cases(config)
+
+  defp simulation_cases("stream-rewrite-state", config),
+    do: stream_rewrite_simulation_cases(config)
+
+  defp simulation_cases(pattern_id, config), do: default_simulation_cases(pattern_id, config)
+
+  defp evaluated_simulation("ambiguous-success", turn, config),
+    do: evaluated_ambiguous_success_simulation(turn, config)
+
+  defp evaluated_simulation("stream-rewrite-state", turn, config),
+    do: evaluated_stream_rewrite_simulation(turn, config)
+
+  defp evaluated_simulation("tts-retry", turn, config),
+    do: evaluated_tts_retry_simulation(turn, config)
+
+  defp evaluated_simulation(pattern_id, _turn, config) do
+    pattern_id
+    |> simulations(config)
+    |> List.first()
+  end
+
+  defp ambiguous_success_simulation_cases(_config) do
     [
       %{
         "simulation_schema" => "wardwright.policy_simulation.v1",
@@ -1195,7 +1605,96 @@ defmodule Wardwright.PolicyProjection do
     ]
   end
 
-  defp simulation_cases("route-privacy", config) do
+  defp evaluated_ambiguous_success_simulation(turn, _config) do
+    text = turn_response(turn)
+    has_claim? = Regex.match?(~r/\b(done|ready|completed|finished|export)\b/i, text)
+    has_artifact? = Regex.match?(~r/\b(artifact|attachment|download_id|file_id):\s*\S+/i, text)
+
+    if has_claim? and not has_artifact? do
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "interactive-ambiguous-success-alert",
+        "title" => "Edited input triggers missing artifact alert",
+        "engine_id" => "hybrid-output-review",
+        "input_summary" => summarize_turn(turn),
+        "expected_behavior" =>
+          "Completion language without artifact evidence emits an operator alert.",
+        "verdict" => "passed",
+        "trace" => [
+          trace(
+            "i1",
+            "output.finalizing",
+            "success.claim-detector",
+            "match",
+            "claim detected",
+            "edited final text contains completion language",
+            "warn"
+          ),
+          trace(
+            "i2",
+            "output.finalizing",
+            "success.artifact-check",
+            "state_read",
+            "metadata missing",
+            "no artifact marker was found in the edited input",
+            "warn"
+          ),
+          trace(
+            "i3",
+            "receipt.finalized",
+            "success.artifact-check",
+            "action",
+            "alert emitted",
+            "operator alert and receipt annotation would be recorded",
+            "pass"
+          )
+        ],
+        "receipt_preview" => %{
+          "input" => turn,
+          "events" => [%{"type" => "policy.alert", "rule_id" => "missing-artifact-after-success"}],
+          "final_status" => "completed_with_alert"
+        }
+      }
+    else
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "interactive-ambiguous-success-clear",
+        "title" => "Edited input clears missing artifact alert",
+        "engine_id" => "hybrid-output-review",
+        "input_summary" => summarize_turn(turn),
+        "expected_behavior" =>
+          "No alert is emitted unless completion language lacks artifact evidence.",
+        "verdict" => "passed",
+        "trace" => [
+          trace(
+            "i1",
+            "output.finalizing",
+            "success.claim-detector",
+            "input",
+            "final text reviewed",
+            "edited final text was evaluated for completion language and artifact evidence",
+            "info"
+          ),
+          trace(
+            "i2",
+            "receipt.finalized",
+            "success.artifact-check",
+            "receipt_event",
+            "no alert",
+            "artifact evidence is present or no completion claim was made",
+            "pass"
+          )
+        ],
+        "receipt_preview" => %{
+          "input" => turn,
+          "events" => [],
+          "final_status" => "completed"
+        }
+      }
+    end
+  end
+
+  defp route_privacy_simulation_cases(config) do
     rules = route_governance_rules(config)
 
     case rules do
@@ -1204,7 +1703,7 @@ defmodule Wardwright.PolicyProjection do
     end
   end
 
-  defp simulation_cases("tool-governance", config) do
+  defp tool_governance_simulation_cases(config) do
     rules = tool_governance_rules(config)
 
     case rules do
@@ -1213,7 +1712,256 @@ defmodule Wardwright.PolicyProjection do
     end
   end
 
-  defp simulation_cases(_pattern_id, _config) do
+  defp stream_rewrite_simulation_cases(_config) do
+    [
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "rewrite-then-transition",
+        "title" => "Rewrite followed by related transition",
+        "engine_id" => "structured-stream-primitives",
+        "input_summary" =>
+          "Provider emits an account identifier, then a related secret token inside the held stream horizon.",
+        "expected_behavior" =>
+          "Account span is rewritten, later secret-token match transitions to review_required, and no unsafe bytes are released.",
+        "verdict" => "passed",
+        "trace" => [
+          trace(
+            "r1",
+            "response.streaming",
+            "stream.redact-account",
+            "input",
+            "chunk held",
+            "held chunk contains acct_4938 before release",
+            "info",
+            state_id: "observing"
+          ),
+          trace(
+            "r2",
+            "response.streaming",
+            "stream.redact-account",
+            "match",
+            "account regex matched",
+            "acct_4938 rewritten to [account-id] inside the holdback window",
+            "pass",
+            state_id: "rewriting"
+          ),
+          trace(
+            "r3",
+            "response.streaming",
+            "stream.secret-transition",
+            "match",
+            "related secret matched",
+            "token_ prefix appears after the account rewrite and triggers review_required",
+            "block",
+            state_id: "review_required"
+          ),
+          trace(
+            "r4",
+            "response.streaming",
+            "stream.rewrite-arbiter",
+            "action",
+            "review hold selected",
+            "rewritten output remains withheld pending review state resolution",
+            "warn",
+            state_id: "review_required"
+          ),
+          trace(
+            "r5",
+            "receipt.finalized",
+            "stream.rewrite-receipt",
+            "receipt_event",
+            "rewrite receipt",
+            "receipt records rewrite range, transition state, and withheld bytes hash",
+            "info",
+            state_id: "recording"
+          )
+        ],
+        "receipt_preview" => %{
+          "receipt_id" => "simulated-rewrite-transition-receipt",
+          "stream" => %{
+            "rewrites" => [
+              %{"rule_id" => "account-redactor", "replacement" => "[account-id]"}
+            ],
+            "state_transition" => "review_required",
+            "released_to_consumer" => false
+          },
+          "events" => [
+            %{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"},
+            %{"type" => "policy.state_transition", "state" => "review_required"},
+            %{"type" => "stream.release_blocked", "reason" => "related_secret_match"}
+          ]
+        }
+      }
+      |> fixture_case()
+    ]
+  end
+
+  defp evaluated_stream_rewrite_simulation(turn, _config) do
+    text = turn_response(turn)
+    account_match = Regex.run(~r/\bacct_[A-Za-z0-9_]+\b/, text)
+    secret_match = Regex.run(~r/\b(token|secret)_[A-Za-z0-9_]+\b/i, text)
+    {model_received_input, request_rewrites} = request_rewrite_result(turn_user_input(turn))
+    input_preview = turn_input_preview(turn, model_received_input, request_rewrites)
+    request_trace = request_rewrite_trace(request_rewrites)
+
+    cond do
+      account_match && secret_match ->
+        account = hd(account_match)
+        secret = hd(secret_match)
+
+        %{
+          "simulation_schema" => "wardwright.policy_simulation.v1",
+          "scenario_id" => "interactive-rewrite-then-transition",
+          "title" => "Edited stream rewrites then transitions",
+          "engine_id" => "structured-stream-primitives",
+          "input_summary" => summarize_turn(turn),
+          "expected_behavior" =>
+            "Account span is rewritten, a related secret pattern transitions to review_required, and release is blocked.",
+          "verdict" => "passed",
+          "trace" =>
+            request_trace ++
+              [
+                trace(
+                  "i1",
+                  "response.streaming",
+                  "stream.redact-account",
+                  "input",
+                  "chunk held",
+                  "held chunks contain #{account} before release",
+                  "info",
+                  state_id: "observing"
+                ),
+                trace(
+                  "i2",
+                  "response.streaming",
+                  "stream.redact-account",
+                  "match",
+                  "account regex matched",
+                  "#{account} rewritten to [account-id] inside the holdback window",
+                  "pass",
+                  state_id: "rewriting"
+                ),
+                trace(
+                  "i3",
+                  "response.streaming",
+                  "stream.secret-transition",
+                  "match",
+                  "related secret matched",
+                  "#{secret} appears after the account rewrite and triggers review_required",
+                  "block",
+                  state_id: "review_required"
+                ),
+                trace(
+                  "i4",
+                  "response.streaming",
+                  "stream.rewrite-arbiter",
+                  "action",
+                  "review hold selected",
+                  "rewritten output remains withheld pending review state resolution",
+                  "warn",
+                  state_id: "review_required"
+                ),
+                trace(
+                  "i5",
+                  "receipt.finalized",
+                  "stream.rewrite-receipt",
+                  "receipt_event",
+                  "rewrite receipt",
+                  "receipt records rewrite range, transition state, and withheld bytes hash",
+                  "info",
+                  state_id: "recording"
+                )
+              ],
+          "receipt_preview" => %{
+            "input" => input_preview,
+            "stream" => %{
+              "rewrites" => [
+                %{
+                  "rule_id" => "account-redactor",
+                  "match" => account,
+                  "replacement" => "[account-id]"
+                }
+              ],
+              "state_transition" => "review_required",
+              "released_to_consumer" => false
+            },
+            "events" => [
+              %{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"},
+              %{"type" => "policy.state_transition", "state" => "review_required"},
+              %{"type" => "stream.release_blocked", "reason" => "related_secret_match"}
+            ]
+          }
+        }
+
+      account_match ->
+        account = hd(account_match)
+
+        %{
+          "simulation_schema" => "wardwright.policy_simulation.v1",
+          "scenario_id" => "interactive-rewrite-only",
+          "title" => "Edited stream rewrites and releases",
+          "engine_id" => "structured-stream-primitives",
+          "input_summary" => summarize_turn(turn),
+          "expected_behavior" =>
+            "Account span is rewritten and released because no related secret pattern appears.",
+          "verdict" => "passed",
+          "trace" =>
+            request_trace ++
+              [
+                trace(
+                  "i1",
+                  "response.streaming",
+                  "stream.redact-account",
+                  "match",
+                  "account regex matched",
+                  "#{account} rewritten to [account-id] inside the holdback window",
+                  "pass",
+                  state_id: "rewriting"
+                ),
+                trace(
+                  "i2",
+                  "response.streaming",
+                  "stream.rewrite-arbiter",
+                  "action",
+                  "rewritten stream released",
+                  "no related secret pattern appeared before the holdback window closed",
+                  "pass",
+                  state_id: "rewriting"
+                ),
+                trace(
+                  "i3",
+                  "receipt.finalized",
+                  "stream.rewrite-receipt",
+                  "receipt_event",
+                  "rewrite receipt",
+                  "receipt records the rewrite without a state transition",
+                  "info",
+                  state_id: "recording"
+                )
+              ],
+          "receipt_preview" => %{
+            "input" => input_preview,
+            "stream" => %{
+              "rewrites" => [
+                %{
+                  "rule_id" => "account-redactor",
+                  "match" => account,
+                  "replacement" => "[account-id]"
+                }
+              ],
+              "state_transition" => nil,
+              "released_to_consumer" => true
+            },
+            "events" => [%{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"}]
+          }
+        }
+
+      true ->
+        no_stream_rewrite_match_simulation(turn, input_preview, request_trace)
+    end
+  end
+
+  defp default_simulation_cases(_pattern_id, _config) do
     [
       %{
         "simulation_schema" => "wardwright.policy_simulation.v1",
@@ -1294,6 +2042,275 @@ defmodule Wardwright.PolicyProjection do
       }
       |> fixture_case()
     ]
+  end
+
+  defp evaluated_tts_retry_simulation(turn, _config) do
+    text = turn_response(turn)
+
+    if Regex.match?(~r/Old\s*Client\(/, text) do
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "interactive-tts-retry",
+        "title" => "Edited stream triggers retry",
+        "engine_id" => "structured-stream-primitives",
+        "input_summary" => summarize_turn(turn),
+        "expected_behavior" =>
+          "No violating bytes are released; attempt aborts and retries once.",
+        "verdict" => "passed",
+        "trace" => [
+          trace(
+            "i1",
+            "response.streaming",
+            "tts.no-old-client",
+            "input",
+            "chunk held",
+            "edited chunks are held before release",
+            "info",
+            state_id: "observing"
+          ),
+          trace(
+            "i2",
+            "response.streaming",
+            "tts.no-old-client",
+            "match",
+            "regex matched",
+            "Client( completes the prohibited span inside the holdback window",
+            "block",
+            state_id: "guarding"
+          ),
+          trace(
+            "i3",
+            "response.streaming",
+            "tts.retry-arbiter",
+            "action",
+            "retry selected",
+            "attempt aborted before release and retry reminder injected",
+            "pass",
+            state_id: "retrying"
+          ),
+          trace(
+            "i4",
+            "receipt.finalized",
+            "tts.receipt-events",
+            "receipt_event",
+            "receipt preview",
+            "stream.rule_matched and attempt.retry_requested events recorded",
+            "info",
+            state_id: "recording"
+          )
+        ],
+        "receipt_preview" => %{
+          "input" => turn_input_preview(turn),
+          "stream" => %{
+            "rule_matched" => "no-old-client",
+            "released_to_consumer" => false,
+            "retry_attempted" => true
+          },
+          "events" => [
+            %{"type" => "stream.rule_matched", "rule_id" => "no-old-client"},
+            %{"type" => "attempt.aborted", "reason" => "tts_rule_matched"},
+            %{"type" => "attempt.retry_requested", "reminder_id" => "no-old-client.reminder"}
+          ]
+        }
+      }
+    else
+      %{
+        "simulation_schema" => "wardwright.policy_simulation.v1",
+        "scenario_id" => "interactive-tts-safe-release",
+        "title" => "Edited stream releases normally",
+        "engine_id" => "structured-stream-primitives",
+        "input_summary" => summarize_turn(turn),
+        "expected_behavior" =>
+          "No prohibited span appears inside the holdback window, so the stream can release.",
+        "verdict" => "passed",
+        "trace" => [
+          trace(
+            "i1",
+            "response.streaming",
+            "tts.no-old-client",
+            "input",
+            "chunk held",
+            "edited chunks were scanned without matching OldClient(",
+            "info",
+            state_id: "observing"
+          ),
+          trace(
+            "i2",
+            "receipt.finalized",
+            "tts.receipt-events",
+            "receipt_event",
+            "safe release receipt",
+            "receipt records that no retry was requested",
+            "pass",
+            state_id: "recording"
+          )
+        ],
+        "receipt_preview" => %{
+          "input" => turn_input_preview(turn),
+          "stream" => %{
+            "rule_matched" => nil,
+            "released_to_consumer" => true,
+            "retry_attempted" => false
+          },
+          "events" => [%{"type" => "stream.released", "reason" => "no_policy_match"}]
+        }
+      }
+    end
+  end
+
+  defp no_stream_rewrite_match_simulation(turn, input_preview, request_trace) do
+    %{
+      "simulation_schema" => "wardwright.policy_simulation.v1",
+      "scenario_id" => "interactive-stream-no-match",
+      "title" => "Edited stream has no regex match",
+      "engine_id" => "structured-stream-primitives",
+      "input_summary" => summarize_turn(turn),
+      "expected_behavior" =>
+        "No rewrite or state transition is applied because no configured regex matches.",
+      "verdict" => "passed",
+      "trace" =>
+        request_trace ++
+          [
+            trace(
+              "i1",
+              "response.streaming",
+              "stream.redact-account",
+              "input",
+              "chunk held",
+              "edited chunks were scanned without an account-id match",
+              "info",
+              state_id: "observing"
+            ),
+            trace(
+              "i2",
+              "response.streaming",
+              "stream.rewrite-arbiter",
+              "action",
+              "stream released",
+              "no rewrite patch or review transition was produced",
+              "pass",
+              state_id: "observing"
+            ),
+            trace(
+              "i3",
+              "receipt.finalized",
+              "stream.rewrite-receipt",
+              "receipt_event",
+              "no-op receipt",
+              "receipt records that the stream was released without policy effects",
+              "info",
+              state_id: "recording"
+            )
+          ],
+      "receipt_preview" => %{
+        "input" => input_preview,
+        "stream" => %{
+          "rewrites" => [],
+          "state_transition" => nil,
+          "released_to_consumer" => true
+        },
+        "events" => [%{"type" => "stream.released", "reason" => "no_policy_match"}]
+      }
+    }
+  end
+
+  defp request_rewrite_result(user_input) do
+    Regex.scan(~r/private_context\{[^}]*\}/i, user_input)
+    |> Enum.map(&hd/1)
+    |> case do
+      [] ->
+        {user_input, []}
+
+      matches ->
+        model_received_input =
+          Enum.reduce(matches, user_input, fn match, input ->
+            String.replace(input, match, "[private-context omitted]")
+          end)
+
+        rewrites =
+          Enum.map(matches, fn match ->
+            %{
+              "rule_id" => "private-context-redactor",
+              "match" => match,
+              "replacement" => "[private-context omitted]",
+              "direction" => "request"
+            }
+          end)
+
+        {model_received_input, rewrites}
+    end
+  end
+
+  defp request_rewrite_trace([]), do: []
+
+  defp request_rewrite_trace(_rewrites) do
+    [
+      trace(
+        "i0",
+        "request.preparing",
+        "request.rewrite-context",
+        "match",
+        "request context redacted",
+        "private_context{...} was removed before provider dispatch",
+        "pass",
+        state_id: "observing"
+      )
+    ]
+  end
+
+  defp summarize_turn(turn) do
+    user = turn |> turn_user_input() |> String.trim()
+    response = turn |> turn_response() |> String.trim()
+
+    cond do
+      user != "" and response != "" ->
+        "User: #{truncate(user, 80)} / Model: #{truncate(response, 120)}"
+
+      response != "" ->
+        truncate(response, 140)
+
+      user != "" ->
+        "User: #{truncate(user, 140)}"
+
+      true ->
+        "Empty simulated turn."
+    end
+  end
+
+  defp turn_input_preview(turn), do: turn_input_preview(turn, turn_user_input(turn), [])
+
+  defp turn_input_preview(turn, model_received_input, request_rewrites) do
+    %{
+      "user_input" => turn_user_input(turn),
+      "model_received_input" => model_received_input,
+      "request_rewrites" => request_rewrites,
+      "model_response" => turn_response(turn),
+      "response_chunks" => input_chunks(turn_response(turn))
+    }
+  end
+
+  defp turn_user_input(%{"user_input" => value}) when is_binary(value), do: value
+  defp turn_user_input(_turn), do: ""
+
+  defp turn_response(%{"model_response" => value}) when is_binary(value), do: value
+  defp turn_response(%{"text" => value}) when is_binary(value), do: value
+  defp turn_response(_turn), do: ""
+
+  defp input_chunks(text) do
+    text
+    |> String.split(~r/\R/, trim: true)
+    |> case do
+      [] -> [""]
+      chunks -> chunks
+    end
+  end
+
+  defp truncate(text, limit) when byte_size(text) <= limit, do: text
+
+  defp truncate(text, limit) do
+    text
+    |> binary_part(0, limit)
+    |> Kernel.<>("...")
   end
 
   defp no_route_gate_simulation do

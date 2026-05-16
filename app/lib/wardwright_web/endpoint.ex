@@ -12,6 +12,20 @@ defmodule WardwrightWeb.Endpoint do
     only: ~w(assets favicon.ico robots.txt)
   )
 
+  plug(Plug.Static,
+    at: "/vendor/phoenix",
+    from: {:phoenix, "priv/static"},
+    gzip: false,
+    only: ~w(phoenix.min.js)
+  )
+
+  plug(Plug.Static,
+    at: "/vendor/phoenix_live_view",
+    from: {:phoenix_live_view, "priv/static"},
+    gzip: false,
+    only: ~w(phoenix_live_view.min.js)
+  )
+
   plug(Plug.RequestId)
   plug(Plug.Telemetry, event_prefix: [:phoenix, :endpoint])
   plug(Plug.MethodOverride)

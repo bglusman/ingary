@@ -19,8 +19,15 @@ defmodule Wardwright.PolicyProjection.Contract do
       reads: [],
       writes: [],
       actions: [],
+      annotations: %{},
       source_span: nil
     ]
+  end
+
+  defmodule Annotation do
+    @moduledoc false
+    @enforce_keys [:why, :change_when, :review_hint]
+    defstruct [:why, :change_when, :review_hint]
   end
 
   defmodule Effect do
@@ -88,7 +95,17 @@ defmodule Wardwright.PolicyProjection.Contract do
       {"reads", node.reads},
       {"writes", node.writes},
       {"actions", node.actions},
+      {"annotations", to_map(node.annotations)},
       {"source_span", node.source_span}
+    ]
+    |> reject_nil()
+  end
+
+  def to_map(%Annotation{} = annotation) do
+    [
+      {"why", annotation.why},
+      {"change_when", annotation.change_when},
+      {"review_hint", annotation.review_hint}
     ]
     |> reject_nil()
   end

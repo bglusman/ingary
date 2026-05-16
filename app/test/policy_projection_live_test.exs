@@ -49,6 +49,8 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert Enum.any?(nodes, &(&1["id"] == "request-policy.private-route-gate"))
     assert Enum.any?(nodes, &(&1["confidence"] == "exact"))
     assert Enum.all?(nodes, &is_binary(&1["node_class"]))
+    assert Enum.all?(nodes, &is_binary(get_in(&1, ["annotations", "why"])))
+    assert Enum.all?(nodes, &is_binary(get_in(&1, ["annotations", "change_when"])))
     assert "request-policy.private-route-gate" in node_ids
     assert [%{"class" => "ordered"}] = projection["conflicts"]
   end
@@ -206,27 +208,30 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/trace_overlay")
 
     assert html =~ "Private context route gate"
-    assert html =~ "Trace overlay"
+    assert html =~ "Trace"
+    assert html =~ "why this run"
     assert html =~ "Request route plan"
     assert html =~ "Artifact first"
     assert html =~ "Policy nodes"
     assert html =~ "Simulation evidence"
     assert html =~ "Review load"
+    assert html =~ "Why this exists"
 
     connected_html = render(view)
 
     assert connected_html =~ "Private context route gate"
-    assert connected_html =~ "Trace overlay"
+    assert connected_html =~ "Trace"
     assert connected_html =~ "Request route plan"
     assert connected_html =~ "Artifact first"
     assert connected_html =~ "Policy nodes"
     assert connected_html =~ "Simulation evidence"
     assert connected_html =~ "State model"
     assert connected_html =~ "Review load"
+    assert connected_html =~ "Why this exists"
 
     assert {:error, {:redirect, %{to: "/policies/route-privacy/effect_matrix"}}} =
              view
-             |> element("a", "Effect matrix")
+             |> element("a", "Actions")
              |> render_click()
 
     {:ok, matrix_view, _html} = live(build_conn(), "/policies/route-privacy/effect_matrix")
@@ -234,15 +239,286 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     matrix_html = render(matrix_view)
 
     assert matrix_html =~ "Private context route gate"
-    assert matrix_html =~ "Effect matrix"
+    assert matrix_html =~ "Actions"
+    assert matrix_html =~ "what can happen"
     assert matrix_html =~ "route.allowed_targets"
+  end
+
+  test "browser layout loads the LiveView client runtime" do
+    conn = get(build_conn(), "/policies/route-privacy/diagram")
+    html = html_response(conn, 200)
+
+    assert html =~ ~s(<meta name="csrf-token")
+    assert html =~ ~s(src="/vendor/phoenix/phoenix.min.js")
+    assert html =~ ~s(src="/vendor/phoenix_live_view/phoenix_live_view.min.js")
+    assert html =~ ~s(src="/assets/wardwright_live.js")
+  end
+
+  test "LiveView client assets are served without an npm build step" do
+    conn = get(build_conn(), "/assets/wardwright_live.js")
+    assert response(conn, 200) =~ "new window.LiveView.LiveSocket"
+
+    conn = get(build_conn(), "/vendor/phoenix/phoenix.min.js")
+    assert response(conn, 200) =~ "var Phoenix"
+
+    conn = get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.min.js")
+    assert response(conn, 200) =~ "var LiveView"
+  end
+
+  test "LiveView diagram mode renders projection graph from backend facts" do
+    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
+
+    assert html =~ "Time-travel stream retry"
+    assert html =~ "Diagram"
+    assert html =~ "Projection graph"
+    assert html =~ "Simulated stream playback"
+    assert html =~ "Ready: 4 trace events available for playback."
+    assert html =~ "waiting at input boundary"
+    assert html =~ "Policy projection graph"
+    assert html =~ "simulated path"
+    assert html =~ "conflict"
+    assert html =~ "no-old-client"
+    assert html =~ "retry arbiter"
+    assert html =~ "abort_attempt"
+    assert html =~ "retry_with_reminder"
+
+    connected_html = render(view)
+
+    assert connected_html =~ "regex matched"
+    assert connected_html =~ "retry selected"
+    assert connected_html =~ "receipt preview"
+  end
+
+  test "LiveView diagram simulation can step through matching rules and state changes" do
+    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
+
+    assert html =~ "Ready: 4 trace events available for playback."
+    assert html =~ "waiting at input boundary"
+    assert html =~ "pending"
+
+    stepped =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert stepped =~ "Step 1 of 4: state observing, response.streaming."
+    assert stepped =~ "chunk held"
+    assert stepped =~ "active"
+
+    stepped =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert stepped =~ "Step 2 of 4: state guarding, response.streaming."
+    assert stepped =~ "regex matched"
+    assert stepped =~ "completed"
+
+    reset =
+      view
+      |> element("button", "Reset")
+      |> render_click()
+
+    assert reset =~ "Ready: 4 trace events available for playback."
+    assert reset =~ "waiting at input boundary"
+  end
+
+  test "LiveView diagram simulation can open directly to a reviewed playback step" do
+    {:ok, _view, html} = live(build_conn(), "/policies/tts-retry/diagram/step/2")
+
+    assert html =~ "Step 2 of 4: state guarding, response.streaming."
+    assert html =~ "regex matched"
+    assert html =~ "Client( completes the prohibited span"
+    assert html =~ "completed"
+    assert html =~ "active"
+  end
+
+  test "LiveView diagram simulation controls restart cleanly from the final step" do
+    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram/step/4")
+
+    assert html =~ "Step 4 of 4: state recording, receipt.finalized."
+
+    restarted =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert restarted =~ "Ready: 4 trace events available for playback."
+    assert restarted =~ "waiting at input boundary"
+
+    playing =
+      view
+      |> element("button", "Play")
+      |> render_click()
+
+    assert playing =~ "Pause"
+  end
+
+  test "LiveView diagram can demonstrate related regex rewrite and state transition" do
+    {:ok, _view, html} = live(build_conn(), "/policies/stream-rewrite-state/diagram/step/3")
+
+    assert html =~ "Regex rewrite and state transition"
+    assert html =~ "Recipe source"
+    assert html =~ "Built-in demos"
+    assert html =~ "wardwright.dev/recipes"
+    assert html =~ "account redactor"
+    assert html =~ "secret transition"
+    assert html =~ "rewrite arbiter"
+    assert html =~ "Step 3 of 5: state review_required, response.streaming."
+    assert html =~ "related secret matched"
+    assert html =~ "state_transition"
+    assert html =~ "hold_for_review"
+  end
+
+  test "LiveView diagram recomputes policy path from editable user and model turn" do
+    {:ok, view, html} = live(build_conn(), "/policies/stream-rewrite-state/diagram")
+
+    assert html =~ "Editable turn"
+    assert html =~ "Raw user input"
+    assert html =~ "Raw model output / stream"
+    assert html =~ "User receives after Wardwright"
+    refute html =~ "Model receives after Wardwright"
+    assert html =~ "Relevant examples"
+    assert html =~ "Cross-policy probes"
+    assert html =~ "review_required"
+    assert html =~ "[withheld by Wardwright pending retry, review, or terminal policy action]"
+
+    changed =
+      view
+      |> element("form.turn_editor_grid")
+      |> render_change(%{
+        "simulation" => %{
+          "user_input" => "Write a neutral update.",
+          "model_response" => "ordinary response text with no matching tokens"
+        }
+      })
+
+    assert changed =~ "Edited stream has no regex match"
+    assert changed =~ "stream released"
+    assert changed =~ "Ready: 3 trace events available for playback."
+    assert changed =~ "ordinary response text with no matching tokens"
+    refute changed =~ "User receives after Wardwright"
+    refute changed =~ "review hold selected"
+  end
+
+  test "LiveView diagram shows before and after boundaries only when policy rewrites them" do
+    {:ok, view, html} = live(build_conn(), "/policies/stream-rewrite-state/diagram")
+
+    assert html =~ "Stream: input and output rewrite"
+    refute html =~ "Model receives after Wardwright"
+
+    selected =
+      view
+      |> element("form[phx-change='select-simulation-input']")
+      |> render_change(%{"simulation_input" => "input-and-output-rewrite"})
+
+    assert selected =~ "Raw user input"
+    assert selected =~ "Model receives after Wardwright"
+    assert selected =~ "[private-context omitted]"
+    assert selected =~ "Raw model output / stream"
+    assert selected =~ "User receives after Wardwright"
+    assert selected =~ "account [account-id]"
+    assert selected =~ "request context redacted"
+    assert selected =~ "alex@example.test"
+  end
+
+  test "LiveView diagram keeps cross-policy scenarios selectable for every policy" do
+    {:ok, view, html} = live(build_conn(), "/policies/ambiguous-success/diagram")
+
+    assert html =~ "Artifact: claim without artifact"
+    assert html =~ "TTSR: split prohibited span"
+
+    changed =
+      view
+      |> element("form[phx-change='select-simulation-input']")
+      |> render_change(%{"simulation_input" => "split-old-client"})
+
+    assert changed =~ "TTSR: split prohibited span"
+    assert changed =~ "Edited input clears missing artifact alert"
+    assert changed =~ "no alert"
+  end
+
+  test "LiveView recipe source can point at workspace catalogs without changing projection contract" do
+    original_workspace = Application.get_env(:wardwright, :policy_recipe_workspace_dir)
+
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-live-recipes-#{System.unique_integer()}")
+
+    File.mkdir_p!(workspace_dir)
+
+    File.write!(
+      Path.join(workspace_dir, "tool-demo.json"),
+      Jason.encode!(%{
+        "id" => "tool-demo",
+        "title" => "Workspace tool policy",
+        "category" => "tool.using",
+        "promise" => "Review a locally curated tool policy recipe.",
+        "pattern_id" => "tool-governance"
+      })
+    )
+
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
+
+    on_exit(fn ->
+      case original_workspace do
+        nil -> Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+        value -> Application.put_env(:wardwright, :policy_recipe_workspace_dir, value)
+      end
+    end)
+
+    {:ok, view, html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
+
+    assert html =~ "Workspace recipes"
+    assert html =~ workspace_dir
+    assert html =~ "Workspace tool policy"
+    assert html =~ "Tool call governance"
+    assert html =~ "tool receipt context"
+
+    assert {:error,
+            {:redirect, %{to: "/policies/tool-governance/state_machine?source=workspace"}}} =
+             view
+             |> element("a", "States")
+             |> render_click()
+
+    {:ok, _state_view, updated} =
+      live(build_conn(), "/policies/tool-governance/state_machine?source=workspace")
+
+    assert updated =~ "Workspace recipes"
+    assert updated =~ "States"
+  end
+
+  test "LiveView diagram mode reflects configured route and tool policies" do
+    :ok = put_route_gate_config()
+    {:ok, _route_view, route_html} = live(build_conn(), "/policies/route-privacy/diagram")
+
+    assert route_html =~ "Private context route gate"
+    assert route_html =~ "private-route-gate"
+    assert route_html =~ "fallback-route-gate"
+    assert route_html =~ "restrict_routes"
+    assert route_html =~ "switch_model"
+    assert route_html =~ "route"
+    assert route_html =~ "Multiple"
+    assert route_html =~ "policy"
+
+    :ok = put_tool_governance_config()
+    {:ok, _tool_view, tool_html} = live(build_conn(), "/policies/tool-governance/diagram")
+
+    assert tool_html =~ "Tool call governance"
+    assert tool_html =~ "github-write-tools"
+    assert tool_html =~ "shell-write-tools"
+    assert tool_html =~ "repeat-github-tool"
+    assert tool_html =~ "constrain_tools"
+    assert tool_html =~ "deny_tool"
+    assert tool_html =~ "fail_closed"
+    assert tool_html =~ "tool receipt context"
   end
 
   test "LiveView state-machine mode shows default and explicit state projections" do
     :ok = put_route_gate_config()
     {:ok, route_view, route_html} = live(build_conn(), "/policies/route-privacy/state_machine")
 
-    assert route_html =~ "State machine"
+    assert route_html =~ "States"
+    assert route_html =~ "State machine transition graph"
     assert route_html =~ "default one-state"
     assert route_html =~ "No explicit transitions"
     assert route_html =~ "Assistant boundary"
@@ -252,6 +528,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, retry_view, retry_html} = live(build_conn(), "/policies/tts-retry/state_machine")
 
     assert retry_html =~ "explicit stateful"
+    assert retry_html =~ "State machine transition graph"
     assert retry_html =~ "Observing"
     assert retry_html =~ "Retrying"
     assert render(retry_view) =~ "stream.match"
