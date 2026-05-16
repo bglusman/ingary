@@ -100,8 +100,10 @@ portable boundary such as WASM, a sidecar, or a hosted policy service.
 
 Current pure policy decisions use Gleam where the boundary is stable enough:
 structured-output guard-loop status, recent-history threshold classification,
-and alert enqueue/backpressure classification. Keep process ownership and
-side-effecting delivery in Elixir unless a later spike proves a better split.
+alert enqueue/backpressure classification, normalized action/result metadata,
+and route-planner strategy/reason classification. Keep process ownership,
+open config-map parsing, provider boundaries, and side-effecting delivery in
+Elixir unless a later spike proves a better split.
 Set `WARDWRIGHT_POLICY_CORE=elixir`, `gleam`, or `compare` to select the runtime
 decision implementation; `compare` executes both implementations and raises on
 semantic drift.
