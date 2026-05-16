@@ -24,6 +24,13 @@ defmodule Wardwright.PolicyProjection do
       "category" => "route.selecting",
       "promise" =>
         "Keep private-risk requests on approved local routes unless cloud escalation is explicitly allowed."
+    },
+    %{
+      "id" => "tool-governance",
+      "title" => "Tool call governance",
+      "category" => "tool.using",
+      "promise" =>
+        "Normalize tool context, expose tool-sensitive policy review points, and make tool selector/loop rules visible before enforcement."
     }
   ]
 
@@ -76,6 +83,7 @@ defmodule Wardwright.PolicyProjection do
       "pattern_id" => pattern["id"],
       "config_version" => Map.get(config, "version"),
       "governance" => Map.get(config, "governance", []),
+      "tool_governance" => tool_governance_rules(config),
       "stream_rules" => Map.get(config, "stream_rules", []),
       "structured_output" => Map.get(config, "structured_output")
     }
@@ -108,6 +116,30 @@ defmodule Wardwright.PolicyProjection do
         "can_generate_scenarios" => true,
         "can_explain_trace" => true,
         "can_emit_source_spans" => Enum.any?(route_rules, &is_map(&1["source_span"]))
+      }
+    }
+  end
+
+  defp engine("tool-governance", config) do
+    tool_rules = tool_governance_rules(config)
+    language = route_engine_language(tool_rules)
+
+    %{
+      "engine_id" => "tool-context-plan",
+      "display_name" => "Tool context plan",
+      "language" => language,
+      "version" => "0.1",
+      "capabilities" => %{
+        "phases" => [
+          "tool.planning",
+          "tool.result_interpreting",
+          "tool.loop_governing",
+          "receipt.finalized"
+        ],
+        "can_static_analyze" => language != "opaque",
+        "can_generate_scenarios" => true,
+        "can_explain_trace" => true,
+        "can_emit_source_spans" => Enum.any?(tool_rules, &is_map(&1["source_span"]))
       }
     }
   end
@@ -194,6 +226,80 @@ defmodule Wardwright.PolicyProjection do
         "title" => "Route",
         "description" => "Project configured request governance before provider selection.",
         "nodes" => nodes
+      }
+    ]
+  end
+
+  defp phases("tool-governance", config) do
+    rules = tool_governance_rules(config)
+
+    planning_nodes =
+      rules
+      |> Enum.filter(&tool_planning_rule?/1)
+      |> Enum.map(&tool_governance_node(&1, "tool.planning"))
+      |> case do
+        [] -> [no_tool_policy_node("tool.planning", "planning")]
+        configured -> configured
+      end
+
+    result_nodes =
+      rules
+      |> Enum.filter(&tool_result_rule?/1)
+      |> Enum.map(&tool_governance_node(&1, "tool.result_interpreting"))
+      |> case do
+        [] -> [no_tool_policy_node("tool.result_interpreting", "result")]
+        configured -> configured
+      end
+
+    loop_nodes =
+      rules
+      |> Enum.filter(&tool_loop_rule?/1)
+      |> Enum.map(&tool_governance_node(&1, "tool.loop_governing"))
+      |> case do
+        [] -> [no_tool_policy_node("tool.loop_governing", "loop")]
+        configured -> configured
+      end
+
+    [
+      %{
+        "id" => "tool.planning",
+        "title" => "Tool Planning",
+        "description" =>
+          "Review declared tools, explicit tool_choice, and planned assistant tool calls.",
+        "nodes" => planning_nodes
+      },
+      %{
+        "id" => "tool.result_interpreting",
+        "title" => "Tool Results",
+        "description" =>
+          "Review tool result status and hashed result evidence before the model interprets it.",
+        "nodes" => result_nodes
+      },
+      %{
+        "id" => "tool.loop_governing",
+        "title" => "Tool Loop",
+        "description" =>
+          "Review repeated tool use over session history and configured loop budgets.",
+        "nodes" => loop_nodes
+      },
+      %{
+        "id" => "receipt.finalized",
+        "title" => "Receipt",
+        "description" =>
+          "Persist normalized tool context dimensions without raw arguments or raw results.",
+        "nodes" => [
+          node(
+            "tool.receipt-context",
+            "tool receipt context",
+            "receipt_rule",
+            "receipt.finalized",
+            "Record namespace, name, phase, risk class, provenance, call id, and hashes for audit/search.",
+            "exact",
+            ["decision.tool_context"],
+            ["receipt.decision.tool_context", "receipt.summary.tool_*"],
+            ["annotate_receipt"]
+          )
+        ]
       }
     ]
   end
@@ -471,6 +577,44 @@ defmodule Wardwright.PolicyProjection do
     end)
   end
 
+  defp tool_governance_rules(config) do
+    config
+    |> Map.get("governance", [])
+    |> Enum.filter(fn rule ->
+      kind = Map.get(rule, "kind")
+      phase = Map.get(rule, "phase")
+
+      kind in [
+        "tool_selector",
+        "tool_allowlist",
+        "tool_denylist",
+        "tool_loop_threshold",
+        "tool_result_guard"
+      ] or
+        phase in [
+          "tool.planning",
+          "tool.result_interpreting",
+          "tool.loop_governing",
+          "tool.using"
+        ]
+    end)
+  end
+
+  defp tool_planning_rule?(rule) do
+    Map.get(rule, "kind") in ["tool_selector", "tool_allowlist", "tool_denylist"] or
+      Map.get(rule, "phase") in ["tool.planning", "tool.using"]
+  end
+
+  defp tool_result_rule?(rule) do
+    Map.get(rule, "kind") == "tool_result_guard" or
+      Map.get(rule, "phase") == "tool.result_interpreting"
+  end
+
+  defp tool_loop_rule?(rule) do
+    Map.get(rule, "kind") == "tool_loop_threshold" or
+      Map.get(rule, "phase") == "tool.loop_governing"
+  end
+
   defp route_engine_language([]), do: "structured"
 
   defp route_engine_language(rules) do
@@ -583,6 +727,86 @@ defmodule Wardwright.PolicyProjection do
     )
   end
 
+  defp tool_governance_node(rule, phase) do
+    id = Map.get(rule, "id", Map.get(rule, "kind", "tool-policy"))
+    action = Map.get(rule, "action", default_tool_action(rule))
+
+    node(
+      "tool-policy.#{safe_id(id)}",
+      Map.get(rule, "label", id),
+      Map.get(rule, "kind", "tool_policy"),
+      phase,
+      tool_governance_summary(rule, action),
+      tool_governance_confidence(rule),
+      tool_governance_reads(rule, phase),
+      tool_governance_writes(action),
+      [action],
+      Map.get(rule, "source_span")
+    )
+  end
+
+  defp default_tool_action(%{"kind" => "tool_loop_threshold"}), do: "fail_closed"
+  defp default_tool_action(%{"kind" => "tool_result_guard"}), do: "review_result"
+  defp default_tool_action(%{"kind" => "tool_denylist"}), do: "deny_tool"
+  defp default_tool_action(_rule), do: "constrain_tools"
+
+  defp tool_governance_summary(rule, action) do
+    "#{action} when #{tool_match_summary(rule)}"
+  end
+
+  defp tool_match_summary(rule) do
+    matcher =
+      [
+        {"namespace", Map.get(rule, "namespace")},
+        {"name", Map.get(rule, "name")},
+        {"risk_class", Map.get(rule, "risk_class")},
+        {"phase", Map.get(rule, "phase")}
+      ]
+      |> Enum.reject(fn {_key, value} -> value in [nil, ""] end)
+      |> Enum.map(fn {key, value} -> "#{key}=#{value}" end)
+      |> Enum.join(", ")
+
+    cond do
+      matcher != "" -> matcher
+      is_integer(Map.get(rule, "threshold")) -> "tool count >= #{Map.get(rule, "threshold")}"
+      true -> "tool context matches"
+    end
+  end
+
+  defp tool_governance_confidence(%{"engine" => engine}) when engine not in [nil, ""] do
+    if is_map(engine) or engine == "hybrid", do: "inferred", else: "opaque"
+  end
+
+  defp tool_governance_confidence(_rule), do: "declared"
+
+  defp tool_governance_reads(%{"kind" => "tool_loop_threshold"}, _phase),
+    do: ["decision.tool_context", "policy_cache.session.tool_call"]
+
+  defp tool_governance_reads(_rule, "tool.result_interpreting"),
+    do: ["decision.tool_context", "tool.result_hash", "tool.result_status"]
+
+  defp tool_governance_reads(_rule, _phase),
+    do: ["request.tools", "request.tool_choice", "message.tool_calls", "decision.tool_context"]
+
+  defp tool_governance_writes("deny_tool"), do: ["decision.blocked", "tool.allowed"]
+  defp tool_governance_writes("fail_closed"), do: ["decision.blocked", "final.status"]
+  defp tool_governance_writes("review_result"), do: ["policy.actions", "receipt.events"]
+  defp tool_governance_writes(_action), do: ["tool.allowed", "policy.actions"]
+
+  defp no_tool_policy_node(phase, label) do
+    node(
+      "tool-policy.no-#{safe_id(label)}-policy",
+      "no #{label} tool policy",
+      "plan_gap",
+      phase,
+      "No #{label} tool-governance rule is present in the active configuration.",
+      "exact",
+      ["governance", "decision.tool_context"],
+      [],
+      []
+    )
+  end
+
   defp stream_summary([]), do: "Match prohibited output inside the unreleased stream horizon."
 
   defp stream_summary(rules) do
@@ -644,6 +868,37 @@ defmodule Wardwright.PolicyProjection do
     end)
   end
 
+  defp effects("tool-governance", config) do
+    rules = tool_governance_rules(config)
+
+    effects =
+      rules
+      |> Enum.map(fn rule ->
+        action = Map.get(rule, "action", default_tool_action(rule))
+
+        effect(
+          "effect.tool-policy-#{safe_id(Map.get(rule, "id", action))}",
+          "tool-policy.#{safe_id(Map.get(rule, "id", action))}",
+          tool_rule_phase(rule),
+          action,
+          tool_effect_target(action),
+          tool_governance_confidence(rule)
+        )
+      end)
+
+    effects ++
+      [
+        effect(
+          "effect.tool-receipt",
+          "tool.receipt-context",
+          "receipt.finalized",
+          "annotate_receipt",
+          "receipt",
+          "exact"
+        )
+      ]
+  end
+
   defp effects(_pattern_id, _config) do
     [
       effect(
@@ -688,6 +943,18 @@ defmodule Wardwright.PolicyProjection do
 
   defp route_effect_target(%{"action" => "block"}), do: "request"
   defp route_effect_target(_action), do: "policy"
+
+  defp tool_rule_phase(rule) do
+    cond do
+      tool_loop_rule?(rule) -> "tool.loop_governing"
+      tool_result_rule?(rule) -> "tool.result_interpreting"
+      true -> "tool.planning"
+    end
+  end
+
+  defp tool_effect_target(action) when action in ["deny_tool", "constrain_tools"], do: "tool"
+  defp tool_effect_target(action) when action in ["fail_closed", "block"], do: "request"
+  defp tool_effect_target(_action), do: "policy"
 
   defp effect_confidence("primitive"), do: "exact"
   defp effect_confidence(_source_type), do: "inferred"
@@ -737,6 +1004,30 @@ defmodule Wardwright.PolicyProjection do
     end)
   end
 
+  defp conflicts("tool-governance", config) do
+    config
+    |> tool_governance_rules()
+    |> Enum.group_by(&tool_rule_phase/1)
+    |> Enum.flat_map(fn {phase, rules} ->
+      if length(rules) > 1 do
+        [
+          %{
+            "id" => "conflict.tool-policy.#{safe_id(phase)}",
+            "class" => "ordered",
+            "node_ids" =>
+              Enum.map(rules, &"tool-policy.#{safe_id(Map.get(&1, "id", "tool-policy"))}"),
+            "summary" =>
+              "Multiple tool-governance rules can affect #{phase}; activation needs explicit priority or proof that actions do not conflict.",
+            "required_resolution" =>
+              "declare priority, mutual exclusivity, or an allow/deny precedence contract before enforcement"
+          }
+        ]
+      else
+        []
+      end
+    end)
+  end
+
   defp conflicts(_pattern_id, _config) do
     [
       %{
@@ -766,6 +1057,22 @@ defmodule Wardwright.PolicyProjection do
     end)
   end
 
+  defp opaque_regions("tool-governance", config) do
+    config
+    |> tool_governance_rules()
+    |> Enum.filter(fn rule -> tool_governance_confidence(rule) == "opaque" end)
+    |> Enum.map(fn rule ->
+      %{
+        "id" => "opaque.#{safe_id(Map.get(rule, "id", "tool-policy"))}",
+        "node_id" => "tool-policy.#{safe_id(Map.get(rule, "id", "tool-policy"))}",
+        "reason" =>
+          "Sandboxed tool policy is represented through its declared action contract; static adapter cannot prove every internal branch.",
+        "review_requirement" =>
+          "Require scenario coverage for allow, deny, loop-threshold, and result-status cases before activation."
+      }
+    end)
+  end
+
   defp opaque_regions(_pattern_id, _config), do: []
 
   defp warnings("route-privacy", config) do
@@ -773,6 +1080,18 @@ defmodule Wardwright.PolicyProjection do
       ["No route-affecting governance rule is configured for this projection."]
     else
       []
+    end
+  end
+
+  defp warnings("tool-governance", config) do
+    if tool_governance_rules(config) == [] do
+      [
+        "Tool context is normalized and recorded, but no tool-governance rule is configured for enforcement."
+      ]
+    else
+      [
+        "Tool-context provenance is evidence only; caller-provided metadata must not be treated as trusted execution fact."
+      ]
     end
   end
 
@@ -846,6 +1165,15 @@ defmodule Wardwright.PolicyProjection do
     case rules do
       [] -> no_route_gate_simulation()
       _configured -> [route_governance_simulation(config, rules)]
+    end
+  end
+
+  defp simulation_cases("tool-governance", config) do
+    rules = tool_governance_rules(config)
+
+    case rules do
+      [] -> [no_tool_governance_simulation()]
+      _configured -> [tool_governance_simulation(rules)]
     end
   end
 
@@ -992,11 +1320,122 @@ defmodule Wardwright.PolicyProjection do
     |> fixture_case()
   end
 
+  defp no_tool_governance_simulation do
+    %{
+      "simulation_schema" => "wardwright.policy_simulation.v1",
+      "scenario_id" => "no-tool-policy-configured",
+      "title" => "No tool governance configured",
+      "engine_id" => "tool-context-plan",
+      "input_summary" =>
+        "A request includes declared tools, but active config has no tool policy.",
+      "expected_behavior" => "Tool context is normalized into receipt evidence only.",
+      "verdict" => "inconclusive",
+      "trace" => [
+        trace(
+          "g1",
+          "tool.planning",
+          "tool-policy.no-planning-policy",
+          "warning",
+          "no tool policy",
+          "No configured tool-governance node can constrain this planned tool call.",
+          "warn"
+        ),
+        trace(
+          "g2",
+          "receipt.finalized",
+          "tool.receipt-context",
+          "receipt_event",
+          "tool context recorded",
+          "Receipt summaries can filter namespace/name/phase/risk/source/call id without raw args.",
+          "info"
+        )
+      ],
+      "receipt_preview" => %{
+        "decision" => %{
+          "tool_context" => %{
+            "schema" => "wardwright.tool_context.v1",
+            "phase" => "planning",
+            "primary_tool" => %{
+              "namespace" => "openai.function",
+              "name" => "lookup_customer",
+              "risk_class" => "unknown",
+              "source" => "declared_tool"
+            }
+          }
+        },
+        "final_status" => "simulated"
+      }
+    }
+    |> fixture_case()
+  end
+
+  defp tool_governance_simulation([rule | _rules]) do
+    node_id = "tool-policy.#{safe_id(Map.get(rule, "id", "tool-policy"))}"
+    phase = tool_rule_phase(rule)
+
+    %{
+      "simulation_schema" => "wardwright.policy_simulation.v1",
+      "scenario_id" => "configured-tool-policy",
+      "title" => "Configured tool governance path",
+      "engine_id" => "tool-context-plan",
+      "input_summary" => "Synthetic request chosen to exercise the first configured tool rule.",
+      "expected_behavior" =>
+        "Projection links normalized tool context to a declared tool policy action.",
+      "verdict" => "passed",
+      "trace" => [
+        trace(
+          "g1",
+          phase,
+          node_id,
+          "match",
+          Map.get(rule, "action", default_tool_action(rule)),
+          tool_governance_summary(rule, Map.get(rule, "action", default_tool_action(rule))),
+          "pass"
+        ),
+        trace(
+          "g2",
+          "receipt.finalized",
+          "tool.receipt-context",
+          "receipt_event",
+          "tool context recorded",
+          "Normalized tool context is available as receipt evidence and receipt-list filters.",
+          "info"
+        )
+      ],
+      "receipt_preview" => %{
+        "decision" => %{
+          "tool_context" => %{
+            "schema" => "wardwright.tool_context.v1",
+            "phase" => tool_context_phase(phase),
+            "primary_tool" => %{
+              "namespace" => Map.get(rule, "namespace", "mcp.github"),
+              "name" => Map.get(rule, "name", "create_pull_request"),
+              "risk_class" => Map.get(rule, "risk_class", "write"),
+              "source" => "caller_metadata"
+            }
+          },
+          "policy_actions" => [
+            %{
+              "rule_id" => Map.get(rule, "id"),
+              "action" => Map.get(rule, "action", default_tool_action(rule))
+            }
+          ]
+        },
+        "final_status" => "simulated"
+      }
+    }
+    |> fixture_case()
+  end
+
   defp fixture_case(simulation) do
     simulation
     |> put_string("scenario_source", "fixture")
     |> put_string("source", "fixture")
   end
+
+  defp tool_context_phase("tool.result_interpreting"), do: "result_interpretation"
+  defp tool_context_phase("tool.loop_governing"), do: "loop_governance"
+  defp tool_context_phase(phase), do: String.replace_prefix(phase, "tool.", "")
 
   defp put_string(map, key, value), do: Map.put(map, key, value)
 

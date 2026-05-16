@@ -45,8 +45,10 @@ a clear error that names the missing capability.
   the upstream adapter when request fields such as OpenAI-compatible tool calls
   would otherwise be silently dropped.
 - Tool-context facts from OpenAI-compatible request fields and caller metadata
-  are normalized into receipt decision evidence. They do not yet drive policy
-  selection, routing, counters, or simulator projection nodes.
+  are normalized into receipt decision evidence and receipt-list filters. The
+  workbench now has an explicit tool-governance projection for planning,
+  result-interpretation, loop-governance, and receipt phases. These projections
+  still do not enforce tool selector/loop policies.
 - Live provider smoke tests have an explicit non-CI profile. `mise run
   test:live-providers` fails clearly unless at least one live target is
   configured, then verifies streaming, receipt metadata, and non-mock provider
@@ -84,9 +86,9 @@ a clear error that names the missing capability.
   server is mounted at `/mcp` for read-only projection, simulation, and artifact
   validation tools. Write tools are still HTTP-only until the MCP auth/review
   boundary is explicit.
-- Tool-context normalization is receipt-only. It intentionally stops short of
-  selector matching, tool-scoped policy bundles, or cross-session tool counters
-  until the tool-policy contract settles.
+- Tool-context normalization is receipt/projection-only. It intentionally stops
+  short of selector enforcement, tool-scoped policy bundles, or cross-session
+  tool counters until the tool-policy contract settles.
 - The policy workbench is mostly static projection plus live runtime/cache
   events. It can consume persisted scenario records, but does not yet execute
   user-authored scenarios or show artifact diffs.

@@ -150,6 +150,57 @@ defmodule Wardwright.PolicyProjectionLiveTest do
              get_in(simulation, ["receipt_preview", "decision", "route_constraints"])
   end
 
+  test "tool governance projection exposes tool phases without enforcing spike semantics" do
+    :ok = put_tool_governance_config()
+
+    projection = Wardwright.PolicyProjection.projection("tool-governance")
+    [simulation] = Wardwright.PolicyProjection.simulations("tool-governance")
+
+    assert projection["engine"]["engine_id"] == "tool-context-plan"
+
+    assert projection["engine"]["capabilities"]["phases"] == [
+             "tool.planning",
+             "tool.result_interpreting",
+             "tool.loop_governing",
+             "receipt.finalized"
+           ]
+
+    nodes = projection["phases"] |> Enum.flat_map(& &1["nodes"])
+
+    assert Enum.any?(nodes, fn node ->
+             node["id"] == "tool-policy.github-write-tools" and
+               node["reads"] == [
+                 "request.tools",
+                 "request.tool_choice",
+                 "message.tool_calls",
+                 "decision.tool_context"
+               ] and
+               node["writes"] == ["tool.allowed", "policy.actions"]
+           end)
+
+    assert Enum.any?(nodes, fn node ->
+             node["id"] == "tool-policy.repeat-github-tool" and
+               node["reads"] == ["decision.tool_context", "policy_cache.session.tool_call"] and
+               node["writes"] == ["decision.blocked", "final.status"]
+           end)
+
+    assert Enum.any?(nodes, &(&1["id"] == "tool.receipt-context"))
+    assert [%{"class" => "ordered", "node_ids" => node_ids}] = projection["conflicts"]
+    assert "tool-policy.github-write-tools" in node_ids
+    assert "tool-policy.shell-write-tools" in node_ids
+
+    assert simulation["scenario_id"] == "configured-tool-policy"
+    assert simulation["verdict"] == "passed"
+
+    assert get_in(simulation, ["receipt_preview", "decision", "tool_context", "primary_tool"]) ==
+             %{
+               "namespace" => "mcp.github",
+               "name" => "create_pull_request",
+               "risk_class" => "write",
+               "source" => "caller_metadata"
+             }
+  end
+
   test "LiveView projection workbench renders selected pattern and mode" do
     :ok = put_route_gate_config()
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/trace_overlay")
@@ -225,6 +276,39 @@ defmodule Wardwright.PolicyProjectionLiveTest do
           "contains" => "force-managed",
           "message" => "operator selected managed fallback",
           "target_model" => Wardwright.managed_model()
+        }
+      ])
+
+    assert {:ok, _config} = Wardwright.put_config(config)
+    :ok
+  end
+
+  defp put_tool_governance_config do
+    config =
+      Wardwright.default_config()
+      |> Map.put("governance", [
+        %{
+          "id" => "github-write-tools",
+          "kind" => "tool_selector",
+          "namespace" => "mcp.github",
+          "name" => "create_pull_request",
+          "risk_class" => "write",
+          "action" => "constrain_tools"
+        },
+        %{
+          "id" => "shell-write-tools",
+          "kind" => "tool_denylist",
+          "namespace" => "shell",
+          "risk_class" => "irreversible",
+          "action" => "deny_tool"
+        },
+        %{
+          "id" => "repeat-github-tool",
+          "kind" => "tool_loop_threshold",
+          "namespace" => "mcp.github",
+          "name" => "create_pull_request",
+          "threshold" => 3,
+          "action" => "fail_closed"
         }
       ])
 
