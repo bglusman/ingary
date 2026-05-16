@@ -1413,7 +1413,7 @@ defmodule Wardwright.PolicyProjection do
               "namespace" => Map.get(rule, "namespace", "mcp.github"),
               "name" => Map.get(rule, "name", "create_pull_request"),
               "risk_class" => Map.get(rule, "risk_class", "write"),
-              "source" => "caller_metadata"
+              "source" => "declared_tool"
             }
           },
           "policy_actions" => [

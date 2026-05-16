@@ -197,7 +197,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
                "namespace" => "mcp.github",
                "name" => "create_pull_request",
                "risk_class" => "write",
-               "source" => "caller_metadata"
+               "source" => "declared_tool"
              }
   end
 
