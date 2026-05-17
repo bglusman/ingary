@@ -298,14 +298,14 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             <strong><%= group.title %></strong>
             <small><%= length(group.recipes) %> examples</small>
           </summary>
-          <a
+          <.link
             :for={pattern <- group.recipes}
+            patch={path(pattern["pattern_id"], "diagram", @selected_recipe_source_id, pattern["id"])}
             class={if pattern["id"] == @selected_recipe_id, do: "active", else: ""}
-            href={path(pattern["pattern_id"], "diagram", @selected_recipe_source_id, pattern["id"])}
           >
             <strong><%= pattern["title"] %></strong>
             <span><%= pattern["category"] %></span>
-          </a>
+          </.link>
         </details>
         <div :if={@recipe_groups == []} class="recipe_empty">
           <strong>No examples loaded</strong>
@@ -1154,6 +1154,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .recipe_group summary strong { min-width: 0; font-size: 12px; line-height: 1.25; overflow-wrap: anywhere; }
     .recipe_group summary small { color: #93a4b3; font-size: 11px; font-weight: 800; white-space: nowrap; }
     .recipe_group a { margin-left: 8px; }
+    .recipe_group a.active, .recipe_group a:hover { border-color: #7fb0dd; background: #344b5e; box-shadow: inset 3px 0 0 #8fc5f4; }
     .recipe_source, .recipe_empty { display: grid; gap: 6px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; }
     .recipe_source label, .recipe_source span, .recipe_source small, .recipe_empty span { min-width: 0; color: #adbac5; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
     .recipe_source select { width: 100%; min-width: 0; min-height: 32px; border: 1px solid #657583; border-radius: 6px; color: #e6ebef; background: #25313b; font-weight: 800; }
@@ -1869,15 +1870,27 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   defp path(pattern_id, mode, source_id), do: path(pattern_id, mode, source_id, nil)
 
-  defp path(pattern_id, mode, source_id, recipe_id) do
+  defp path(pattern_id, mode, source_id, recipe_id) when recipe_id in [nil, ""] do
     query =
       %{}
       |> maybe_put_query("source", source_query_value(source_id))
-      |> maybe_put_query("recipe", recipe_id)
 
     case map_size(query) do
       0 -> path(pattern_id, mode)
       _ -> path(pattern_id, mode) <> "?" <> URI.encode_query(query)
+    end
+  end
+
+  defp path(pattern_id, mode, source_id, recipe_id) do
+    query =
+      %{}
+      |> maybe_put_query("source", source_query_value(source_id))
+
+    path = "#{path(pattern_id, mode)}/recipe/#{URI.encode_www_form(recipe_id)}"
+
+    case map_size(query) do
+      0 -> path
+      _ -> path <> "?" <> URI.encode_query(query)
     end
   end
 

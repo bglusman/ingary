@@ -267,7 +267,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert {:error,
             {:redirect,
-             %{to: "/policies/route-privacy/effect_matrix?recipe=private-helpdesk-local-gate"}}} =
+             %{to: "/policies/route-privacy/effect_matrix/recipe/private-helpdesk-local-gate"}}} =
              view
              |> element("a", "Effect table")
              |> render_click()
@@ -275,7 +275,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, matrix_view, _html} =
       live(
         build_conn(),
-        "/policies/route-privacy/effect_matrix?recipe=private-helpdesk-local-gate"
+        "/policies/route-privacy/effect_matrix/recipe/private-helpdesk-local-gate"
       )
 
     matrix_html = render(matrix_view)
@@ -711,13 +711,13 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert {:error,
             {:redirect,
-             %{to: "/policies/tool-governance/state_machine?recipe=tool-loop-cost-brake"}}} =
+             %{to: "/policies/tool-governance/state_machine/recipe/tool-loop-cost-brake"}}} =
              view
              |> element("a", "State model")
              |> render_click()
 
     {:ok, _state_view, updated} =
-      live(build_conn(), "/policies/tool-governance/state_machine?recipe=tool-loop-cost-brake")
+      live(build_conn(), "/policies/tool-governance/state_machine/recipe/tool-loop-cost-brake")
 
     assert updated =~ "Project examples"
     assert updated =~ "State model"
@@ -738,7 +738,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       end
     end)
 
-    {:ok, _view, html} = live(build_conn(), "/policies/route-privacy/diagram")
+    {:ok, view, html} = live(build_conn(), "/policies/route-privacy/diagram")
 
     assert html =~ "Project examples"
     assert html =~ workspace_dir
@@ -747,9 +747,31 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Private helpdesk route gate"
     assert html =~ "Context-window dispatcher"
     assert html =~ "Partial alloy context ladder"
+
+    assert active_recipe_link?(html, "private-helpdesk-local-gate")
+
     assert html =~ "Deprecated SDK stream retry"
     assert html =~ "Keep customer-private helpdesk turns"
     refute html =~ "Built-in examples"
+
+    selected =
+      view
+      |> element(~s(a[href="/policies/route-privacy/diagram/recipe/context-window-dispatcher"]))
+      |> render_click()
+
+    assert active_recipe_link?(selected, "context-window-dispatcher")
+
+    {:ok, _direct_view, direct_html} =
+      live(build_conn(), "/policies/route-privacy/diagram/recipe/context-window-dispatcher")
+
+    assert active_recipe_link?(direct_html, "context-window-dispatcher")
+  end
+
+  defp active_recipe_link?(html, recipe_id) do
+    Regex.match?(
+      ~r/<a(?=[^>]*class="active")(?=[^>]*href="\/policies\/route-privacy\/diagram\/recipe\/#{Regex.escape(recipe_id)}")[^>]*>/,
+      html
+    )
   end
 
   test "LiveView diagram mode reflects configured route and tool policies" do
