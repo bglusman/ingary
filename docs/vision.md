@@ -12,10 +12,13 @@ decides what that name means today, records why, and exposes the result through
 an OpenAI-compatible interface.
 
 <div class="notice">
-  <strong>Current status:</strong> this is a product vision and implementation
-  plan, not a finished release. The repo is intentionally using
-  docs-driven development: write down the contract, build prototypes against
-  it, test the contract, then choose the production foundation using evidence.
+  <strong>Current status:</strong> Wardwright is an early installable prototype,
+  not a finished product. Release <code>v0.0.3</code> includes native macOS and
+  Linux artifacts, an OpenAI-compatible gateway surface, policy receipts, stream
+  governance, tool-context policy hooks, and an initial LiveView workbench. The
+  repo is still intentionally docs-driven: write down the contract, build
+  prototypes against it, test the contract, then harden the production
+  foundation using evidence.
 </div>
 
 ## Product Shape
@@ -160,3 +163,5 @@ The first durable implementation should prioritize:
 
 See [Use Cases](use-cases.html) for the first policy examples that should drive
 tests, docs, and UI workflows.
+
+See [Packaging](packaging.html) for Homebrew and Linux install instructions.

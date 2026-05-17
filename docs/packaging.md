@@ -6,9 +6,9 @@ description: Release, native binary, and Homebrew packaging plan for Wardwright.
 
 # Packaging
 
-Status: initial Burrito/Tinfoil packaging path in place. The next expected
-publication is `v0.0.3`, a usable early release before the policy UI is
-complete enough to call `0.1.0`.
+Status: initial Burrito/Tinfoil packaging path in place. Release `v0.0.3` is
+published as a usable early release before the policy UI is complete enough to
+call `0.1.0`.
 
 Wardwright is a BEAM application with a Phoenix/LiveView operator UI and Gleam
 decision cores. The packaging goal is a user-facing binary that does not require
@@ -105,12 +105,13 @@ per-target binaries into versioned release archives under `_tinfoil/`.
 
 ## Homebrew
 
-The release workflow updates the existing tap:
+The release workflow updates the existing tap. Install on macOS with:
 
 ```bash
 brew tap bglusman/tap
 brew install wardwright
 brew services start wardwright
+open http://127.0.0.1:8787/policies
 ```
 
 The generated formula:
@@ -135,7 +136,14 @@ agents. The JSON form is generated from the same registry used by the protected
 authoring surface without scraping the UI.
 
 `WARDWRIGHT_ADMIN_TOKEN` remains optional for loopback-only use, but should be
-set for any deployment exposed beyond local operator access.
+set for any deployment exposed beyond local operator access. For foreground
+testing without `brew services`, run:
+
+```bash
+WARDWRIGHT_SECRET_KEY_BASE="$(cat "$(brew --prefix)/etc/wardwright/secret_key_base")" \
+WARDWRIGHT_BIND=127.0.0.1:8787 \
+wardwright
+```
 
 ## Release Workflow
 
@@ -162,9 +170,9 @@ where the policy UI and validation story are useful enough to promote.
 
 - Release `v0.0.1` was cut, but its packaged payload missed the Gleam decision
   core modules and should be superseded by `v0.0.2`.
-- Release `v0.0.2` is the first usable packaging baseline. `v0.0.3` is expected
-  to add the initial policy visualization, simulation playback, and recipe
-  catalog workbench boundary.
+- Release `v0.0.2` was the first usable packaging baseline.
+- Release `v0.0.3` adds initial policy visualization, simulation playback, and
+  the recipe catalog workbench boundary.
 - The first CI run may expose platform-specific Burrito, Zig, or NIF issues.
   macOS builds intentionally install Homebrew `zig@0.15` because upstream Zig
   0.15.2 can fail to link on newer macOS/Xcode combinations.
