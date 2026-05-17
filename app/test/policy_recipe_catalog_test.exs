@@ -34,8 +34,11 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
 
     assert catalog["source"]["trusted"] == true
     assert catalog["source"]["endpoint"] == workspace_dir
+    assert catalog["source"]["label"] == "Project examples"
     assert catalog["warnings"] == []
     assert Enum.any?(catalog["recipes"], &(&1["id"] == "local-private-route-gate"))
+    assert Enum.any?(catalog["recipes"], &(&1["id"] == "local-cascade-with-cloud-fallback"))
+    assert Enum.any?(catalog["recipes"], &(&1["id"] == "local-review-model-ladder"))
     assert Enum.any?(catalog["recipes"], &(&1["pattern_id"] == "tool-governance"))
     assert File.exists?(Path.join(workspace_dir, ".starter-recipes-seeded"))
 
@@ -191,6 +194,8 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
     assert {:ok, decoded} = Jason.decode(body)
     assert is_list(decoded["recipes"])
     assert Enum.any?(decoded["recipes"], &(&1["id"] == "community-basic-stream-retry"))
+    assert Enum.any?(decoded["recipes"], &(&1["id"] == "community-review-model-escalation"))
+    assert Enum.any?(decoded["recipes"], &(&1["id"] == "community-local-first-cascade"))
 
     assert Enum.all?(
              decoded["recipes"],

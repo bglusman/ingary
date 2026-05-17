@@ -49,10 +49,10 @@ defmodule Wardwright.PolicyRecipeCatalog do
       },
       %Source{
         id: "workspace",
-        label: "Workspace examples",
+        label: "Project examples",
         kind: "filesystem",
         trusted: true,
-        summary: "Locally reviewed recipe JSON files.",
+        summary: "Locally reviewed recipe JSON files seeded from this Wardwright build.",
         endpoint: workspace_dir(opts)
       },
       %Source{

@@ -433,7 +433,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert html =~ "Regex rewrite and state transition"
     assert html =~ "Example set"
-    assert html =~ "Workspace examples"
+    assert html =~ "Project examples"
     assert html =~ "wardwright.dev/recipes"
     assert html =~ "account redactor"
     assert html =~ "secret transition"
@@ -661,7 +661,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     {:ok, view, html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
 
-    assert html =~ "Workspace examples"
+    assert html =~ "Project examples"
     assert html =~ workspace_dir
     assert html =~ "Workspace tool policy"
     assert html =~ "1 examples reference unsupported policy patterns for this build."
@@ -675,9 +675,10 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       |> element("form[phx-submit='select-recipe-source']")
       |> render_submit(%{"recipe_source" => "built_in"})
 
-    assert workspace =~ "Workspace examples"
+    assert workspace =~ "Project examples"
     assert workspace =~ workspace_dir
     assert workspace =~ "Workspace tool policy"
+    refute workspace =~ "Built-in examples"
 
     {:ok, view, _html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
 
@@ -689,11 +690,11 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, _state_view, updated} =
       live(build_conn(), "/policies/tool-governance/state_machine")
 
-    assert updated =~ "Workspace examples"
+    assert updated =~ "Project examples"
     assert updated =~ "State model"
   end
 
-  test "LiveView default workspace source loads committed starter recipes" do
+  test "LiveView default project example source loads committed starter recipes" do
     original_workspace = Application.get_env(:wardwright, :policy_recipe_workspace_dir)
 
     workspace_dir =
@@ -710,11 +711,14 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     {:ok, _view, html} = live(build_conn(), "/policies/route-privacy/diagram")
 
-    assert html =~ "Workspace examples"
+    assert html =~ "Project examples"
     assert html =~ workspace_dir
     assert html =~ "Local private route gate"
+    assert html =~ "Local cascade with cloud fallback"
+    assert html =~ "Review model escalation ladder"
     assert html =~ "Local tool loop watch"
     assert html =~ "Private context route gate"
+    refute html =~ "Built-in examples"
   end
 
   test "LiveView diagram mode reflects configured route and tool policies" do

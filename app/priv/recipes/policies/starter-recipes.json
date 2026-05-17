@@ -9,6 +9,22 @@
       "recipe_kind": "policy_recipe"
     },
     {
+      "id": "local-cascade-with-cloud-fallback",
+      "title": "Local cascade with cloud fallback",
+      "category": "route.selecting",
+      "promise": "Start on a local model, then show the policy boundary where a larger managed fallback is allowed only after route checks pass.",
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "local-review-model-ladder",
+      "title": "Review model escalation ladder",
+      "category": "response.streaming",
+      "promise": "Keep normal turns on a local model, then transition the session to a review-capable managed model after related stream matches accumulate.",
+      "pattern_id": "stream-rewrite-state",
+      "recipe_kind": "policy_recipe"
+    },
+    {
       "id": "local-tool-loop-watch",
       "title": "Local tool loop watch",
       "category": "tool.using",
@@ -22,6 +38,14 @@
       "category": "response.streaming",
       "promise": "A simple TTSR-style stream guard: hold a small horizon, retry once on a prohibited phrase, then release the fixed attempt.",
       "pattern_id": "tts-retry",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "local-output-artifact-review",
+      "title": "Output artifact review",
+      "category": "output.finalizing",
+      "promise": "Use a cheap draft route for the answer but require artifact evidence before accepting a completion claim.",
+      "pattern_id": "ambiguous-success",
       "recipe_kind": "policy_recipe"
     }
   ]

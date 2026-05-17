@@ -115,6 +115,10 @@ The active app exposes:
 - A Phoenix LiveView policy workbench at `/policies` with projection diagrams,
   simulation playback, recipe selection, state-machine views, route/effect
   summaries, and tool-governance demos.
+- A unified project example catalog seeded into the configured local recipe
+  directory (`:policy_recipe_workspace_dir`, defaulting to
+  `~/.wardwright/recipes/policies`), with optional community recipes loaded from
+  `wardwright.dev`.
 
 Wardwright is still an early prototype. Interfaces are intentionally more
 important than deep implementation maturity, and unsupported inputs should fail
