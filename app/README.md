@@ -1,8 +1,10 @@
 # Wardwright App
 
 Elixir/LiveView implementation of the Wardwright synthetic model platform contract.
-It currently serves mock model responses and local policy evaluation surfaces;
-real provider credentials and outbound model calls are not wired here yet.
+It serves the OpenAI-compatible gateway surface, synthetic-model routing,
+stream policy, receipts, protected authoring APIs, and the LiveView policy
+workbench. Tests still rely heavily on mock providers, but the runtime boundary
+is shaped for real provider adapters and local Ollama/OpenAI-compatible targets.
 
 Gleam is compiled inside the same Mix project for small, correctness-heavy
 policy decisions. Elixir keeps ownership of HTTP, Phoenix, processes, PubSub,
@@ -11,6 +13,9 @@ output, history-threshold, and alert-queue classifications behind Elixir wrapper
 modules in `lib/wardwright/policy`.
 
 ## Run
+
+For packaged beta installs, use the root [README](../README.md) or
+[Packaging](../docs/packaging.md). This app README is for source development.
 
 ```bash
 cd app
@@ -48,12 +53,18 @@ mise exec -- mix test
 - `GET /v1/synthetic/models` returns public model summaries only.
 - `POST /v1/chat/completions`
 - `POST /v1/synthetic/simulate`
+- `GET /v1/policy-authoring/tools`
+- `GET /v1/policy-authoring/projections/{pattern}`
+- `GET /v1/policy-authoring/simulations/{pattern}`
+- `POST /v1/policy-authoring/validate`
+- `POST /v1/policy-authoring/scenarios/{pattern}`
 - `GET /v1/receipts`
 - `GET /v1/receipts/{id}`
 - `GET /admin/providers`
 - `GET /admin/storage`
 - `GET /admin/runtime`
 - `GET /admin/synthetic-models`
+- `GET /policies`
 
 The public synthetic model is available as both `coding-balanced` and
 `wardwright/coding-balanced`. Requests are routed by a simple prompt-length

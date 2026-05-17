@@ -4,9 +4,10 @@ Wardwright is an experimental synthetic model platform generalized and extended 
 model-gateway work.
 
 The core idea: clients call stable model names such as `coding-balanced` or
-`wardwright/coding-balanced`, while Wardwright owns the route graph behind that name:
-provider selection, context-window fit checks, fallback policy, stream
-governance, caller traceability, and receipts explaining every decision.
+`wardwright/coding-balanced`, while Wardwright owns the route graph behind that
+name: provider selection, context-window fit checks, fallback policy, stream
+governance, caller traceability, policy simulation, and receipts explaining
+every decision.
 
 The product is explicitly inspired by model-alloy work on alternating multiple
 LLMs inside one agent context, plus oh-my-pi's TTSR pattern of stream-triggered
@@ -19,6 +20,75 @@ behavior. The active implementation direction is now BEAM-first: Elixir owns
 runtime plumbing and LiveView, while Gleam is the preferred home for
 correctness-heavy pure policy logic when the boundary is stable enough.
 
+## Install
+
+Wardwright publishes early native binaries for macOS and Linux. The current
+release is `v0.0.3`.
+
+### macOS Homebrew
+
+```bash
+brew tap bglusman/tap
+brew install wardwright
+brew services start wardwright
+```
+
+The Homebrew service binds to `127.0.0.1:8787` by default and creates local
+configuration, data, and log directories under Homebrew-managed paths. Open the
+policy workbench after the service starts:
+
+```bash
+open http://127.0.0.1:8787/policies
+```
+
+For one-shot foreground testing instead of a service:
+
+```bash
+WARDWRIGHT_SECRET_KEY_BASE="$(cat "$(brew --prefix)/etc/wardwright/secret_key_base")" \
+WARDWRIGHT_BIND=127.0.0.1:8787 \
+wardwright
+```
+
+### Linux Tarball
+
+The installer downloads the matching GitHub Release archive, verifies it against
+`checksums-sha256.txt`, and installs `wardwright` to `~/.local/bin` by default.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh
+```
+
+For a pinned release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.3
+```
+
+Run it locally:
+
+```bash
+WARDWRIGHT_SECRET_KEY_BASE="$(openssl rand -base64 64)" \
+WARDWRIGHT_BIND=127.0.0.1:8787 \
+~/.local/bin/wardwright
+```
+
+Then visit `http://127.0.0.1:8787/policies`. Set `WARDWRIGHT_ADMIN_TOKEN` before
+exposing Wardwright beyond loopback.
+
+### Operator Helpers
+
+The installed binary also exposes small discovery commands for local agents and
+operators:
+
+```bash
+wardwright --help
+wardwright tools
+wardwright tools --json
+```
+
+See [Packaging](docs/packaging.md) for release targets, manual archive install
+steps, and service details.
+
 ## Current Contents
 
 - `contracts/openapi.yaml` - draft HTTP/OpenAI-compatible contract.
@@ -28,7 +98,29 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 - `docs/rfcs/wardwright-extraction.md` - product and architecture draft.
 - `docs/` - public docs site for `wardwright.dev`.
 
-## Current Test State
+## Current Runtime Shape
+
+The active app exposes:
+
+- OpenAI-compatible `/v1/chat/completions` and `/v1/models` endpoints.
+- Synthetic model route planning with dispatchers, cascades, alloys, fallback
+  policy, and context-window fit checks.
+- Request, route, stream, output, history, alert, and tool-context policy
+  primitives.
+- Streaming TTSR-style governance with bounded buffering, regex/literal
+  triggers, safe-prefix release, retries with reminders, rewrites, and receipt
+  evidence.
+- ETS-backed hot policy history plus protected authoring, simulation, receipt,
+  and admin surfaces.
+- A Phoenix LiveView policy workbench at `/policies` with projection diagrams,
+  simulation playback, recipe selection, state-machine views, route/effect
+  summaries, and tool-governance demos.
+
+Wardwright is still an early prototype. Interfaces are intentionally more
+important than deep implementation maturity, and unsupported inputs should fail
+loudly or be documented as prototype limitations.
+
+## Development And Tests
 
 Dynamic generated model properties require the prototype-only
 `POST /__test/config` endpoint. It exists while the production configuration API

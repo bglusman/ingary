@@ -13,6 +13,7 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
     traceability, prompt transforms, alert hooks, and receipts behind that name.
   </p>
   <div class="actions">
+    <a class="button" href="#install">Install</a>
     <a class="button" href="vision.html">Read the Vision</a>
     <a class="button secondary" href="synthetic-models.html">Synthetic Models</a>
     <a class="button secondary" href="use-cases.html">Use Cases</a>
@@ -27,12 +28,46 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
 </section>
 
 <div class="notice">
-  <strong>Status:</strong> Wardwright is early and docs-driven. This site describes
-  the product shape we are building toward, while the repository contains
-  the active BEAM implementation, shared contracts, and tests used to validate
-  policy behavior. See the [Backend Selection Decision](backend-selection-decision.html)
-  for the pruning rationale.
+  <strong>Status:</strong> Wardwright is early but installable. Release
+  <code>v0.0.3</code> publishes native macOS and Linux artifacts, a Homebrew
+  formula, the active BEAM implementation, shared contracts, and tests used to
+  validate policy behavior. See the
+  [Backend Selection Decision](backend-selection-decision.html) for the pruning
+  rationale.
 </div>
+
+## Install
+
+Wardwright publishes native binaries through GitHub Releases and Homebrew.
+
+### macOS Homebrew
+
+```bash
+brew tap bglusman/tap
+brew install wardwright
+brew services start wardwright
+open http://127.0.0.1:8787/policies
+```
+
+### Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh
+WARDWRIGHT_SECRET_KEY_BASE="$(openssl rand -base64 64)" \
+WARDWRIGHT_BIND=127.0.0.1:8787 \
+~/.local/bin/wardwright
+```
+
+For a pinned release, pass `--version v0.0.3` to the installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.3
+```
+
+The Linux installer verifies the release archive against published SHA-256
+checksums before installing. Set `WARDWRIGHT_ADMIN_TOKEN` before exposing
+Wardwright beyond loopback. See [Packaging](packaging.html) for manual archive
+install steps, release targets, and service details.
 
 ## What Wardwright Adds
 
@@ -74,25 +109,31 @@ and runtime visibility for constrained agentic workflows.
 The active prototype started by comparing Go, Rust, and Elixir backends against
 the same HTTP contract, storage contract, BDD scenarios, and property-style
 probes. That comparison has served its purpose. The live codebase now keeps the
-Elixir backend as the primary runtime, with Gleam planned for correctness-heavy
+Elixir backend as the primary runtime, with Gleam used for correctness-heavy
 pure business logic and LiveView for the operator UI. The old Go and Rust
 backends remain available in git history, but they are no longer part of the
 current tree or verification gate.
 
+The current installable build includes the OpenAI-compatible gateway surface,
+synthetic model routing, stream-policy retries/rewrites, tool-context policy
+hooks, policy history/cache state, protected authoring APIs, receipts, and an
+initial LiveView workbench for policy diagrams, simulation playback, recipe
+selection, and tool-governance demos.
+
 Near-term work:
 
-1. Implement real built-in governors for request, route, stream, and output phases.
-2. Add alert sinks and policy receipt events.
+1. Harden the policy workbench so projections and simulations are generated from
+   persisted policy artifacts, compiled plans, and receipts.
+2. Expand alert sinks and durable delivery/dead-letter semantics.
 3. Add file-backed durable storage for model definitions and receipts, with
    Mnesia/SQL providers gated on concrete query, replication, or concurrency
    needs.
-4. Publish model/session/receipt/policy events over Phoenix PubSub so LiveView
-   and cluster nodes get near-real-time visibility without owning session state.
-5. Make the LiveView policy projection and simulation workbench consume real
-   compiled policy artifacts.
-6. Use Dune-backed BEAM snippets for trusted local programmable policy only
+4. Broaden PubSub-backed visibility for model/session/receipt/policy events so
+   LiveView and cluster nodes get near-real-time views without owning session
+   state.
+5. Use Dune-backed BEAM snippets for trusted local programmable policy only
    where structured primitives are insufficient.
-7. Require WASM, a sidecar, or a hosted policy service for externally shared or
+6. Require WASM, a sidecar, or a hosted policy service for externally shared or
    otherwise untrusted programmable policy.
 
 ## Name
