@@ -173,6 +173,19 @@ defmodule Wardwright.PolicyProjection do
         }
       },
       %{
+        "id" => "history-threshold-escalation",
+        "title" => "Stream: history threshold escalates",
+        "description" =>
+          "A current account rewrite combines with three recent related matches in the last five turns, so the policy moves to review.",
+        "user_input" => "Summarize the billing incident without exposing credentials.",
+        "model_response" => "account acct_4938 appears in the answer with no new secret token.",
+        "history_context" => %{
+          "recent_related_secret_matches" => "3",
+          "recent_secret_window_requests" => "5",
+          "policy_state" => "observing"
+        }
+      },
+      %{
         "id" => "no-match",
         "title" => "Stream: no regex match",
         "description" => "No configured regex matches the held chunks.",
@@ -215,6 +228,7 @@ defmodule Wardwright.PolicyProjection do
               "rewrite-then-secret",
               "input-and-output-rewrite",
               "rewrite-only",
+              "history-threshold-escalation",
               "no-match"
             ],
        do: "direct"
@@ -1843,12 +1857,17 @@ defmodule Wardwright.PolicyProjection do
     history_trace = stream_history_trace(related_secret_history_count)
 
     cond do
-      account_match && (secret_match || related_secret_history_count > 0) ->
+      account_match && (secret_match || related_secret_history_count >= 3) ->
         account = hd(account_match)
         secret = if secret_match, do: hd(secret_match), else: "session history"
 
         secret_detail =
-          stream_secret_transition_detail(secret_match, secret, related_secret_history_count)
+          stream_secret_transition_detail(
+            secret_match,
+            secret,
+            related_secret_history_count,
+            turn
+          )
 
         %{
           "simulation_schema" => "wardwright.policy_simulation.v1",
@@ -1857,7 +1876,7 @@ defmodule Wardwright.PolicyProjection do
           "engine_id" => "structured-stream-primitives",
           "input_summary" => summarize_turn(turn),
           "expected_behavior" =>
-            "Account span is rewritten, a related secret pattern transitions to review_required, and release is blocked.",
+            "Account span is rewritten, a related secret pattern or session-history threshold transitions to review_required, and release is blocked.",
           "verdict" => "passed",
           "trace" =>
             request_trace ++
@@ -1926,9 +1945,7 @@ defmodule Wardwright.PolicyProjection do
               ],
               "state_transition" => "review_required",
               "released_to_consumer" => false,
-              "history" => %{
-                "recent_related_secret_matches" => related_secret_history_count
-              }
+              "history" => stream_history_receipt(turn, related_secret_history_count)
             },
             "events" => [
               %{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"},
@@ -2335,11 +2352,18 @@ defmodule Wardwright.PolicyProjection do
     }
   end
 
-  defp stream_secret_transition_detail(nil, _secret, related_secret_history_count) do
-    "#{related_secret_history_count} prior related secret match(es) in session history trigger review_required after this account rewrite"
+  defp stream_secret_transition_detail(nil, _secret, related_secret_history_count, turn) do
+    window = turn_history_window_label(turn)
+
+    "#{related_secret_history_count} prior related secret match(es) #{window} trigger review_required after this account rewrite"
   end
 
-  defp stream_secret_transition_detail(_secret_match, secret, _related_secret_history_count) do
+  defp stream_secret_transition_detail(
+         _secret_match,
+         secret,
+         _related_secret_history_count,
+         _turn
+       ) do
     "#{secret} appears after the account rewrite and triggers review_required"
   end
 
@@ -2353,11 +2377,19 @@ defmodule Wardwright.PolicyProjection do
         "stream.secret-transition",
         "history_read",
         "prior related matches read",
-        "#{count} related secret match(es) found in session history",
+        "#{count} related secret match(es) found in the configured session-history window",
         "info",
         state_id: "observing"
       )
     ]
+  end
+
+  defp stream_history_receipt(turn, related_secret_history_count) do
+    %{
+      "recent_related_secret_matches" => related_secret_history_count,
+      "recent_secret_window_requests" => related_secret_history_window(turn),
+      "threshold" => 3
+    }
   end
 
   defp request_rewrite_result(user_input) do
@@ -2454,6 +2486,19 @@ defmodule Wardwright.PolicyProjection do
     |> Map.get("recent_related_secret_matches", "0")
     |> parse_nonnegative_integer()
   end
+
+  defp related_secret_history_window(turn) do
+    turn
+    |> turn_history_context()
+    |> Map.get("recent_secret_window_requests", "5")
+    |> parse_nonnegative_integer()
+  end
+
+  defp turn_history_window_label(turn) when is_map(turn) do
+    "in the last #{related_secret_history_window(turn)} request(s)"
+  end
+
+  defp turn_history_window_label(_turn), do: "in session history"
 
   defp normalize_history_context(context) when is_map(context) do
     context

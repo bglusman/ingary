@@ -210,7 +210,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert html =~ "Private context route gate"
     assert html =~ "Trace"
-    assert html =~ "why this run"
+    assert html =~ "this example"
     assert html =~ "Request route plan"
     assert html =~ "Artifact first"
     assert html =~ "Policy nodes"
@@ -241,7 +241,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert matrix_html =~ "Private context route gate"
     assert matrix_html =~ "Actions"
-    assert matrix_html =~ "what can happen"
+    assert matrix_html =~ "possible outcomes"
     assert matrix_html =~ "route.allowed_targets"
   end
 
@@ -464,6 +464,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, view, html} = live(build_conn(), "/policies/stream-rewrite-state/diagram")
 
     assert html =~ "Stream: input and output rewrite"
+    assert html =~ "Load scenario"
     refute html =~ "Model receives after Wardwright"
 
     selected =
@@ -479,6 +480,15 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert selected =~ "account [account-id]"
     assert selected =~ "request context redacted"
     assert selected =~ "alex@example.test"
+
+    submitted =
+      view
+      |> element("form[phx-submit='select-simulation-input']")
+      |> render_submit(%{"simulation_input" => "no-match"})
+
+    assert submitted =~ "Edited stream has no regex match"
+    assert submitted =~ "Released unchanged. The user receives this raw model output."
+    refute submitted =~ "User receives after Wardwright"
   end
 
   test "LiveView simulation lets authors edit referenced history that changes behavior" do
@@ -494,6 +504,17 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert selected =~ "rewritten stream released"
     refute selected =~ "prior related matches read"
 
+    threshold =
+      view
+      |> element("form[phx-submit='select-simulation-input']")
+      |> render_submit(%{"simulation_input" => "history-threshold-escalation"})
+
+    assert threshold =~ "Stream: history threshold escalates"
+    assert threshold =~ "Relevant examples"
+    assert threshold =~ "History window size"
+    assert threshold =~ "3 related secret match"
+    assert threshold =~ "review hold selected"
+
     changed =
       view
       |> element("form.turn_editor_grid")
@@ -502,14 +523,15 @@ defmodule Wardwright.PolicyProjectionLiveTest do
           "user_input" => "Summarize the billing incident without exposing credentials.",
           "model_response" => "account acct_4938 appears in the answer with no new token.",
           "history_context" => %{
-            "recent_related_secret_matches" => "2",
+            "recent_related_secret_matches" => "3",
+            "recent_secret_window_requests" => "5",
             "policy_state" => "observing"
           }
         }
       })
 
     assert changed =~ "prior related matches read"
-    assert changed =~ "2 related secret match"
+    assert changed =~ "3 related secret match"
     assert changed =~ "review hold selected"
     assert changed =~ "No output is released to the user in this simulated branch"
   end
@@ -563,8 +585,20 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Workspace recipes"
     assert html =~ workspace_dir
     assert html =~ "Workspace tool policy"
+    assert html =~ "Load source"
     assert html =~ "Tool call governance"
     assert html =~ "tool receipt context"
+
+    built_in =
+      view
+      |> element("form[phx-submit='select-recipe-source']")
+      |> render_submit(%{"recipe_source" => "built_in"})
+
+    assert built_in =~ "Built-in demos"
+    assert built_in =~ "compiled into this build"
+    refute built_in =~ "Workspace tool policy"
+
+    {:ok, view, _html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
 
     assert {:error,
             {:redirect, %{to: "/policies/tool-governance/state_machine?source=workspace"}}} =
