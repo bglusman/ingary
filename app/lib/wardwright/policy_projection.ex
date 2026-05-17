@@ -728,26 +728,37 @@ defmodule Wardwright.PolicyProjection do
         "observing",
         "Observing",
         "Hold unreleased stream chunks while matching configured stream rules.",
-        ["tts.no-old-client"]
+        ["tts.no-old-client"],
+        model_id: Wardwright.local_model(),
+        model_reason:
+          "The first attempt starts on the default local route while Wardwright holds a short stream horizon before release."
       ),
       state(
         "guarding",
         "Guarding",
         "A prohibited span has matched before release; current attempt must stop.",
-        ["tts.no-old-client", "tts.retry-arbiter"]
+        ["tts.no-old-client", "tts.retry-arbiter"],
+        model_id: "none",
+        model_reason:
+          "The guard stops the active provider stream before any matched bytes are released to the user."
       ),
       state(
         "retrying",
         "Retrying",
         "Retry arbitration adds a reminder or resolves repeat violation to final block.",
-        ["tts.retry-arbiter"]
+        ["tts.retry-arbiter"],
+        model_id: Wardwright.managed_model(),
+        model_reason:
+          "The retry attempt can be rerouted to a review-capable managed model with the policy reminder attached."
       ),
       state(
         "recording",
         "Recording",
         "Receipt facts persist the held bytes, match, abort, retry, and final status.",
         ["tts.receipt-events"],
-        terminal: true
+        terminal: true,
+        model_id: "none",
+        model_reason: "Receipt recording does not call a provider model."
       )
     ]
 

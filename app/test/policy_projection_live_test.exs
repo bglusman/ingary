@@ -91,6 +91,13 @@ defmodule Wardwright.PolicyProjectionLiveTest do
              "recording"
            ]
 
+    assert Enum.map(projection["state_machine"]["states"], & &1["model_id"]) == [
+             Wardwright.local_model(),
+             "none",
+             Wardwright.managed_model(),
+             "none"
+           ]
+
     assert Enum.map(projection["state_machine"]["simulation_steps"], & &1["state"]) == [
              "observing",
              "guarding",
@@ -765,6 +772,9 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert retry_html =~ "State machine transition graph"
     assert retry_html =~ "Observing"
     assert retry_html =~ "Retrying"
+    assert retry_html =~ "Turn model"
+    assert retry_html =~ "local/qwen-coder"
+    assert retry_html =~ "managed/kimi-k2.6"
     assert render(retry_view) =~ "stream.match"
 
     {:ok, _stream_view, stream_html} =
