@@ -2,6 +2,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   @moduledoc false
 
   use Phoenix.LiveView
+  alias Phoenix.LiveView.JS
 
   @modes ["diagram", "phase_map", "state_machine", "effect_matrix", "trace_overlay"]
 
@@ -604,11 +605,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           </form>
         </div>
 
-        <form phx-change="edit-simulation-turn" phx-submit="edit-simulation-turn" class="turn_editor_grid">
+        <form id="turn-editor-form" phx-change="edit-simulation-turn" class="turn_editor_grid">
           <div class={boundary_pair_class(@simulation_boundary.input_changed)}>
             <label>
               <span>Raw user input</span>
-              <textarea name="simulation[user_input]" rows="5"><%= @simulation_user_input %></textarea>
+              <textarea id="simulation-user-input" name="simulation[user_input]" rows="5" phx-debounce="300"><%= @simulation_user_input %></textarea>
               <small :if={!@simulation_boundary.input_changed} class="boundary_status">
                 Model receives this input unchanged.
               </small>
@@ -621,7 +622,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <div class={boundary_pair_class(@simulation_boundary.output_changed)}>
             <label>
               <span>Raw model output / stream</span>
-              <textarea name="simulation[model_response]" rows="5"><%= @simulation_model_response %></textarea>
+              <textarea id="simulation-model-response" name="simulation[model_response]" rows="5" phx-debounce="300"><%= @simulation_model_response %></textarea>
               <small :if={!@simulation_boundary.output_changed} class="boundary_status">
                 Released unchanged. The user receives this raw model output.
               </small>
@@ -641,12 +642,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             </div>
             <label :for={{key, value} <- Enum.sort(@simulation_history_context)}>
               <span><%= history_context_label(key) %></span>
-              <input name={"simulation[history_context][#{key}]"} value={value} />
+              <input id={"simulation-history-#{key}"} name={"simulation[history_context][#{key}]"} value={value} phx-debounce="300" />
             </label>
           </div>
           <div class="turn_editor_actions">
             <span>Changes are evaluated live; Apply is a fallback if the browser waits for field blur.</span>
-            <button type="submit">Apply changes</button>
+            <button type="button" phx-click={JS.dispatch("change", to: "#turn-editor-form")}>Apply changes</button>
           </div>
         </form>
       </div>
