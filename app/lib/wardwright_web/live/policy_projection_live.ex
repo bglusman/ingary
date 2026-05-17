@@ -635,6 +635,31 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               <textarea :if={!@simulation_boundary.output_withheld} rows="5" readonly><%= @simulation_boundary.user_received_output %></textarea>
             </label>
           </div>
+          <div :if={@simulation_boundary.attempts != []} class="attempt_loop">
+            <div>
+              <strong>Attempt loop</strong>
+              <span>Each attempt shows what the provider emitted, what Wardwright released, and how the next attempt was steered.</span>
+            </div>
+            <article :for={attempt <- @simulation_boundary.attempts} class="attempt_step">
+              <div>
+                <strong>Attempt <%= attempt["index"] %></strong>
+                <.badge value={attempt["status"]} />
+              </div>
+              <small><%= attempt["policy_result"] %></small>
+              <label>
+                <span>Model output</span>
+                <textarea rows="4" readonly><%= attempt["model_output"] %></textarea>
+              </label>
+              <label :if={Map.get(attempt, "retry_instruction")}>
+                <span>Retry instruction added by Wardwright</span>
+                <textarea rows="3" readonly><%= attempt["retry_instruction"] %></textarea>
+              </label>
+              <label>
+                <span>User receives</span>
+                <textarea rows="3" readonly><%= attempt["user_output"] || "" %></textarea>
+              </label>
+            </article>
+          </div>
           <div :if={map_size(@simulation_history_context) > 0} class="history_context_editor">
             <div>
               <strong>Referenced history</strong>
@@ -1044,6 +1069,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .boundary_pair { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; border: 1px solid #e0e6ec; border-radius: 8px; background: #fbfcfd; }
     .boundary_pair.changed { grid-template-columns: repeat(2, minmax(0, 1fr)); border-color: #bfd0df; background: #f6f9fb; }
     .boundary_status { color: #3b6657; font-size: 12px; font-weight: 800; line-height: 1.35; }
+    .attempt_loop { display: grid; gap: 10px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #f7fafc; }
+    .attempt_loop > div:first-child { display: grid; gap: 3px; }
+    .attempt_loop > div:first-child span, .attempt_step small { color: #5e6b76; font-size: 13px; line-height: 1.4; }
+    .attempt_step { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px; border: 1px solid #dde5ec; border-radius: 7px; background: #fff; }
+    .attempt_step > div, .attempt_step small { grid-column: 1 / -1; }
+    .attempt_step > div { display: flex; align-items: center; gap: 8px; }
     .turn_editor_actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .turn_editor_actions span { color: #5e6b76; font-size: 12px; line-height: 1.35; }
     .turn_editor_actions button { min-height: 34px; padding: 6px 11px; border: 1px solid #b8c6d1; border-radius: 6px; color: #26323c; background: #fff; font-weight: 800; cursor: pointer; }
@@ -1108,7 +1139,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .badge.opaque, .badge.failed, .badge.block, .badge.conflicting { border-color: #df9a9a; color: #8b2d2d; background: #fff1f1; }
     pre, code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
-    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; } .diagram_legend, .player_controls { justify-content: flex-start; } .effect_row, .trace_event, .state_step { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card, .turn_editor_header form { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
+    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed, .attempt_step { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; } .diagram_legend, .player_controls { justify-content: flex-start; } .effect_row, .trace_event, .state_step { grid-template-columns: 1fr; } .trace_event small, .trace_summary span { grid-column: 1; } .engine_card, .turn_editor_header form { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
     """
   end
 
@@ -1168,6 +1199,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     %{
       model_received_input: model_received_input,
       user_received_output: user_received_output,
+      attempts: stream_attempts(stream),
       output_withheld: Map.get(stream, "released_to_consumer") == false,
       input_changed: model_received_input != (user_input || ""),
       output_changed: user_received_output != (model_response || "")
@@ -1187,6 +1219,10 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     ""
   end
 
+  defp user_received_output(%{"final_output" => final_output}, _model_response)
+       when is_binary(final_output),
+       do: final_output
+
   defp user_received_output(%{"rewrites" => rewrites}, model_response) when is_list(rewrites) do
     Enum.reduce(rewrites, model_response || "", fn rewrite, output ->
       case rewrite do
@@ -1205,6 +1241,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   defp user_received_output(_stream, model_response), do: model_response || ""
+
+  defp stream_attempts(%{"attempts" => attempts}) when is_list(attempts), do: attempts
+  defp stream_attempts(_stream), do: []
 
   defp simulation_field(nil, _field), do: ""
   defp simulation_field(input, field), do: Map.get(input, field, "")

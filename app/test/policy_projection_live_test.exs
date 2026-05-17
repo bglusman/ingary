@@ -81,6 +81,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
              "observing",
              "guarding",
              "retrying",
+             "retrying",
              "recording"
            ]
 
@@ -272,7 +273,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Diagram"
     assert html =~ "Projection graph"
     assert html =~ "Simulated stream playback"
-    assert html =~ "Ready: 4 trace events available for playback."
+    assert html =~ "Ready: 5 trace events available for playback."
     assert html =~ "waiting at input boundary"
     assert html =~ "Policy projection graph"
     assert html =~ "simulated path"
@@ -281,18 +282,26 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "retry arbiter"
     assert html =~ "abort_attempt"
     assert html =~ "retry_with_reminder"
+    assert html =~ "Attempt loop"
+    assert html =~ "Attempt 1"
+    assert html =~ "withheld_and_aborted"
+    assert html =~ "Attempt 2"
+    assert html =~ "released_after_retry"
+    assert html =~ "Use the current client adapter in the migration note."
+    refute html =~ "No output is released to the user in this simulated branch"
 
     connected_html = render(view)
 
     assert connected_html =~ "regex matched"
     assert connected_html =~ "retry selected"
+    assert connected_html =~ "retry stream released"
     assert connected_html =~ "receipt preview"
   end
 
   test "LiveView diagram simulation can step through matching rules and state changes" do
     {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
 
-    assert html =~ "Ready: 4 trace events available for playback."
+    assert html =~ "Ready: 5 trace events available for playback."
     assert html =~ "waiting at input boundary"
     assert html =~ "pending"
 
@@ -301,7 +310,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       |> element("button", "Step")
       |> render_click()
 
-    assert stepped =~ "Step 1 of 4: state observing, response.streaming."
+    assert stepped =~ "Step 1 of 5: state observing, response.streaming."
     assert stepped =~ "chunk held"
     assert stepped =~ "active"
 
@@ -310,23 +319,39 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       |> element("button", "Step")
       |> render_click()
 
-    assert stepped =~ "Step 2 of 4: state guarding, response.streaming."
+    assert stepped =~ "Step 2 of 5: state guarding, response.streaming."
     assert stepped =~ "regex matched"
     assert stepped =~ "completed"
+
+    stepped =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert stepped =~ "Step 3 of 5: state retrying, response.streaming."
+    assert stepped =~ "retry selected"
+
+    stepped =
+      view
+      |> element("button", "Step")
+      |> render_click()
+
+    assert stepped =~ "Step 4 of 5: state retrying, response.streaming."
+    assert stepped =~ "retry stream released"
 
     reset =
       view
       |> element("button", "Reset")
       |> render_click()
 
-    assert reset =~ "Ready: 4 trace events available for playback."
+    assert reset =~ "Ready: 5 trace events available for playback."
     assert reset =~ "waiting at input boundary"
   end
 
   test "LiveView diagram simulation can open directly to a reviewed playback step" do
     {:ok, _view, html} = live(build_conn(), "/policies/tts-retry/diagram/step/2")
 
-    assert html =~ "Step 2 of 4: state guarding, response.streaming."
+    assert html =~ "Step 2 of 5: state guarding, response.streaming."
     assert html =~ "regex matched"
     assert html =~ "Client( completes the prohibited span"
     assert html =~ "completed"
@@ -334,16 +359,16 @@ defmodule Wardwright.PolicyProjectionLiveTest do
   end
 
   test "LiveView diagram simulation controls restart cleanly from the final step" do
-    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram/step/4")
+    {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram/step/5")
 
-    assert html =~ "Step 4 of 4: state recording, receipt.finalized."
+    assert html =~ "Step 5 of 5: state recording, receipt.finalized."
 
     restarted =
       view
       |> element("button", "Step")
       |> render_click()
 
-    assert restarted =~ "Ready: 4 trace events available for playback."
+    assert restarted =~ "Ready: 5 trace events available for playback."
     assert restarted =~ "waiting at input boundary"
 
     playing =

@@ -2016,7 +2016,7 @@ defmodule Wardwright.PolicyProjection do
         "engine_id" => "structured-stream-primitives",
         "input_summary" => "Provider emits OldClient( split across held chunks.",
         "expected_behavior" =>
-          "No violating bytes are released; attempt aborts and retries once.",
+          "No violating bytes from the first attempt are released; the second attempt is generated with a reminder and then released.",
         "verdict" => "passed",
         "trace" => [
           trace(
@@ -2051,11 +2051,21 @@ defmodule Wardwright.PolicyProjection do
           ),
           trace(
             "t4",
+            "response.streaming",
+            "tts.no-old-client",
+            "output",
+            "retry stream released",
+            "second model attempt avoids the prohibited span and can be released",
+            "pass",
+            state_id: "retrying"
+          ),
+          trace(
+            "t5",
             "receipt.finalized",
             "tts.receipt-events",
             "receipt_event",
             "receipt preview",
-            "stream.rule_matched and attempt.retry_requested events recorded",
+            "stream.rule_matched, attempt.retry_requested, and final release events recorded",
             "info",
             state_id: "recording"
           )
@@ -2066,9 +2076,28 @@ defmodule Wardwright.PolicyProjection do
           "policy_version" => "draft.ttsr.001",
           "stream" => %{
             "rule_matched" => "no-old-client",
-            "released_to_consumer" => false,
+            "released_to_consumer" => true,
             "abort_offset" => 42,
-            "retry_attempted" => true
+            "retry_attempted" => true,
+            "final_output" => "Use the current client adapter in the migration note.",
+            "attempts" => [
+              %{
+                "index" => 1,
+                "status" => "withheld_and_aborted",
+                "model_output" => "avoid introducing Old\nClient( into the final answer",
+                "user_output" => "",
+                "policy_result" => "prohibited span matched inside the held horizon"
+              },
+              %{
+                "index" => 2,
+                "status" => "released_after_retry",
+                "model_output" => "Use the current client adapter in the migration note.",
+                "user_output" => "Use the current client adapter in the migration note.",
+                "retry_instruction" =>
+                  "Do not emit OldClient(. Use current client adapter wording instead.",
+                "policy_result" => "retry output passed the stream guard"
+              }
+            ]
           },
           "events" => [
             %{
@@ -2082,7 +2111,8 @@ defmodule Wardwright.PolicyProjection do
               "match_kind" => "regex"
             },
             %{"type" => "attempt.aborted", "reason" => "tts_rule_matched"},
-            %{"type" => "attempt.retry_requested", "reminder_id" => "no-old-client.reminder"}
+            %{"type" => "attempt.retry_requested", "reminder_id" => "no-old-client.reminder"},
+            %{"type" => "stream.released", "attempt" => 2, "reason" => "retry_passed_guard"}
           ]
         }
       }
@@ -2101,7 +2131,7 @@ defmodule Wardwright.PolicyProjection do
         "engine_id" => "structured-stream-primitives",
         "input_summary" => summarize_turn(turn),
         "expected_behavior" =>
-          "No violating bytes are released; attempt aborts and retries once.",
+          "No violating bytes from the first attempt are released; the second attempt is generated with a reminder and then released.",
         "verdict" => "passed",
         "trace" => [
           trace(
@@ -2136,11 +2166,21 @@ defmodule Wardwright.PolicyProjection do
           ),
           trace(
             "i4",
+            "response.streaming",
+            "tts.no-old-client",
+            "output",
+            "retry stream released",
+            "second model attempt avoids the prohibited span and can be released",
+            "pass",
+            state_id: "retrying"
+          ),
+          trace(
+            "i5",
             "receipt.finalized",
             "tts.receipt-events",
             "receipt_event",
             "receipt preview",
-            "stream.rule_matched and attempt.retry_requested events recorded",
+            "stream.rule_matched, attempt.retry_requested, and final release events recorded",
             "info",
             state_id: "recording"
           )
@@ -2149,13 +2189,33 @@ defmodule Wardwright.PolicyProjection do
           "input" => turn_input_preview(turn),
           "stream" => %{
             "rule_matched" => "no-old-client",
-            "released_to_consumer" => false,
-            "retry_attempted" => true
+            "released_to_consumer" => true,
+            "retry_attempted" => true,
+            "final_output" => tts_retry_final_output(turn),
+            "attempts" => [
+              %{
+                "index" => 1,
+                "status" => "withheld_and_aborted",
+                "model_output" => text,
+                "user_output" => "",
+                "policy_result" => "prohibited span matched inside the held horizon"
+              },
+              %{
+                "index" => 2,
+                "status" => "released_after_retry",
+                "model_output" => tts_retry_final_output(turn),
+                "user_output" => tts_retry_final_output(turn),
+                "retry_instruction" =>
+                  "Do not emit OldClient(. Use current client adapter wording instead.",
+                "policy_result" => "retry output passed the stream guard"
+              }
+            ]
           },
           "events" => [
             %{"type" => "stream.rule_matched", "rule_id" => "no-old-client"},
             %{"type" => "attempt.aborted", "reason" => "tts_rule_matched"},
-            %{"type" => "attempt.retry_requested", "reminder_id" => "no-old-client.reminder"}
+            %{"type" => "attempt.retry_requested", "reminder_id" => "no-old-client.reminder"},
+            %{"type" => "stream.released", "attempt" => 2, "reason" => "retry_passed_guard"}
           ]
         }
       }
@@ -2201,6 +2261,21 @@ defmodule Wardwright.PolicyProjection do
           "events" => [%{"type" => "stream.released", "reason" => "no_policy_match"}]
         }
       }
+    end
+  end
+
+  defp tts_retry_final_output(turn) do
+    input = turn_user_input(turn)
+
+    cond do
+      String.contains?(input, "migration") ->
+        "Use the current client adapter in the migration note."
+
+      String.trim(input) == "" ->
+        "Use the current client adapter."
+
+      true ->
+        "Use the current client adapter. Avoid deprecated constructor names."
     end
   end
 
