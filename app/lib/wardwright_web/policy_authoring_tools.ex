@@ -54,6 +54,18 @@ defmodule WardwrightWeb.PolicyAuthoringTools do
     ]
   end
 
+  def cli_descriptions do
+    Enum.map(list(), fn tool ->
+      path = tool["path"] || "not implemented"
+
+      """
+        #{tool["name"]}
+          #{tool["method"]} #{path}
+          #{tool["description"]}
+      """
+    end)
+  end
+
   defp tool(name, method, path, description) do
     %{
       "name" => name,

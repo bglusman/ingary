@@ -23,6 +23,19 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
     assert Enum.all?(catalog["recipes"], &is_binary(&1["pattern_id"]))
   end
 
+  test "default workspace source exposes committed starter recipes" do
+    Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+
+    assert {:ok, catalog} = Wardwright.PolicyRecipeCatalog.list("workspace")
+    catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
+
+    assert catalog["source"]["trusted"] == true
+    assert catalog["source"]["endpoint"] =~ "priv/recipes/policies"
+    assert catalog["warnings"] == []
+    assert Enum.any?(catalog["recipes"], &(&1["id"] == "local-private-route-gate"))
+    assert Enum.any?(catalog["recipes"], &(&1["pattern_id"] == "tool-governance"))
+  end
+
   test "workspace source loads valid recipe JSON and ignores invalid files" do
     workspace_dir = Path.join(System.tmp_dir!(), "wardwright-recipes-#{System.unique_integer()}")
     File.mkdir_p!(workspace_dir)
@@ -68,7 +81,7 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
 
     assert {:error, catalog} = Wardwright.PolicyRecipeCatalog.list("community")
     catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
-    assert catalog["error"] == "Community recipe source must use HTTPS."
+    assert catalog["error"] == "Community example source must use HTTPS."
     assert catalog["recipes"] == []
   end
 
@@ -92,7 +105,7 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
              )
 
     catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
-    assert catalog["error"] == "Community recipe source exceeded 8 bytes."
+    assert catalog["error"] == "Community example source exceeded 8 bytes."
     assert catalog["recipes"] == []
   end
 
@@ -124,7 +137,10 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
 
     catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
     assert catalog["source"]["trusted"] == false
-    assert catalog["warnings"] == ["Community recipes are untrusted until imported and reviewed."]
+
+    assert catalog["warnings"] == [
+             "Community examples are untrusted until imported and reviewed."
+           ]
 
     assert [
              %{
@@ -133,6 +149,20 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
                "source_id" => "community"
              }
            ] = catalog["recipes"]
+  end
+
+  test "published community catalog fixture is valid recipe JSON" do
+    fixture_path = Path.expand("../../docs/recipes/index.json", __DIR__)
+
+    assert {:ok, body} = File.read(fixture_path)
+    assert {:ok, decoded} = Jason.decode(body)
+    assert is_list(decoded["recipes"])
+    assert Enum.any?(decoded["recipes"], &(&1["id"] == "community-basic-stream-retry"))
+
+    assert Enum.all?(
+             decoded["recipes"],
+             &(&1["pattern_id"] in Wardwright.PolicyProjection.pattern_ids())
+           )
   end
 
   defp put_or_delete_env(key, nil), do: Application.delete_env(:wardwright, key)

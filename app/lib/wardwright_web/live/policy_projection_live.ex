@@ -242,7 +242,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     ~H"""
     <aside class="sidebar">
       <div class="brand">
-        <span class="mark">IG</span>
+        <span class="mark">W</span>
         <div>
           <strong>Wardwright</strong>
           <span>Policy projection workbench</span>
@@ -251,7 +251,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
       <nav>
         <form class="recipe_source" phx-change="select-recipe-source" phx-submit="select-recipe-source">
-          <label for="recipe_source">Recipe source</label>
+          <label for="recipe_source">Example set</label>
           <select id="recipe_source" name="recipe_source" phx-change="select-recipe-source">
             <option
               :for={source <- @recipe_sources}
@@ -262,10 +262,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             </option>
           </select>
           <small><%= @recipe_catalog["source"]["endpoint"] || "compiled into this build" %></small>
-          <small>Community hub: wardwright.dev/recipes</small>
+          <small>Shared examples: wardwright.dev/recipes</small>
           <span class="recipe_source_status"><%= recipe_catalog_status(@recipe_catalog) %></span>
-          <button type="submit">Load source</button>
+          <button type="submit">Load examples</button>
         </form>
+
+        <h2 class="nav_heading">Example Synthetic Models</h2>
 
         <a
           :for={pattern <- @patterns}
@@ -276,10 +278,19 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <span><%= pattern["category"] %></span>
         </a>
         <div :if={@patterns == []} class="recipe_empty">
-          <strong>No recipes loaded</strong>
+          <strong>No examples loaded</strong>
           <span><%= recipe_catalog_status(@recipe_catalog) %></span>
         </div>
       </nav>
+
+      <section class="agent_cta" aria-label="Agent authoring entrypoints">
+        <span>Use your agent</span>
+        <strong>Point MCP clients at <code>/mcp</code></strong>
+        <small>
+          Installed packages include <code>wardwright tools</code> for copyable agent
+          instructions. MCP uses this Wardwright server with the <code>/mcp</code> path.
+        </small>
+      </section>
 
       <div class="sidebar_footer">
         <span>Engine</span>
@@ -292,7 +303,6 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     <section class="workspace">
       <header class="topbar">
         <div>
-          <p class="eyebrow">LiveView projection prototype</p>
           <h1><%= @selected_pattern["title"] %></h1>
           <p><%= @selected_pattern["promise"] %></p>
         </div>
@@ -1061,20 +1071,26 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     a { color: inherit; text-decoration: none; }
     .shell, .shell > [data-phx-main] { min-height: 100vh; }
     .shell > [data-phx-main] { display: grid; grid-template-columns: 260px minmax(0, 1fr); }
-    .sidebar { display: flex; flex-direction: column; gap: 24px; padding: 22px 16px; color: #e6ebef; background: #25313b; }
+    .sidebar { min-width: 0; overflow: hidden; display: flex; flex-direction: column; gap: 24px; padding: 22px 16px; color: #e6ebef; background: #25313b; }
     .brand { display: flex; align-items: center; gap: 12px; }
     .mark { display: inline-grid; place-items: center; width: 40px; height: 40px; border: 1px solid #657583; border-radius: 6px; background: #33414c; color: #fff; font-weight: 800; }
-    .brand div, nav, .sidebar_footer { display: grid; gap: 6px; }
+    .brand div, nav, .sidebar_footer { min-width: 0; display: grid; gap: 6px; }
     .brand span, .sidebar_footer span { color: #adbac5; font-size: 12px; }
     nav a { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid transparent; border-radius: 6px; }
+    .nav_heading { margin: 10px 12px 2px; color: #adbac5; font-size: 11px; font-weight: 900; letter-spacing: 0.04em; text-transform: uppercase; }
     nav a span { color: #adbac5; font-size: 12px; }
     nav a.active, nav a:hover { border-color: #6f7f8e; background: #34424e; }
     .recipe_source, .recipe_empty { display: grid; gap: 6px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; }
-    .recipe_source label, .recipe_source span, .recipe_source small, .recipe_empty span { color: #adbac5; font-size: 12px; font-weight: 700; }
-    .recipe_source select { min-width: 0; min-height: 32px; border: 1px solid #657583; border-radius: 6px; color: #e6ebef; background: #25313b; font-weight: 800; }
+    .recipe_source label, .recipe_source span, .recipe_source small, .recipe_empty span { min-width: 0; color: #adbac5; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+    .recipe_source select { width: 100%; min-width: 0; min-height: 32px; border: 1px solid #657583; border-radius: 6px; color: #e6ebef; background: #25313b; font-weight: 800; }
     .recipe_source button { min-height: 30px; border: 1px solid #657583; border-radius: 6px; color: #e6ebef; background: #34424e; font-weight: 800; cursor: pointer; }
     .recipe_source button:hover { border-color: #91a1af; background: #3d4d5b; }
     .recipe_source_status { line-height: 1.35; }
+    .agent_cta { min-width: 0; display: grid; gap: 6px; margin-top: 12px; padding: 11px 12px; border: 1px solid #557088; border-radius: 6px; background: #243746; }
+    .agent_cta span { color: #99b6cb; font-size: 11px; font-weight: 900; letter-spacing: 0.04em; text-transform: uppercase; }
+    .agent_cta strong { color: #f4f7f9; font-size: 13px; line-height: 1.25; }
+    .agent_cta small { color: #bdcad4; font-size: 12px; font-weight: 700; line-height: 1.35; }
+    .agent_cta code { color: #f5fbff; overflow-wrap: anywhere; }
     .sidebar_footer { margin-top: auto; padding: 14px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; overflow-wrap: anywhere; }
     .workspace { min-width: 0; padding: 28px; }
     .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
@@ -1626,10 +1642,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp recipe_catalog_status(%{"error" => error}), do: error
 
   defp recipe_catalog_status(%{"recipes" => recipes, "warnings" => [warning | _]}) do
-    "#{length(recipes)} recipes. #{warning}"
+    "#{length(recipes)} examples. #{warning}"
   end
 
-  defp recipe_catalog_status(%{"recipes" => recipes}), do: "#{length(recipes)} recipes available."
+  defp recipe_catalog_status(%{"recipes" => recipes}),
+    do: "#{length(recipes)} examples available."
 
   defp node_annotation(%{"annotations" => annotations}, key) when is_map(annotations) do
     Map.get(annotations, key, "No annotation provided.")

@@ -121,6 +121,19 @@ The generated formula:
 - runs Wardwright bound to `127.0.0.1:8787` under `brew services`;
 - does not require Erlang, Elixir, or Gleam at runtime.
 
+The same installed binary also exposes small operator/agent helper commands:
+
+```bash
+wardwright --help
+wardwright tools
+wardwright tools --json
+```
+
+`wardwright tools` prints MCP and policy-authoring API instructions for local
+agents. The JSON form is generated from the same registry used by the protected
+`/v1/policy-authoring/tools` endpoint, so scripts can discover the available
+authoring surface without scraping the UI.
+
 `WARDWRIGHT_ADMIN_TOKEN` remains optional for loopback-only use, but should be
 set for any deployment exposed beyond local operator access.
 
@@ -158,5 +171,5 @@ where the policy UI and validation story are useful enough to promote.
 - Burrito prints some wrapper diagnostics to stderr before the BEAM app starts.
 - The current app has minimal static assets. If LiveView assets grow, packaging
   must add an explicit asset build/digest step before `mix release`.
-- The formula is service-oriented and starts the HTTP app. A richer CLI can be
-  added later without changing the package boundary.
+- The formula is service-oriented and starts the HTTP app. The current CLI only
+  covers service startup, version/help, and policy-authoring tool discovery.

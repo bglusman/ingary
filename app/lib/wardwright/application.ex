@@ -101,33 +101,9 @@ defmodule Wardwright.Application do
   end
 
   defp maybe_handle_standalone_command do
-    case argv() do
-      ["--version" | _] ->
-        IO.puts(version())
-        System.halt(0)
-
-      ["version" | _] ->
-        IO.puts(version())
-        System.halt(0)
-
-      ["--help" | _] ->
-        IO.puts("""
-        wardwright #{version()}
-
-        Usage:
-          wardwright              Start the Wardwright HTTP service
-          wardwright --version    Print the packaged app version
-
-        Runtime environment:
-          WARDWRIGHT_BIND             Host and port, default 127.0.0.1:8787
-          WARDWRIGHT_SECRET_KEY_BASE  Stable Phoenix signing secret for services
-          WARDWRIGHT_ADMIN_TOKEN      Optional token for protected local APIs
-        """)
-
-        System.halt(0)
-
-      _ ->
-        :ok
+    case Wardwright.CLI.run(argv()) do
+      {:halt, status} -> System.halt(status)
+      :start -> :ok
     end
   end
 
@@ -137,11 +113,5 @@ defmodule Wardwright.Application do
     else
       System.argv()
     end
-  end
-
-  defp version do
-    :wardwright
-    |> Application.spec(:vsn)
-    |> to_string()
   end
 end

@@ -6,12 +6,11 @@ defmodule Wardwright.PolicyRecipeCatalog do
   recipe source must not execute policy code or install trusted artifacts.
   """
 
-  @default_workspace_dir "recipes/policies"
   @default_community_url "https://wardwright.dev/recipes/index.json"
   @default_remote_timeout_ms 1_500
   @default_remote_max_bytes 256_000
   @allowed_remote_schemes MapSet.new(~w(http https))
-  @community_warning "Community recipes are untrusted until imported and reviewed."
+  @community_warning "Community examples are untrusted until imported and reviewed."
 
   @type source_id :: String.t()
   @type source :: %__MODULE__.Source{}
@@ -41,14 +40,14 @@ defmodule Wardwright.PolicyRecipeCatalog do
     [
       %Source{
         id: "built_in",
-        label: "Built-in demos",
+        label: "Built-in examples",
         kind: "built_in",
         trusted: true,
         summary: "Projection examples compiled into this Wardwright build."
       },
       %Source{
         id: "workspace",
-        label: "Workspace recipes",
+        label: "Workspace examples",
         kind: "filesystem",
         trusted: true,
         summary: "Locally reviewed recipe JSON files.",
@@ -56,7 +55,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
       },
       %Source{
         id: "community",
-        label: "Community hub",
+        label: "Community examples",
         kind: "https_json",
         trusted: false,
         summary: "Shared policy recipes from wardwright.dev.",
@@ -177,7 +176,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
          %Catalog{
            source: source,
            recipes: [],
-           warnings: ["No workspace recipe directory exists at #{source.endpoint}."]
+           warnings: ["No workspace example directory exists at #{source.endpoint}."]
          }}
 
       {:error, reason} ->
@@ -185,7 +184,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
          %Catalog{
            source: source,
            recipes: [],
-           error: "Could not read workspace recipes: #{:file.format_error(reason)}"
+           error: "Could not read workspace examples: #{:file.format_error(reason)}"
          }}
     end
   end
@@ -276,7 +275,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
   end
 
   defp workspace_warnings(source, []),
-    do: ["No valid workspace recipes were found in #{source.endpoint}."]
+    do: ["No valid workspace examples were found in #{source.endpoint}."]
 
   defp workspace_warnings(_source, _recipes), do: []
 
@@ -292,7 +291,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
         :ok
 
       true ->
-        {:error, "Community recipe source must use HTTPS."}
+        {:error, "Community example source must use HTTPS."}
     end
   end
 
@@ -311,13 +310,13 @@ defmodule Wardwright.PolicyRecipeCatalog do
         {:ok, body}
 
       {:ok, {{_, status, _}, _headers, _body}} when status in 200..299 ->
-        {:error, "Community recipe source exceeded #{max_bytes} bytes."}
+        {:error, "Community example source exceeded #{max_bytes} bytes."}
 
       {:ok, {{_, status, _}, _headers, _body}} ->
-        {:error, "Community recipe source returned HTTP #{status}."}
+        {:error, "Community example source returned HTTP #{status}."}
 
       {:error, reason} ->
-        {:error, "Could not fetch community recipes: #{inspect(reason)}"}
+        {:error, "Could not fetch community examples: #{inspect(reason)}"}
     end
   end
 
@@ -342,7 +341,19 @@ defmodule Wardwright.PolicyRecipeCatalog do
 
   defp workspace_dir(opts) do
     opts[:workspace_dir] ||
-      Application.get_env(:wardwright, :policy_recipe_workspace_dir, @default_workspace_dir)
+      Application.get_env(:wardwright, :policy_recipe_workspace_dir, default_workspace_dir())
+  end
+
+  defp default_workspace_dir do
+    case :code.priv_dir(:wardwright) do
+      priv_dir when is_list(priv_dir) ->
+        priv_dir
+        |> List.to_string()
+        |> Path.join("recipes/policies")
+
+      {:error, _reason} ->
+        Path.expand("../../priv/recipes/policies", __DIR__)
+    end
   end
 
   defp community_url(opts) do
