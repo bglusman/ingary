@@ -28,7 +28,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
            path(
              socket.assigns.selected_pattern_id,
              socket.assigns.mode,
-             socket.assigns.selected_recipe_source_id
+             socket.assigns.selected_recipe_source_id,
+             socket.assigns.selected_recipe_id
            )
        )}
     else
@@ -41,6 +42,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     mode = normalize_mode(Map.get(params, "mode"))
     recipe_source_id = normalize_recipe_source(Map.get(params, "source"))
     recipe_catalog = recipe_catalog(recipe_source_id)
+    selected_recipe = selected_recipe(recipe_catalog, pattern_id, Map.get(params, "recipe"))
+    selected_recipe_id = selected_recipe["id"] || ""
     projection = Wardwright.PolicyProjection.projection(pattern_id)
     simulations = Wardwright.PolicyProjection.simulations(pattern_id)
     simulation_inputs = Wardwright.PolicyProjection.simulation_inputs(pattern_id)
@@ -71,6 +74,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     |> assign(:selected_recipe_source_id, recipe_source_id)
     |> assign(:recipe_catalog, recipe_catalog)
     |> assign(:patterns, recipe_catalog["recipes"])
+    |> assign(:recipe_groups, recipe_groups(recipe_catalog["recipes"], selected_recipe_id))
+    |> assign(:selected_recipe, selected_recipe)
+    |> assign(:selected_recipe_id, selected_recipe_id)
     |> assign(:selected_pattern, Wardwright.PolicyProjection.pattern(pattern_id))
     |> assign(:selected_pattern_id, pattern_id)
     |> assign(:mode, mode)
@@ -287,15 +293,21 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
         <h2 class="nav_heading">Example Synthetic Models</h2>
 
-        <a
-          :for={pattern <- @patterns}
-          class={if pattern["pattern_id"] == @selected_pattern_id, do: "active", else: ""}
-          href={path(pattern["pattern_id"], "diagram", @selected_recipe_source_id)}
-        >
-          <strong><%= pattern["title"] %></strong>
-          <span><%= pattern["category"] %></span>
-        </a>
-        <div :if={@patterns == []} class="recipe_empty">
+        <details :for={group <- @recipe_groups} class="recipe_group" open={group.open}>
+          <summary>
+            <strong><%= group.title %></strong>
+            <small><%= length(group.recipes) %> examples</small>
+          </summary>
+          <a
+            :for={pattern <- group.recipes}
+            class={if pattern["id"] == @selected_recipe_id, do: "active", else: ""}
+            href={path(pattern["pattern_id"], "diagram", @selected_recipe_source_id, pattern["id"])}
+          >
+            <strong><%= pattern["title"] %></strong>
+            <span><%= pattern["category"] %></span>
+          </a>
+        </details>
+        <div :if={@recipe_groups == []} class="recipe_empty">
           <strong>No examples loaded</strong>
           <span><%= recipe_catalog_status(@recipe_catalog) %></span>
         </div>
@@ -321,15 +333,44 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     <section class="workspace">
       <header class="topbar">
         <div>
-          <h1><%= @selected_pattern["title"] %></h1>
-          <p><%= @selected_pattern["promise"] %></p>
+          <h1><%= @selected_recipe["title"] || @selected_pattern["title"] %></h1>
+          <p><%= @selected_recipe["promise"] || @selected_pattern["promise"] %></p>
         </div>
         <div class="engine_card">
           <.badge value={@projection["engine"]["language"]} />
           <strong><%= @projection["engine"]["engine_id"] %></strong>
+          <span><%= @selected_pattern["title"] %></span>
           <span><%= @projection["artifact"]["policy_version"] %></span>
         </div>
       </header>
+
+      <section :if={rich_recipe?(@selected_recipe)} class="recipe_context">
+        <div class="recipe_context_header">
+          <div>
+            <span>Example story</span>
+            <strong><%= @selected_recipe["management_area"] || @selected_recipe["collection_title"] %></strong>
+          </div>
+          <.badge value={@selected_recipe["recipe_kind"] || "policy recipe"} />
+        </div>
+        <p><%= @selected_recipe["failure_story"] %></p>
+        <div class="recipe_context_grid">
+          <article :if={@selected_recipe["old_behavior"]}>
+            <span>Before</span>
+            <small><%= @selected_recipe["old_behavior"] %></small>
+          </article>
+          <article :if={@selected_recipe["wardwright_behavior"]}>
+            <span>With Wardwright</span>
+            <small><%= @selected_recipe["wardwright_behavior"] %></small>
+          </article>
+          <article :if={@selected_recipe["composition"]}>
+            <span>Composition</span>
+            <small><%= @selected_recipe["composition"] %></small>
+          </article>
+        </div>
+        <div :if={@selected_recipe["primitives"]} class="primitive_chips">
+          <span :for={primitive <- @selected_recipe["primitives"]}><%= primitive %></span>
+        </div>
+      </section>
 
       <section class="scan_strip" aria-label="Policy authoring summary">
         <article>
@@ -375,6 +416,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           modes={@modes}
           selected_pattern_id={@selected_pattern_id}
           selected_recipe_source_id={@selected_recipe_source_id}
+          selected_recipe_id={@selected_recipe_id}
         />
 
         <%= if @mode == "diagram" do %>
@@ -568,6 +610,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   attr(:modes, :list, required: true)
   attr(:selected_pattern_id, :string, required: true)
   attr(:selected_recipe_source_id, :string, required: true)
+  attr(:selected_recipe_id, :string, required: true)
 
   def projection_inspector_links(assigns) do
     assigns =
@@ -585,7 +628,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <div>
             <a
               :for={mode <- @inspector_modes}
-              href={path(@selected_pattern_id, mode, @selected_recipe_source_id)}
+              href={path(@selected_pattern_id, mode, @selected_recipe_source_id, @selected_recipe_id)}
             >
               <strong><%= mode_label(mode) %></strong>
               <small><%= mode_hint(mode) %></small>
@@ -594,14 +637,14 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         </details>
       <% else %>
         <div class="inspector_nav">
-          <a class="simulator_return" href={path(@selected_pattern_id, "diagram", @selected_recipe_source_id)}>
+          <a class="simulator_return" href={path(@selected_pattern_id, "diagram", @selected_recipe_source_id, @selected_recipe_id)}>
             <strong>Back to simulator</strong>
             <small>primary workspace</small>
           </a>
           <a
             :for={mode <- @inspector_modes}
             class={if mode == @mode, do: "active", else: ""}
-            href={path(@selected_pattern_id, mode, @selected_recipe_source_id)}
+            href={path(@selected_pattern_id, mode, @selected_recipe_source_id, @selected_recipe_id)}
           >
             <strong><%= mode_label(mode) %></strong>
             <small><%= mode_hint(mode) %></small>
@@ -1106,6 +1149,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .nav_heading { margin: 10px 12px 2px; color: #adbac5; font-size: 11px; font-weight: 900; letter-spacing: 0.04em; text-transform: uppercase; }
     nav a span { color: #adbac5; font-size: 12px; }
     nav a.active, nav a:hover { border-color: #6f7f8e; background: #34424e; }
+    .recipe_group { display: grid; gap: 4px; padding: 4px 0 6px; border-top: 1px solid #3f4f5d; }
+    .recipe_group summary { display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 8px; align-items: center; padding: 8px 10px; color: #dce5ec; cursor: pointer; }
+    .recipe_group summary strong { min-width: 0; font-size: 12px; line-height: 1.25; overflow-wrap: anywhere; }
+    .recipe_group summary small { color: #93a4b3; font-size: 11px; font-weight: 800; white-space: nowrap; }
+    .recipe_group a { margin-left: 8px; }
     .recipe_source, .recipe_empty { display: grid; gap: 6px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #4d5f6f; border-radius: 6px; background: #2d3944; }
     .recipe_source label, .recipe_source span, .recipe_source small, .recipe_empty span { min-width: 0; color: #adbac5; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
     .recipe_source select { width: 100%; min-width: 0; min-height: 32px; border: 1px solid #657583; border-radius: 6px; color: #e6ebef; background: #25313b; font-weight: 800; }
@@ -1131,6 +1179,17 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .panel_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
     .engine_card { display: grid; gap: 6px; min-width: 260px; padding: 12px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; }
     .engine_card span:last-child { color: #66727c; font-size: 12px; }
+    .recipe_context { display: grid; gap: 10px; margin-bottom: 18px; padding: 16px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgb(16 24 40 / 4%); }
+    .recipe_context_header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+    .recipe_context_header > div { display: grid; gap: 3px; min-width: 0; }
+    .recipe_context_header span, .recipe_context_grid span { color: #66727c; font-size: 11px; font-weight: 900; text-transform: uppercase; }
+    .recipe_context_header strong { color: #17202a; font-size: 16px; }
+    .recipe_context p { margin-bottom: 0; }
+    .recipe_context_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 9px; }
+    .recipe_context_grid article { display: grid; gap: 5px; min-width: 0; padding: 10px; border: 1px solid #e1e7ed; border-radius: 7px; background: #fbfcfd; }
+    .recipe_context_grid small { color: #4e5b66; line-height: 1.38; }
+    .primitive_chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .primitive_chips span { padding: 3px 7px; border: 1px solid #cbd7e1; border-radius: 999px; color: #34566f; background: #f2f7fb; font-size: 11px; font-weight: 800; }
     .scan_strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
     .scan_strip article { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid #d3dbe2; border-radius: 8px; background: #fff; box-shadow: 0 1px 2px rgb(16 24 40 / 4%); }
     .scan_strip span { color: #66727c; font-size: 12px; font-weight: 800; text-transform: uppercase; }
@@ -1349,6 +1408,53 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           length(projection["warnings"])
     }
   end
+
+  defp selected_recipe(%{"recipes" => recipes}, pattern_id, recipe_id) when is_list(recipes) do
+    normalized_recipe_id =
+      case recipe_id do
+        value when is_binary(value) -> String.trim(value)
+        _ -> ""
+      end
+
+    Enum.find(recipes, fn recipe ->
+      recipe["id"] == normalized_recipe_id and recipe["pattern_id"] == pattern_id
+    end) ||
+      Enum.find(recipes, &(&1["pattern_id"] == pattern_id)) ||
+      %{}
+  end
+
+  defp selected_recipe(_catalog, _pattern_id, _recipe_id), do: %{}
+
+  defp recipe_groups(recipes, selected_recipe_id) when is_list(recipes) do
+    {groups, order} =
+      Enum.reduce(recipes, {%{}, []}, fn recipe, {groups, order} ->
+        group_id = recipe["collection_id"] || recipe["management_area"] || "examples"
+        group_title = recipe["collection_title"] || recipe["management_area"] || "Examples"
+        known_group? = Map.has_key?(groups, group_id)
+        group = Map.get(groups, group_id, %{id: group_id, title: group_title, recipes: []})
+        groups = Map.put(groups, group_id, %{group | recipes: group.recipes ++ [recipe]})
+
+        order = if known_group?, do: order, else: order ++ [group_id]
+
+        {groups, order}
+      end)
+
+    Enum.map(order, fn group_id ->
+      group = Map.fetch!(groups, group_id)
+      Map.put(group, :open, Enum.any?(group.recipes, &(&1["id"] == selected_recipe_id)))
+    end)
+  end
+
+  defp recipe_groups(_recipes, _selected_recipe_id), do: []
+
+  defp rich_recipe?(recipe) when is_map(recipe) do
+    Enum.any?(
+      ["failure_story", "old_behavior", "wardwright_behavior", "composition"],
+      &(Map.get(recipe, &1) not in [nil, ""])
+    )
+  end
+
+  defp rich_recipe?(_recipe), do: false
 
   defp selected_simulation(_pattern_id, simulations, "", "", history_context)
        when history_context == %{} do
@@ -1747,12 +1853,25 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   defp path(pattern_id, mode), do: "/policies/#{pattern_id}/#{mode}"
 
-  defp path(pattern_id, mode, source_id) when source_id in ["built_in", "workspace"],
-    do: path(pattern_id, mode)
+  defp path(pattern_id, mode, source_id), do: path(pattern_id, mode, source_id, nil)
 
-  defp path(pattern_id, mode, source_id) do
-    path(pattern_id, mode) <> "?" <> URI.encode_query(%{"source" => source_id})
+  defp path(pattern_id, mode, source_id, recipe_id) do
+    query =
+      %{}
+      |> maybe_put_query("source", source_query_value(source_id))
+      |> maybe_put_query("recipe", recipe_id)
+
+    case map_size(query) do
+      0 -> path(pattern_id, mode)
+      _ -> path(pattern_id, mode) <> "?" <> URI.encode_query(query)
+    end
   end
+
+  defp source_query_value(source_id) when source_id in ["built_in", "workspace"], do: nil
+  defp source_query_value(source_id), do: source_id
+
+  defp maybe_put_query(query, _key, value) when value in [nil, ""], do: query
+  defp maybe_put_query(query, key, value), do: Map.put(query, key, value)
 
   defp workbench_title("diagram"), do: "Policy Simulator"
   defp workbench_title(_mode), do: "Artifact Inspector"

@@ -28,6 +28,26 @@ References:
 - [XBOW: Agents Built From Alloys](https://xbow.com/blog/alloy-agents/)
 - [oh-my-pi Time Traveling Streamed Rules](https://github.com/can1357/oh-my-pi#-time-traveling-streamed-rules-ttsr)
 
+## Composition DAG Status
+
+Today, dispatchers, cascades, and alloys compose concrete upstream targets.
+That is enough for local-first gates, fallback chains, weighted/round-robin
+selection, and partial-context alloys where a smaller local model drops out
+after its context window is exceeded.
+
+Wardwright does not yet resolve one synthetic model through another synthetic
+model. The intended extension is a selector DAG:
+
+- selector references may point at concrete targets or other selectors
+- cycles fail validation before serving
+- expansion depth is capped and recorded in receipts
+- receipts show the full route lineage, including skipped nested selectors
+- the workbench can render the route graph separately from policy overlays
+
+This would let a public synthetic model use a dispatcher whose large-context
+branch is itself a cascade, or an alloy whose constituents are local and managed
+synthetic models, while keeping loops impossible by construction.
+
 ## Dispatcher
 
 Dispatchers are for request-shape routing. The current implementation uses

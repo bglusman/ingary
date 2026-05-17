@@ -1,0 +1,32 @@
+{
+  "recipes": [
+    {
+      "id": "done-but-missing-artifact",
+      "title": "Done, but missing artifact",
+      "management_area": "Output evidence and claims",
+      "category": "output.finalizing",
+      "promise": "Block or alert when the model claims success but the required artifact evidence is missing.",
+      "failure_story": "An agent says the report, patch, or export is complete even though the file, PR, database row, or tool receipt does not exist. The natural-language answer sounds confident, so the failure is easy to miss.",
+      "old_behavior": "Downstream users saw a successful message and discovered the missing artifact later.",
+      "wardwright_behavior": "The final-output policy checks claimed completion against receipt evidence and marks the run ambiguous unless the artifact is present.",
+      "composition": "Output policy over final response plus receipt facts; can be paired with structured-output validation when the consumer expects JSON.",
+      "primitives": ["completion_claim_match", "artifact_evidence_check", "operator_alert"],
+      "pattern_id": "ambiguous-success",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "structured-output-repair-gate",
+      "title": "Structured output repair gate",
+      "management_area": "Output evidence and claims",
+      "category": "output.finalizing",
+      "promise": "Treat provider JSON/schema support as helpful but not sufficient: validate the final contract Wardwright promised to the caller.",
+      "failure_story": "Different providers expose different structured-output constraints, and a caller may accept one of several valid shapes. A single-provider schema mode does not always match the synthetic model contract.",
+      "old_behavior": "The app delegated schema correctness to whichever provider happened to run this turn.",
+      "wardwright_behavior": "Wardwright owns the outer contract, can retry with validation feedback, and can record which schema branch or semantic check failed.",
+      "composition": "Structured-output policy can sit after dispatcher, cascade, or alloy routing because the caller sees one stable synthetic model contract.",
+      "primitives": ["structured_output", "schema_branch", "retry_with_validation_feedback"],
+      "pattern_id": "ambiguous-success",
+      "recipe_kind": "policy_recipe"
+    }
+  ]
+}

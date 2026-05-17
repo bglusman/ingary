@@ -226,6 +226,20 @@ defmodule Wardwright.PolicyProjectionLiveTest do
   end
 
   test "LiveView projection workbench renders selected pattern and mode" do
+    original_workspace = Application.get_env(:wardwright, :policy_recipe_workspace_dir)
+
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-live-render-#{System.unique_integer()}")
+
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
+
+    on_exit(fn ->
+      case original_workspace do
+        nil -> Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+        value -> Application.put_env(:wardwright, :policy_recipe_workspace_dir, value)
+      end
+    end)
+
     :ok = put_route_gate_config()
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/trace_overlay")
 
@@ -251,12 +265,18 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert connected_html =~ "Review load"
     assert connected_html =~ "Why this exists"
 
-    assert {:error, {:redirect, %{to: "/policies/route-privacy/effect_matrix"}}} =
+    assert {:error,
+            {:redirect,
+             %{to: "/policies/route-privacy/effect_matrix?recipe=private-helpdesk-local-gate"}}} =
              view
              |> element("a", "Effect table")
              |> render_click()
 
-    {:ok, matrix_view, _html} = live(build_conn(), "/policies/route-privacy/effect_matrix")
+    {:ok, matrix_view, _html} =
+      live(
+        build_conn(),
+        "/policies/route-privacy/effect_matrix?recipe=private-helpdesk-local-gate"
+      )
 
     matrix_html = render(matrix_view)
 
@@ -689,13 +709,15 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     {:ok, view, _html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
 
-    assert {:error, {:redirect, %{to: "/policies/tool-governance/state_machine"}}} =
+    assert {:error,
+            {:redirect,
+             %{to: "/policies/tool-governance/state_machine?recipe=tool-loop-cost-brake"}}} =
              view
              |> element("a", "State model")
              |> render_click()
 
     {:ok, _state_view, updated} =
-      live(build_conn(), "/policies/tool-governance/state_machine")
+      live(build_conn(), "/policies/tool-governance/state_machine?recipe=tool-loop-cost-brake")
 
     assert updated =~ "Project examples"
     assert updated =~ "State model"
@@ -720,11 +742,13 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert html =~ "Project examples"
     assert html =~ workspace_dir
-    assert html =~ "Local private route gate"
-    assert html =~ "Local cascade with cloud fallback"
-    assert html =~ "Review model escalation ladder"
-    assert html =~ "Local tool loop watch"
-    assert html =~ "Private context route gate"
+    assert html =~ "Route and model composition"
+    assert html =~ "Stream repair and session state"
+    assert html =~ "Private helpdesk route gate"
+    assert html =~ "Context-window dispatcher"
+    assert html =~ "Partial alloy context ladder"
+    assert html =~ "Deprecated SDK stream retry"
+    assert html =~ "Keep customer-private helpdesk turns"
     refute html =~ "Built-in examples"
   end
 
