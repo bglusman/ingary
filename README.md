@@ -22,8 +22,8 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 
 ## Install
 
-Wardwright publishes early native binaries for macOS and Linux. The current
-release is `v0.0.3`.
+Wardwright publishes early native binaries for macOS and Linux. The next
+prepared release is `v0.0.4`.
 
 ### macOS Homebrew
 
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/in
 For a pinned release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.3
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.4
 ```
 
 Run it locally:
