@@ -393,6 +393,27 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert playing =~ "Pause"
   end
 
+  test "LiveView diagram ignores stale playback timer messages" do
+    {:ok, view, _html} = live(build_conn(), "/policies/tts-retry/diagram")
+
+    playing =
+      view
+      |> element("button", "Play")
+      |> render_click()
+
+    assert playing =~ "Ready: 5 trace events available for playback."
+    assert playing =~ "Pause"
+
+    send(view.pid, {:advance_simulation, make_ref()})
+    Process.sleep(20)
+
+    unchanged = render(view)
+
+    assert unchanged =~ "Ready: 5 trace events available for playback."
+    assert unchanged =~ "Pause"
+    refute unchanged =~ "Step 1 of 5"
+  end
+
   test "LiveView diagram can demonstrate related regex rewrite and state transition" do
     {:ok, _view, html} = live(build_conn(), "/policies/stream-rewrite-state/diagram/step/3")
 
@@ -604,6 +625,17 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       })
     )
 
+    File.write!(
+      Path.join(workspace_dir, "unsupported-demo.json"),
+      Jason.encode!(%{
+        "id" => "unsupported-demo",
+        "title" => "Unsupported future policy",
+        "category" => "policy.future",
+        "promise" => "Exercise a recipe that this build cannot project yet.",
+        "pattern_id" => "future-policy-engine"
+      })
+    )
+
     Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
 
     on_exit(fn ->
@@ -618,6 +650,8 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Workspace examples"
     assert html =~ workspace_dir
     assert html =~ "Workspace tool policy"
+    assert html =~ "1 examples reference unsupported policy patterns for this build."
+    refute html =~ "Unsupported future policy"
     assert html =~ "Load examples"
     assert html =~ "Tool call governance"
     assert html =~ "tool receipt context"

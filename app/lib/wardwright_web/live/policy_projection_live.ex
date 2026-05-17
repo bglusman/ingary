@@ -19,7 +19,21 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   @impl true
   def handle_params(params, _uri, socket) do
-    {:noreply, assign_projection(socket, params)}
+    socket = assign_projection(socket, params)
+
+    if unsupported_pattern?(Map.get(params, "pattern")) do
+      {:noreply,
+       push_patch(socket,
+         to:
+           path(
+             socket.assigns.selected_pattern_id,
+             socket.assigns.mode,
+             socket.assigns.selected_recipe_source_id
+           )
+       )}
+    else
+      {:noreply, socket}
+    end
   end
 
   defp assign_projection(socket, params) do
@@ -72,6 +86,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     |> assign(:selected_simulation, selected_simulation)
     |> assign(:selected_node, selected_node)
     |> assign(:simulation_playing, false)
+    |> assign(:simulation_timer_ref, nil)
     |> assign(:simulation_step, simulation_step)
     |> assign_new(:runtime_status, fn -> Wardwright.Runtime.status() end)
     |> assign_new(:runtime_events, fn -> [] end)
@@ -93,8 +108,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   @impl true
-  def handle_info(:advance_simulation, socket) do
-    if socket.assigns.simulation_playing do
+  def handle_info({:advance_simulation, timer_ref}, socket) do
+    if socket.assigns.simulation_playing and socket.assigns.simulation_timer_ref == timer_ref do
       trace_count = trace_count(socket.assigns.selected_simulation)
       next_step = min(socket.assigns.simulation_step + 1, trace_count)
       playing = next_step < trace_count
@@ -103,12 +118,13 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         socket
         |> assign(:simulation_step, next_step)
         |> assign(:simulation_playing, playing)
+        |> assign(:simulation_timer_ref, nil)
 
       if playing do
-        schedule_simulation_tick()
+        {:noreply, schedule_simulation_tick(socket)}
+      else
+        {:noreply, socket}
       end
-
-      {:noreply, socket}
     else
       {:noreply, socket}
     end
@@ -116,31 +132,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   @impl true
   def handle_event("play-simulation", _params, socket) do
-    trace_count = trace_count(socket.assigns.selected_simulation)
-
-    simulation_step =
-      if socket.assigns.simulation_step >= trace_count do
-        0
-      else
-        socket.assigns.simulation_step
-      end
-
-    socket =
-      socket
-      |> assign(
-        :simulation_step,
-        simulation_step
-      )
-      |> assign(
-        :simulation_playing,
-        trace_count > 0
-      )
-
     if socket.assigns.simulation_playing do
-      schedule_simulation_tick()
+      {:noreply, socket}
+    else
+      play_simulation(socket)
     end
-
-    {:noreply, socket}
   end
 
   def handle_event("select-recipe-source", %{"recipe_source" => source_id}, socket) do
@@ -205,11 +201,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   def handle_event("pause-simulation", _params, socket) do
-    {:noreply, assign(socket, :simulation_playing, false)}
+    {:noreply, stop_simulation(socket)}
   end
 
   def handle_event("reset-simulation", _params, socket) do
-    {:noreply, assign(socket, simulation_playing: false, simulation_step: 0)}
+    {:noreply, socket |> stop_simulation() |> assign(simulation_step: 0)}
   end
 
   def handle_event("step-simulation", _params, socket) do
@@ -224,7 +220,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
     {:noreply,
      socket
-     |> assign(:simulation_playing, false)
+     |> stop_simulation()
      |> assign(:simulation_step, next_step)}
   end
 
@@ -233,8 +229,30 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
     {:noreply,
      socket
-     |> assign(:simulation_playing, false)
+     |> stop_simulation()
      |> assign(:simulation_step, previous_step)}
+  end
+
+  defp play_simulation(socket) do
+    trace_count = trace_count(socket.assigns.selected_simulation)
+
+    simulation_step =
+      if socket.assigns.simulation_step >= trace_count do
+        0
+      else
+        socket.assigns.simulation_step
+      end
+
+    socket =
+      socket
+      |> assign(:simulation_step, simulation_step)
+      |> assign(:simulation_playing, trace_count > 0)
+
+    if socket.assigns.simulation_playing do
+      {:noreply, schedule_simulation_tick(socket)}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -1344,7 +1362,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     socket
     |> assign(:selected_simulation, simulation)
     |> assign(:simulation_boundary, simulation_boundary(simulation, user_input, model_response))
-    |> assign(:simulation_playing, false)
+    |> stop_simulation()
     |> assign(:simulation_step, 0)
   end
 
@@ -1493,8 +1511,14 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     end
   end
 
-  defp schedule_simulation_tick do
-    Process.send_after(self(), :advance_simulation, 900)
+  defp schedule_simulation_tick(socket) do
+    timer_ref = make_ref()
+    Process.send_after(self(), {:advance_simulation, timer_ref}, 900)
+    assign(socket, :simulation_timer_ref, timer_ref)
+  end
+
+  defp stop_simulation(socket) do
+    assign(socket, simulation_playing: false, simulation_timer_ref: nil)
   end
 
   defp trace_count(nil), do: 0
@@ -1602,11 +1626,13 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp normalize_pattern(nil), do: "tts-retry"
 
   defp normalize_pattern(pattern_id) do
-    if Enum.any?(Wardwright.PolicyProjection.patterns(), &(&1["id"] == pattern_id)) do
-      pattern_id
-    else
-      "tts-retry"
-    end
+    if unsupported_pattern?(pattern_id), do: "tts-retry", else: pattern_id
+  end
+
+  defp unsupported_pattern?(nil), do: false
+
+  defp unsupported_pattern?(pattern_id) do
+    pattern_id not in Wardwright.PolicyProjection.pattern_ids()
   end
 
   defp normalize_mode(mode) when mode in @modes, do: mode
@@ -1628,15 +1654,47 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   defp recipe_catalog(source_id) do
-    case Wardwright.PolicyRecipeCatalog.list(source_id) do
-      {:ok, catalog} ->
-        Wardwright.PolicyRecipeCatalog.to_map(catalog)
+    catalog =
+      case Wardwright.PolicyRecipeCatalog.list(source_id) do
+        {:ok, catalog} ->
+          Wardwright.PolicyRecipeCatalog.to_map(catalog)
 
-      {:error, catalog} ->
-        catalog
-        |> Wardwright.PolicyRecipeCatalog.to_map()
-        |> then(&Map.put(&1, "warnings", [&1["error"]]))
-    end
+        {:error, catalog} ->
+          catalog
+          |> Wardwright.PolicyRecipeCatalog.to_map()
+          |> then(&Map.put(&1, "warnings", [&1["error"]]))
+      end
+
+    filter_supported_recipes(catalog)
+  end
+
+  defp filter_supported_recipes(%{"recipes" => recipes} = catalog) do
+    supported_patterns = MapSet.new(Wardwright.PolicyProjection.pattern_ids())
+
+    {supported_recipes, unsupported_recipes} =
+      Enum.split_with(recipes, fn recipe ->
+        MapSet.member?(supported_patterns, recipe["pattern_id"])
+      end)
+
+    warnings =
+      catalog
+      |> Map.get("warnings", [])
+      |> recipe_support_warnings(unsupported_recipes)
+
+    catalog
+    |> Map.put("recipes", supported_recipes)
+    |> Map.put("warnings", warnings)
+  end
+
+  defp filter_supported_recipes(catalog), do: catalog
+
+  defp recipe_support_warnings(warnings, []), do: warnings
+
+  defp recipe_support_warnings(warnings, unsupported_recipes) do
+    [
+      "#{length(unsupported_recipes)} examples reference unsupported policy patterns for this build."
+      | warnings
+    ]
   end
 
   defp recipe_catalog_status(%{"error" => error}), do: error
