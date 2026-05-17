@@ -273,12 +273,13 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Simulate"
     assert html =~ "Policy Simulator"
     assert html =~ "Policy run map"
-    assert html =~ "State during this run"
-    assert html =~ "Simulated stream playback"
+    assert html =~ "State and model"
+    assert html =~ "Playback"
     assert html =~ "Ready: 5 trace events available for playback."
     assert html =~ "waiting at input boundary"
     assert html =~ "Policy projection graph"
-    assert html =~ "simulated path"
+    assert html =~ "possible route for this input"
+    assert html =~ "already played"
     assert html =~ "conflict"
     assert html =~ "no-old-client"
     assert html =~ "retry arbiter"
@@ -340,6 +341,14 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert stepped =~ "Step 4 of 5: state retrying, response.streaming."
     assert stepped =~ "retry stream released"
+
+    stepped_back =
+      view
+      |> element("button", "Back")
+      |> render_click()
+
+    assert stepped_back =~ "Step 3 of 5: state retrying, response.streaming."
+    assert stepped_back =~ "retry selected"
 
     reset =
       view
@@ -536,6 +545,25 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert changed =~ "3 related secret match"
     assert changed =~ "review hold selected"
     assert changed =~ "No output is released to the user in this simulated branch"
+  end
+
+  test "LiveView simulation shows state transitions that affect the next turn model" do
+    {:ok, view, _html} = live(build_conn(), "/policies/stream-rewrite-state/diagram")
+
+    selected =
+      view
+      |> element("form[phx-change='select-simulation-input']")
+      |> render_change(%{"simulation_input" => "next-turn-review-model"})
+
+    assert selected =~ "Stream: next turn uses review model"
+    assert selected =~ "State and model"
+    assert selected =~ "Model: managed/kimi-k2.6"
+    assert selected =~ "After this run: review_required uses managed/kimi-k2.6."
+    assert selected =~ "history threshold matched"
+    assert selected =~ "current stream released"
+    assert selected =~ "state change affects subsequent turns"
+    assert selected =~ "Released unchanged. The user receives this raw model output."
+    refute selected =~ "No output is released to the user in this simulated branch"
   end
 
   test "LiveView diagram keeps cross-policy scenarios selectable for every policy" do

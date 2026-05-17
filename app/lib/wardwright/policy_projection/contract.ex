@@ -68,7 +68,15 @@ defmodule Wardwright.PolicyProjection.Contract do
   defmodule State do
     @moduledoc false
     @enforce_keys [:id, :label, :summary]
-    defstruct [:id, :label, :summary, node_ids: [], terminal: false]
+    defstruct [
+      :id,
+      :label,
+      :summary,
+      node_ids: [],
+      terminal: false,
+      model_id: nil,
+      model_reason: nil
+    ]
   end
 
   defmodule Transition do
@@ -156,7 +164,9 @@ defmodule Wardwright.PolicyProjection.Contract do
       {"label", state.label},
       {"summary", state.summary},
       {"node_ids", state.node_ids},
-      {"terminal", state.terminal}
+      {"terminal", state.terminal},
+      {"model_id", state.model_id},
+      {"model_reason", state.model_reason}
     ]
     |> reject_nil()
   end

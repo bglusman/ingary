@@ -156,9 +156,9 @@
       }
     },
     "app/lib/wardwright/policy_projection.ex": {
-      "total": 694,
+      "total": 730,
       "patterns": {
-        "string_key_entry": 562,
+        "string_key_entry": 598,
         "string_key_access": 59,
         "map_call_string_key": 73,
         "get_in_string_path": 0

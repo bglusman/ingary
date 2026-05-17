@@ -228,6 +228,15 @@ defmodule WardwrightWeb.PolicyProjectionLive do
      |> assign(:simulation_step, next_step)}
   end
 
+  def handle_event("back-simulation", _params, socket) do
+    previous_step = max(socket.assigns.simulation_step - 1, 0)
+
+    {:noreply,
+     socket
+     |> assign(:simulation_playing, false)
+     |> assign(:simulation_step, previous_step)}
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -556,16 +565,18 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <strong>Policy run map</strong>
           <span>Follow one simulated request through input handling, routing, model output, tool/output policy, and receipt recording.</span>
         </div>
-        <div class="diagram_legend">
-          <span><i class="legend_shape primitive"></i>primitive</span>
-          <span><i class="legend_shape arbiter"></i>arbiter</span>
-          <span><i class="legend_shape rule"></i>rule</span>
-          <span><i class="legend_shape receipt"></i>receipt</span>
-          <span><i class="legend_dot exact"></i>exact</span>
-          <span><i class="legend_dot inferred"></i>declared</span>
-          <span><i class="legend_line trace"></i>simulated path</span>
-          <span><i class="legend_line conflict"></i>conflict</span>
-        </div>
+        <details class="diagram_legend">
+          <summary>Legend</summary>
+          <span><i class="legend_shape primitive"></i>direct rule</span>
+          <span><i class="legend_shape arbiter"></i>choice point</span>
+          <span><i class="legend_shape rule"></i>policy check</span>
+          <span><i class="legend_shape receipt"></i>audit record</span>
+          <span><i class="legend_dot exact"></i>implemented check</span>
+          <span><i class="legend_dot inferred"></i>declared intent</span>
+          <span><i class="legend_line trace_future"></i>possible route for this input</span>
+          <span><i class="legend_line trace"></i>already played</span>
+          <span><i class="legend_line conflict"></i>needs ordering</span>
+        </details>
       </div>
 
       <.state_run_strip
@@ -576,7 +587,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
       <div class="simulation_player" aria-label="Simulation playback">
         <div class="player_status">
-          <strong>Simulated stream playback</strong>
+          <strong>Playback</strong>
           <span><%= simulation_status(@current_event, @playback_step, @trace_count) %></span>
         </div>
         <div class="player_meter" aria-label={"Simulation step #{@playback_step} of #{@trace_count}"}>
@@ -586,6 +597,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <button type="button" phx-click={if @playing, do: "pause-simulation", else: "play-simulation"}>
             <%= if @playing, do: "Pause", else: "Play" %>
           </button>
+          <button type="button" phx-click="back-simulation">Back</button>
           <button type="button" phx-click="step-simulation">Step</button>
           <button type="button" phx-click="reset-simulation">Reset</button>
         </div>
@@ -681,11 +693,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <div :if={map_size(@simulation_history_context) > 0} class="history_context_editor">
             <div>
               <strong>Policy memory used by this run</strong>
-              <span>These cached facts are read by the current policy. Changing them recomputes the active path and receipt preview.</span>
+              <span>These are the specific session-history facts this policy reads. Changing them recomputes the path, output boundary, next state, and receipt preview.</span>
             </div>
             <label :for={{key, value} <- Enum.sort(@simulation_history_context)}>
               <span><%= history_context_label(key) %></span>
               <input id={"simulation-history-#{key}"} name={"simulation[history_context][#{key}]"} value={value} phx-debounce="300" />
+              <small><%= history_context_help(key) %></small>
             </label>
           </div>
           <div class="turn_editor_actions">
@@ -768,17 +781,19 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   def state_run_strip(assigns) do
     assigns =
-      assign(
-        assigns,
+      assigns
+      |> assign(
         :active_state_id,
         active_state_id(assigns.projection, assigns.simulation, assigns.playback_step)
       )
+      |> assign(:next_turn, next_turn_summary(assigns.projection, assigns.simulation))
 
     ~H"""
     <div class="state_run_strip" aria-label="State during simulated run">
       <div class="state_run_intro">
-        <strong>State during this run</strong>
-        <span>State is part of the simulation path, not a separate tab you have to reconcile by hand.</span>
+        <strong>State and model</strong>
+        <span>State can change during this turn, or it can be the outcome that changes which model handles the next turn.</span>
+        <small :if={@next_turn}><%= @next_turn %></small>
       </div>
       <article
         :for={state <- @projection["state_machine"]["states"]}
@@ -787,6 +802,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         <span><%= state_run_status_label(@projection["state_machine"], state, @active_state_id) %></span>
         <strong><%= state["label"] %></strong>
         <small><%= state["summary"] %> <code><%= state["id"] %></code></small>
+        <small :if={state["model_id"]} class="state_model">Model: <%= state["model_id"] %></small>
+        <small :if={state["model_reason"]} class="state_model_reason"><%= state["model_reason"] %></small>
       </article>
     </div>
     """
@@ -1043,7 +1060,10 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .diagram_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
     .diagram_header > div:first-child { display: grid; gap: 4px; min-width: 0; }
     .diagram_header span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
-    .diagram_legend { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 12px; max-width: 560px; }
+    .diagram_legend { max-width: 560px; color: #46525d; font-size: 12px; }
+    .diagram_legend summary { cursor: pointer; color: #3a4650; font-weight: 800; text-align: right; }
+    .diagram_legend[open] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px 12px; }
+    .diagram_legend[open] summary { flex-basis: 100%; }
     .diagram_legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
     .legend_shape { display: inline-block; width: 18px; height: 12px; border: 1.5px solid #7f8d99; background: #fff; }
     .legend_shape.primitive { border-radius: 2px; border-color: #6f9fd1; background: #eef6ff; }
@@ -1056,6 +1076,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .legend_dot.opaque { border-color: #cf7777; background: #f0b5b5; }
     .legend_line { width: 22px; height: 0; border-top: 3px solid #64748b; }
     .legend_line.trace { border-top-color: #2f74b5; }
+    .legend_line.trace_future { border-top-color: #8fb7da; }
     .legend_line.conflict { border-top-color: #b4232e; border-top-style: dashed; }
     .diagram_canvas { overflow: auto; border: 1px solid #d5dde4; border-radius: 8px; background: linear-gradient(180deg, #f8fafc, #f2f5f7); }
     .diagram_canvas svg { display: block; min-width: 860px; width: 100%; height: auto; }
@@ -1065,6 +1086,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .diagram_edge { stroke: #8392a0; stroke-width: 2; }
     .diagram_edge.effect { stroke: #66727c; stroke-dasharray: 4 4; }
     .diagram_edge.state { stroke: #6e55a8; stroke-width: 2.4; }
+    .diagram_edge.trace_future { stroke: #8fb7da; stroke-width: 3; stroke-linecap: round; opacity: 0.42; }
     .diagram_edge.trace { stroke: #2f74b5; stroke-width: 4; stroke-linecap: round; opacity: 0.82; }
     .diagram_edge.trace.active { stroke: #0b5cad; stroke-width: 6; opacity: 1; }
     .diagram_edge.conflict { stroke: #b4232e; stroke-width: 2.4; stroke-dasharray: 7 5; }
@@ -1094,22 +1116,27 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .state_run_strip { display: grid; grid-template-columns: minmax(180px, 1.2fr) repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: stretch; padding: 10px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
     .state_run_intro, .state_run_card { display: grid; gap: 4px; min-width: 0; padding: 10px; border-radius: 7px; }
     .state_run_intro { align-content: center; color: #26323c; }
-    .state_run_intro span, .state_run_card small { color: #5e6b76; font-size: 12px; line-height: 1.35; }
+    .state_run_intro span, .state_run_intro small, .state_run_card small { color: #5e6b76; font-size: 12px; line-height: 1.35; }
     .state_run_card { border: 1px solid #dde5ec; background: #fff; opacity: 0.68; }
     .state_run_card span { color: #66727c; font-size: 11px; font-weight: 800; line-height: 1.2; text-transform: uppercase; }
     .state_run_card strong { color: #17202a; font-size: 14px; overflow-wrap: anywhere; }
     .state_run_card.initial { border-color: #bdd3e8; background: #f2f8ff; }
     .state_run_card.active { border-color: #5a95cf; background: #eaf4ff; box-shadow: inset 0 0 0 1px #5a95cf; opacity: 1; }
     .state_run_card.terminal { border-color: #94c7b5; background: #f0faf6; }
-    .simulation_player { position: sticky; top: 10px; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 10px 14px; align-items: center; padding: 12px; border: 1px solid #c9d5df; border-radius: 8px; background: rgba(251, 252, 253, 0.96); box-shadow: 0 8px 24px rgba(38, 50, 60, 0.08); backdrop-filter: blur(8px); }
+    .state_model { color: #2f5f87 !important; font-weight: 800; }
+    .state_model_reason { display: none; }
+    .state_run_card.active .state_model_reason { display: block; }
+    .simulation_player { position: sticky; top: 10px; z-index: 3; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(140px, 220px) max-content; gap: 6px 10px; align-items: center; padding: 8px 10px; border: 1px solid #c9d5df; border-radius: 8px; background: rgba(251, 252, 253, 0.96); box-shadow: 0 8px 24px rgba(38, 50, 60, 0.08); backdrop-filter: blur(8px); }
     .player_status, .player_event { display: grid; gap: 4px; min-width: 0; }
-    .player_status span, .player_event span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
-    .player_meter { grid-column: 1 / -1; height: 10px; overflow: hidden; border: 1px solid #bfd0df; border-radius: 999px; background: #edf2f7; }
+    .player_status strong { font-size: 14px; }
+    .player_status span, .player_event span { color: #5e6b76; font-size: 12px; line-height: 1.35; }
+    .player_meter { height: 7px; overflow: hidden; border: 1px solid #bfd0df; border-radius: 999px; background: #edf2f7; }
     .player_meter span { display: block; height: 100%; border-radius: inherit; background: #2f74b5; transition: width 180ms ease; }
     .player_controls { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-    .player_controls button { min-height: 32px; padding: 5px 10px; border: 1px solid #c5d0d9; border-radius: 6px; color: #26323c; background: #fff; font-weight: 800; cursor: pointer; }
+    .player_controls button { min-height: 28px; padding: 4px 9px; border: 1px solid #c5d0d9; border-radius: 6px; color: #26323c; background: #fff; font-size: 12px; font-weight: 800; cursor: pointer; }
     .player_controls button:hover { border-color: #8fa1b2; background: #f3f6f8; }
-    .player_event { grid-column: 1 / -1; grid-template-columns: max-content minmax(0, 0.3fr) minmax(0, 1fr); align-items: center; padding: 10px; border: 1px solid #dbe2e8; border-radius: 8px; background: #fff; }
+    .player_event { grid-column: 1 / -1; grid-template-columns: max-content max-content minmax(0, 1fr); align-items: center; padding-top: 4px; border-top: 1px solid #e2e8ee; }
+    .player_event strong { font-size: 13px; overflow-wrap: anywhere; }
     .turn_editor { display: grid; gap: 10px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fff; }
     .turn_editor_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .turn_editor_header > div { display: grid; gap: 4px; min-width: 0; }
@@ -1129,6 +1156,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .history_context_editor span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
     .history_context_editor label { max-width: 420px; }
     .history_context_editor input { width: 100%; border: 1px solid #cbd6dd; border-radius: 6px; padding: 9px 10px; font: inherit; background: #fff; color: #1d252c; }
+    .history_context_editor label small { color: #5e6b76; font-size: 12px; line-height: 1.35; }
     .withheld_notice { min-height: 116px; padding: 12px; border: 1px solid #dfc1a1; border-radius: 6px; color: #6d4717; background: #fff8ec; font-size: 13px; line-height: 1.45; }
     .boundary_pair { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; border: 1px solid #e0e6ec; border-radius: 8px; background: #fbfcfd; }
     .boundary_pair.changed { grid-template-columns: repeat(2, minmax(0, 1fr)); border-color: #bfd0df; background: #f6f9fb; }
@@ -1336,6 +1364,20 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp history_context_label("policy_state"), do: "Cached policy state"
   defp history_context_label(key), do: key |> String.replace("_", " ") |> String.capitalize()
 
+  defp history_context_help("recent_related_secret_matches") do
+    "Count of prior session receipts whose output matched the related-secret rule inside the configured recent window."
+  end
+
+  defp history_context_help("recent_secret_window_requests") do
+    "How many recent requests are searched when computing the related-secret count."
+  end
+
+  defp history_context_help("policy_state") do
+    "The session state remembered before this turn starts."
+  end
+
+  defp history_context_help(_key), do: "Editable cached policy fact for this simulation."
+
   defp default_simulation_input(inputs) do
     Enum.find(inputs, &(&1["relationship"] == "direct")) || List.first(inputs)
   end
@@ -1446,6 +1488,29 @@ defmodule WardwrightWeb.PolicyProjectionLive do
       state["terminal"] -> "terminal state"
       state["id"] == state_machine["initial_state"] -> "initial state"
       true -> "available state"
+    end
+  end
+
+  defp next_turn_summary(projection, simulation) do
+    next_turn = get_in(simulation, ["receipt_preview", "stream", "next_turn"])
+    state_id = get_in(simulation, ["receipt_preview", "stream", "state_transition"])
+
+    cond do
+      is_map(next_turn) ->
+        "After this run: #{next_turn["state"]} uses #{next_turn["selected_model"]}."
+
+      is_binary(state_id) ->
+        state =
+          projection["state_machine"]["states"]
+          |> Enum.find(&(&1["id"] == state_id))
+
+        case state do
+          %{"model_id" => model_id} -> "After this run: #{state_id} uses #{model_id}."
+          _ -> "After this run: session state becomes #{state_id}."
+        end
+
+      true ->
+        nil
     end
   end
 
@@ -1881,17 +1946,28 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   end
 
   defp diagram_trace_edges(trace, node_index, playback_step) do
+    full_path = trace_path_nodes(trace, node_index)
+    traveled_path = trace |> Enum.take(playback_step) |> trace_path_nodes(node_index)
+
+    path_edges(full_path, "trace_future", "url(#trace-arrow)", false) ++
+      path_edges(traveled_path, "trace", "url(#trace-arrow)", true)
+  end
+
+  defp trace_path_nodes(trace, node_index) do
     trace
-    |> Enum.take(playback_step)
     |> Enum.map(& &1["node_id"])
     |> Enum.reject(&is_nil/1)
     |> Enum.chunk_by(& &1)
     |> Enum.map(&hd/1)
     |> Enum.map(&Map.get(node_index, &1))
     |> Enum.reject(&is_nil/1)
+  end
+
+  defp path_edges(nodes, kind, marker, active) do
+    nodes
     |> Enum.chunk_every(2, 1, :discard)
     |> Enum.map(fn [from, to] ->
-      edge(bottom_center(from), bottom_center(to), "trace", "url(#trace-arrow)", true)
+      edge(bottom_center(from), bottom_center(to), kind, marker, active)
     end)
   end
 

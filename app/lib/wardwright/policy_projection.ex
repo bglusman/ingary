@@ -186,6 +186,19 @@ defmodule Wardwright.PolicyProjection do
         }
       },
       %{
+        "id" => "next-turn-review-model",
+        "title" => "Stream: next turn uses review model",
+        "description" =>
+          "No bytes need rewriting on this turn, but session history crosses the review threshold, so the next turn starts in review mode.",
+        "user_input" => "Give a short status update for the billing incident.",
+        "model_response" => "No account identifiers are present in this neutral status update.",
+        "history_context" => %{
+          "recent_related_secret_matches" => "3",
+          "recent_secret_window_requests" => "5",
+          "policy_state" => "observing"
+        }
+      },
+      %{
         "id" => "no-match",
         "title" => "Stream: no regex match",
         "description" => "No configured regex matches the held chunks.",
@@ -229,6 +242,7 @@ defmodule Wardwright.PolicyProjection do
               "input-and-output-rewrite",
               "rewrite-only",
               "history-threshold-escalation",
+              "next-turn-review-model",
               "no-match"
             ],
        do: "direct"
@@ -781,26 +795,37 @@ defmodule Wardwright.PolicyProjection do
         "observing",
         "Observing",
         "Rewrite request-side private context, then hold chunks and scan for related regex matches.",
-        ["request.rewrite-context", "stream.redact-account"]
+        ["request.rewrite-context", "stream.redact-account"],
+        model_id: Wardwright.local_model(),
+        model_reason:
+          "Default local route while private context is being removed and streamed output is still safe to inspect locally."
       ),
       state(
         "rewriting",
         "Rewriting",
         "A safe rewrite patch is available but more related stream context is still held.",
-        ["stream.redact-account", "stream.rewrite-arbiter"]
+        ["stream.redact-account", "stream.rewrite-arbiter"],
+        model_id: Wardwright.local_model(),
+        model_reason:
+          "Continue local handling while Wardwright decides whether rewritten output can be released."
       ),
       state(
         "review_required",
         "Review Required",
         "A later related secret-token match prevents normal release.",
-        ["stream.secret-transition", "stream.rewrite-arbiter"]
+        ["stream.secret-transition", "stream.rewrite-arbiter"],
+        model_id: Wardwright.managed_model(),
+        model_reason:
+          "Future turns in this session should use the review-capable managed route unless the policy is cleared."
       ),
       state(
         "recording",
         "Recording",
         "Persist rewrite and transition evidence for review and regression fixtures.",
         ["stream.rewrite-receipt"],
-        terminal: true
+        terminal: true,
+        model_id: "none",
+        model_reason: "Receipt recording does not call a provider model."
       )
     ]
 
@@ -891,7 +916,9 @@ defmodule Wardwright.PolicyProjection do
       label: label,
       summary: summary,
       node_ids: node_ids,
-      terminal: Keyword.get(opts, :terminal, false)
+      terminal: Keyword.get(opts, :terminal, false),
+      model_id: Keyword.get(opts, :model_id),
+      model_reason: Keyword.get(opts, :model_reason)
     }
   end
 
@@ -2016,6 +2043,76 @@ defmodule Wardwright.PolicyProjection do
               "released_to_consumer" => true
             },
             "events" => [%{"type" => "stream.rewrite_applied", "rule_id" => "account-redactor"}]
+          }
+        }
+
+      related_secret_history_count >= 3 ->
+        %{
+          "simulation_schema" => "wardwright.policy_simulation.v1",
+          "scenario_id" => "interactive-next-turn-review",
+          "title" => "Edited turn changes the next turn",
+          "engine_id" => "structured-stream-primitives",
+          "input_summary" => summarize_turn(turn),
+          "expected_behavior" =>
+            "Current output releases unchanged, but session history crosses the threshold and the next turn starts in review_required with the managed model.",
+          "verdict" => "passed",
+          "trace" =>
+            request_trace ++
+              history_trace ++
+              [
+                trace(
+                  "i1",
+                  "response.streaming",
+                  "stream.secret-transition",
+                  "match",
+                  "history threshold matched",
+                  "#{related_secret_history_count} prior related secret match(es) #{turn_history_window_label(turn)} transition the session for the next turn",
+                  "warn",
+                  state_id: "review_required"
+                ),
+                trace(
+                  "i2",
+                  "response.streaming",
+                  "stream.rewrite-arbiter",
+                  "action",
+                  "current stream released",
+                  "no current output rewrite or block is required; the state change affects subsequent turns",
+                  "pass",
+                  state_id: "review_required"
+                ),
+                trace(
+                  "i3",
+                  "receipt.finalized",
+                  "stream.rewrite-receipt",
+                  "receipt_event",
+                  "state receipt",
+                  "receipt records next-turn review state and managed model selection",
+                  "info",
+                  state_id: "recording"
+                )
+              ],
+          "receipt_preview" => %{
+            "input" => input_preview,
+            "stream" => %{
+              "rewrites" => [],
+              "state_transition" => "review_required",
+              "released_to_consumer" => true,
+              "final_output" => text,
+              "history" => stream_history_receipt(turn, related_secret_history_count),
+              "next_turn" => %{
+                "state" => "review_required",
+                "selected_model" => Wardwright.managed_model(),
+                "reason" => "session history threshold crossed"
+              }
+            },
+            "events" => [
+              %{"type" => "policy.state_transition", "state" => "review_required"},
+              %{
+                "type" => "route.next_turn_model_selected",
+                "selected_model" => Wardwright.managed_model()
+              },
+              %{"type" => "stream.release_allowed", "reason" => "no_current_match"}
+            ]
           }
         }
 
