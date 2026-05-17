@@ -1388,7 +1388,21 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
     .receipt_details summary { cursor: pointer; color: #2f5f87; font-size: 13px; font-weight: 800; }
     .receipt_details pre { margin-top: 10px; }
-    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed, .attempt_step, .state_run_strip { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; } .diagram_legend, .player_controls { justify-content: flex-start; } .effect_row, .state_step, .turn_editor_header form { grid-template-columns: 1fr; } .trace_event small, .trace_summary span, .turn_editor_header form label { grid-column: 1; } .trace_event .badge { grid-column: 1; grid-row: auto; justify-self: start; } .engine_card, .turn_editor_header form { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
+    @media (max-width: 980px) {
+      .shell > [data-phx-main] { display: block; min-height: 100vh; }
+      .sidebar { position: static; overflow: visible; gap: 16px; padding: 18px 16px; }
+      .workspace { padding: 18px 16px; }
+      .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed, .attempt_step, .state_run_strip { grid-template-columns: 1fr; }
+      .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; }
+      .topbar { gap: 12px; }
+      .sidebar_footer { margin-top: 0; }
+      .diagram_legend, .player_controls { justify-content: flex-start; }
+      .effect_row, .state_step, .turn_editor_header form { grid-template-columns: 1fr; }
+      .trace_event small, .trace_summary span, .turn_editor_header form label { grid-column: 1; }
+      .trace_event .badge { grid-column: 1; grid-row: auto; justify-self: start; }
+      .engine_card, .turn_editor_header form { min-width: 0; }
+      .schema_badge { white-space: normal; overflow-wrap: anywhere; }
+    }
     """
   end
 
