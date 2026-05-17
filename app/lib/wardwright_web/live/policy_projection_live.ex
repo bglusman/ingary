@@ -863,8 +863,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     ~H"""
     <div class="state_run_strip" aria-label="State during simulated run">
       <div class="state_run_intro">
-        <strong>State and model</strong>
-        <span>State can change during this turn, or it can be the outcome that changes which model handles the next turn.</span>
+        <strong>State and turn model</strong>
+        <span>State can change during this turn. A state transition usually changes the backend for a later turn; a guarded regeneration can reroute the current request as a separate retry event.</span>
         <small :if={@next_turn}><%= @next_turn %></small>
       </div>
       <article
@@ -874,7 +874,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         <span><%= state_run_status_label(@projection["state_machine"], state, @active_state_id) %></span>
         <strong><%= state["label"] %></strong>
         <small><%= state["summary"] %> <code><%= state["id"] %></code></small>
-        <small :if={state["model_id"]} class="state_model">Model: <%= state["model_id"] %></small>
+        <small :if={state["model_id"]} class="state_model">Turn model: <%= state["model_id"] %></small>
         <small :if={state["model_reason"]} class="state_model_reason"><%= state["model_reason"] %></small>
       </article>
     </div>
@@ -892,6 +892,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         <div>
           <strong><%= @projection["state_machine"]["schema"] %></strong>
           <span><%= @projection["state_machine"]["summary"] %></span>
+          <small>Turn-model labels describe which backend handles a turn while the session is in that state. Same-request retry or fallback reroutes are shown as route-transition events, not as simultaneous model mixing.</small>
         </div>
         <.badge value={if @projection["state_machine"]["default_projection"], do: "default one-state", else: "explicit stateful"} />
       </div>
@@ -919,7 +920,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               <rect x={state.x} y={state.y} width={state.width} height={state.height} rx="8" class={"state_diagram_node #{state.role}"} />
               <text x={state.x + 12} y={state.y + 25} class="state_node_title"><%= state.label %></text>
               <text x={state.x + 12} y={state.y + 47} class="state_node_caption"><%= state.id %></text>
-              <text :if={state.model_id} x={state.x + 12} y={state.y + 66} class="state_node_model"><%= state.model_id %></text>
+              <text :if={state.model_id} x={state.x + 12} y={state.y + 63} class="state_node_model_label">turn model</text>
+              <text :if={state.model_id} x={state.x + 12} y={state.y + 78} class="state_node_model"><%= state.model_id %></text>
             </g>
           </g>
         </svg>
@@ -933,7 +935,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           </div>
           <span><%= state["summary"] %></span>
           <div :if={state["model_id"]} class="state_card_model">
-            <span>Model</span>
+            <span>Turn model</span>
             <strong><%= state["model_id"] %></strong>
             <small :if={state["model_reason"]}><%= state["model_reason"] %></small>
           </div>
@@ -1299,6 +1301,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .state_diagram_node.terminal { fill: #f0faf6; stroke: #78b59f; stroke-width: 2.2; }
     .state_node_title { fill: #17202a; font-size: 14px; font-weight: 800; }
     .state_node_caption { fill: #5e6b76; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .state_node_model_label { fill: #55708a; font-size: 8px; font-weight: 900; text-transform: uppercase; }
     .state_node_model { fill: #2f5f87; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; font-weight: 800; }
     .state_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
     .state_card { display: grid; gap: 8px; min-height: 126px; }
@@ -1821,7 +1824,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               y1: from.y + div(from.height, 2),
               x2: to.x,
               y2: to.y + div(to.height, 2),
-              trigger: transition["trigger"]
+              trigger: state_edge_label(transition)
             }
           ]
         else
@@ -1836,6 +1839,22 @@ defmodule WardwrightWeb.PolicyProjectionLive do
       edges: edges
     }
   end
+
+  defp state_edge_label(%{"id" => id}) when is_binary(id) do
+    id
+    |> String.split(".")
+    |> List.last()
+    |> String.replace("-", " ")
+  end
+
+  defp state_edge_label(%{"trigger" => trigger}) when is_binary(trigger) do
+    trigger
+    |> String.split()
+    |> Enum.take(2)
+    |> Enum.join(" ")
+  end
+
+  defp state_edge_label(_transition), do: "transition"
 
   defp state_role(state_machine, state) do
     cond do

@@ -290,7 +290,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "wardwright tools"
     assert html =~ "Policy Simulator"
     assert html =~ "Policy run map"
-    assert html =~ "State and model"
+    assert html =~ "State and turn model"
     assert html =~ "Playback"
     assert html =~ "Ready: 5 trace events available for playback."
     assert html =~ "waiting at input boundary"
@@ -594,8 +594,8 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       |> render_change(%{"simulation_input" => "next-turn-review-model"})
 
     assert selected =~ "Stream: next turn uses review model"
-    assert selected =~ "State and model"
-    assert selected =~ "Model: managed/kimi-k2.6"
+    assert selected =~ "State and turn model"
+    assert selected =~ "Turn model: managed/kimi-k2.6"
     assert selected =~ "After this run: review_required uses managed/kimi-k2.6."
     assert selected =~ "history threshold matched"
     assert selected =~ "current stream released"
@@ -770,7 +770,11 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, _stream_view, stream_html} =
       live(build_conn(), "/policies/stream-rewrite-state/state_machine")
 
-    assert stream_html =~ "Model"
+    assert stream_html =~ "Turn model"
+
+    assert stream_html =~
+             "Same-request retry or fallback reroutes are shown as route-transition events"
+
     assert stream_html =~ "local/qwen-coder"
     assert stream_html =~ "managed/kimi-k2.6"
 
