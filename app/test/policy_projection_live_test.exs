@@ -270,7 +270,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
 
     assert html =~ "Time-travel stream retry"
-    assert html =~ "Simulate"
+    assert html =~ "Advanced projection details"
     assert html =~ "Policy Simulator"
     assert html =~ "Policy run map"
     assert html =~ "State and model"

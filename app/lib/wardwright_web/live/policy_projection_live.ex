@@ -270,7 +270,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         <a
           :for={pattern <- @patterns}
           class={if pattern["pattern_id"] == @selected_pattern_id, do: "active", else: ""}
-          href={path(pattern["pattern_id"], @mode, @selected_recipe_source_id)}
+          href={path(pattern["pattern_id"], "diagram", @selected_recipe_source_id)}
         >
           <strong><%= pattern["title"] %></strong>
           <span><%= pattern["category"] %></span>
@@ -342,16 +342,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <.badge value={@projection["projection_schema"]} class="schema_badge" />
         </div>
 
-        <div class="mode_tabs">
-          <a
-            :for={mode <- @modes}
-            class={if mode == @mode, do: "active", else: ""}
-            href={path(@selected_pattern_id, mode, @selected_recipe_source_id)}
-          >
-            <strong><%= mode_label(mode) %></strong>
-            <small><%= mode_hint(mode) %></small>
-          </a>
-        </div>
+        <.projection_inspector_links
+          mode={@mode}
+          modes={@modes}
+          selected_pattern_id={@selected_pattern_id}
+          selected_recipe_source_id={@selected_recipe_source_id}
+        />
 
         <%= if @mode == "diagram" do %>
           <.policy_diagram
@@ -537,6 +533,54 @@ defmodule WardwrightWeb.PolicyProjectionLive do
         </div>
       </section>
     </section>
+    """
+  end
+
+  attr(:mode, :string, required: true)
+  attr(:modes, :list, required: true)
+  attr(:selected_pattern_id, :string, required: true)
+  attr(:selected_recipe_source_id, :string, required: true)
+
+  def projection_inspector_links(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :inspector_modes,
+        Enum.reject(assigns.modes, &(&1 == "diagram"))
+      )
+
+    ~H"""
+    <div class="projection_inspector_links">
+      <%= if @mode == "diagram" do %>
+        <details>
+          <summary>Advanced projection details</summary>
+          <div>
+            <a
+              :for={mode <- @inspector_modes}
+              href={path(@selected_pattern_id, mode, @selected_recipe_source_id)}
+            >
+              <strong><%= mode_label(mode) %></strong>
+              <small><%= mode_hint(mode) %></small>
+            </a>
+          </div>
+        </details>
+      <% else %>
+        <div class="inspector_nav">
+          <a class="simulator_return" href={path(@selected_pattern_id, "diagram", @selected_recipe_source_id)}>
+            <strong>Back to simulator</strong>
+            <small>primary workspace</small>
+          </a>
+          <a
+            :for={mode <- @inspector_modes}
+            class={if mode == @mode, do: "active", else: ""}
+            href={path(@selected_pattern_id, mode, @selected_recipe_source_id)}
+          >
+            <strong><%= mode_label(mode) %></strong>
+            <small><%= mode_hint(mode) %></small>
+          </a>
+        </div>
+      <% end %>
+    </div>
     """
   end
 
@@ -1050,12 +1094,14 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .scan_strip span { color: #66727c; font-size: 12px; font-weight: 800; text-transform: uppercase; }
     .scan_strip strong { color: #17202a; font-size: 18px; line-height: 1.2; }
     .scan_strip small { color: #5e6b76; line-height: 1.35; overflow-wrap: anywhere; }
-    .mode_tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid #d5dde4; border-radius: 8px; background: #f3f6f8; }
-    .mode_tabs a { display: grid; gap: 2px; min-width: 118px; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; opacity: 0.82; }
-    .mode_tabs small { color: #66727c; font-size: 11px; font-weight: 700; line-height: 1.25; }
-    .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; opacity: 1; }
-    .mode_tabs a:first-child { min-width: 180px; }
-    .mode_tabs a:first-child strong { font-size: 14px; }
+    .projection_inspector_links { margin-bottom: 14px; }
+    .projection_inspector_links details { padding: 9px 11px; border: 1px solid #d8e0e7; border-radius: 8px; color: #4b5863; background: #f8fafc; }
+    .projection_inspector_links summary { width: fit-content; cursor: pointer; color: #3a4650; font-size: 13px; font-weight: 800; }
+    .projection_inspector_links details > div, .inspector_nav { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+    .projection_inspector_links a { display: grid; gap: 2px; min-width: 132px; border: 1px solid #d8e0e7; border-radius: 6px; padding: 7px 9px; color: #3a4650; background: #fff; font-size: 12px; font-weight: 800; opacity: 0.86; }
+    .projection_inspector_links small { color: #66727c; font-size: 11px; font-weight: 700; line-height: 1.25; }
+    .projection_inspector_links a.active, .projection_inspector_links a:hover { border-color: #aebbc6; opacity: 1; }
+    .projection_inspector_links .simulator_return { border-color: #8fb7da; background: #eef6ff; opacity: 1; }
     .diagram_shell { display: grid; gap: 12px; }
     .diagram_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
     .diagram_header > div:first-child { display: grid; gap: 4px; min-width: 0; }
