@@ -209,8 +209,8 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, view, html} = live(build_conn(), "/policies/route-privacy/trace_overlay")
 
     assert html =~ "Private context route gate"
-    assert html =~ "Trace"
-    assert html =~ "this example"
+    assert html =~ "Trace details"
+    assert html =~ "raw run evidence"
     assert html =~ "Request route plan"
     assert html =~ "Artifact first"
     assert html =~ "Policy nodes"
@@ -221,7 +221,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     connected_html = render(view)
 
     assert connected_html =~ "Private context route gate"
-    assert connected_html =~ "Trace"
+    assert connected_html =~ "Trace details"
     assert connected_html =~ "Request route plan"
     assert connected_html =~ "Artifact first"
     assert connected_html =~ "Policy nodes"
@@ -232,7 +232,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert {:error, {:redirect, %{to: "/policies/route-privacy/effect_matrix"}}} =
              view
-             |> element("a", "Actions")
+             |> element("a", "Effect table")
              |> render_click()
 
     {:ok, matrix_view, _html} = live(build_conn(), "/policies/route-privacy/effect_matrix")
@@ -240,8 +240,8 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     matrix_html = render(matrix_view)
 
     assert matrix_html =~ "Private context route gate"
-    assert matrix_html =~ "Actions"
-    assert matrix_html =~ "possible outcomes"
+    assert matrix_html =~ "Effect table"
+    assert matrix_html =~ "writes and actions"
     assert matrix_html =~ "route.allowed_targets"
   end
 
@@ -270,8 +270,10 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     {:ok, view, html} = live(build_conn(), "/policies/tts-retry/diagram")
 
     assert html =~ "Time-travel stream retry"
-    assert html =~ "Diagram"
-    assert html =~ "Projection graph"
+    assert html =~ "Simulate"
+    assert html =~ "Policy Simulator"
+    assert html =~ "Policy run map"
+    assert html =~ "State during this run"
     assert html =~ "Simulated stream playback"
     assert html =~ "Ready: 5 trace events available for playback."
     assert html =~ "waiting at input boundary"
@@ -499,7 +501,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       |> element("form[phx-change='select-simulation-input']")
       |> render_change(%{"simulation_input" => "rewrite-only"})
 
-    assert selected =~ "Referenced history"
+    assert selected =~ "Policy memory used by this run"
     assert selected =~ "Prior related secret matches"
     assert selected =~ "rewritten stream released"
     refute selected =~ "prior related matches read"
@@ -603,14 +605,14 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert {:error,
             {:redirect, %{to: "/policies/tool-governance/state_machine?source=workspace"}}} =
              view
-             |> element("a", "States")
+             |> element("a", "State model")
              |> render_click()
 
     {:ok, _state_view, updated} =
       live(build_conn(), "/policies/tool-governance/state_machine?source=workspace")
 
     assert updated =~ "Workspace recipes"
-    assert updated =~ "States"
+    assert updated =~ "State model"
   end
 
   test "LiveView diagram mode reflects configured route and tool policies" do
@@ -643,7 +645,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     :ok = put_route_gate_config()
     {:ok, route_view, route_html} = live(build_conn(), "/policies/route-privacy/state_machine")
 
-    assert route_html =~ "States"
+    assert route_html =~ "State model"
     assert route_html =~ "State machine transition graph"
     assert route_html =~ "default one-state"
     assert route_html =~ "No explicit transitions"

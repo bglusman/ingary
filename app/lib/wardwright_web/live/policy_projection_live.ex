@@ -325,10 +325,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
       <section class="panel">
         <div class="panel_header">
           <div>
-            <h2>Stable Projection Interface</h2>
+            <h2><%= workbench_title(@mode) %></h2>
             <p>
-              The deterministic artifact remains the authority. This page renders a projection emitted by the Elixir backend,
-              then shows simulation evidence against that projection.
+              <%= workbench_description(@mode) %>
             </p>
           </div>
           <.badge value={@projection["projection_schema"]} class="schema_badge" />
@@ -554,8 +553,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     <div class="diagram_shell">
       <div class="diagram_header">
         <div>
-          <strong>Projection graph</strong>
-          <span>Nodes are backend projection facts; edges show order, state transitions, effects, conflicts, and simulated execution.</span>
+          <strong>Policy run map</strong>
+          <span>Follow one simulated request through input handling, routing, model output, tool/output policy, and receipt recording.</span>
         </div>
         <div class="diagram_legend">
           <span><i class="legend_shape primitive"></i>primitive</span>
@@ -568,6 +567,12 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <span><i class="legend_line conflict"></i>conflict</span>
         </div>
       </div>
+
+      <.state_run_strip
+        projection={@projection}
+        simulation={@simulation}
+        playback_step={@playback_step}
+      />
 
       <div class="simulation_player" aria-label="Simulation playback">
         <div class="player_status">
@@ -675,8 +680,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           </div>
           <div :if={map_size(@simulation_history_context) > 0} class="history_context_editor">
             <div>
-              <strong>Referenced history</strong>
-              <span>Edit cached facts this policy reads, then watch the path and receipt recompute.</span>
+              <strong>Policy memory used by this run</strong>
+              <span>These cached facts are read by the current policy. Changing them recomputes the active path and receipt preview.</span>
             </div>
             <label :for={{key, value} <- Enum.sort(@simulation_history_context)}>
               <span><%= history_context_label(key) %></span>
@@ -753,6 +758,36 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           <small><%= event["detail"] %></small>
         </article>
       </div>
+    </div>
+    """
+  end
+
+  attr(:projection, :map, required: true)
+  attr(:simulation, :map, required: true)
+  attr(:playback_step, :integer, required: true)
+
+  def state_run_strip(assigns) do
+    assigns =
+      assign(
+        assigns,
+        :active_state_id,
+        active_state_id(assigns.projection, assigns.simulation, assigns.playback_step)
+      )
+
+    ~H"""
+    <div class="state_run_strip" aria-label="State during simulated run">
+      <div class="state_run_intro">
+        <strong>State during this run</strong>
+        <span>State is part of the simulation path, not a separate tab you have to reconcile by hand.</span>
+      </div>
+      <article
+        :for={state <- @projection["state_machine"]["states"]}
+        class={"state_run_card #{state_run_card_class(@projection["state_machine"], state, @active_state_id)}"}
+      >
+        <span><%= state_run_status_label(@projection["state_machine"], state, @active_state_id) %></span>
+        <strong><%= state["label"] %></strong>
+        <small><%= state["summary"] %> <code><%= state["id"] %></code></small>
+      </article>
     </div>
     """
   end
@@ -999,9 +1034,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .scan_strip strong { color: #17202a; font-size: 18px; line-height: 1.2; }
     .scan_strip small { color: #5e6b76; line-height: 1.35; overflow-wrap: anywhere; }
     .mode_tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border: 1px solid #d5dde4; border-radius: 8px; background: #f3f6f8; }
-    .mode_tabs a { display: grid; gap: 2px; min-width: 118px; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; }
+    .mode_tabs a { display: grid; gap: 2px; min-width: 118px; border: 1px solid transparent; border-radius: 6px; padding: 7px 10px; color: #3a4650; font-size: 13px; font-weight: 800; opacity: 0.82; }
     .mode_tabs small { color: #66727c; font-size: 11px; font-weight: 700; line-height: 1.25; }
-    .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; }
+    .mode_tabs a.active, .mode_tabs a:hover { border-color: #c5d0d9; background: #fff; opacity: 1; }
+    .mode_tabs a:first-child { min-width: 180px; }
+    .mode_tabs a:first-child strong { font-size: 14px; }
     .diagram_shell { display: grid; gap: 12px; }
     .diagram_header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
     .diagram_header > div:first-child { display: grid; gap: 4px; min-width: 0; }
@@ -1054,6 +1091,16 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .node_annotation p { margin: 8px 0 4px; color: #4c5964; }
     .node_annotation small { color: #66727c; line-height: 1.4; }
     .diagram_trace { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 9px; }
+    .state_run_strip { display: grid; grid-template-columns: minmax(180px, 1.2fr) repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: stretch; padding: 10px; border: 1px solid #d5dde4; border-radius: 8px; background: #fbfcfd; }
+    .state_run_intro, .state_run_card { display: grid; gap: 4px; min-width: 0; padding: 10px; border-radius: 7px; }
+    .state_run_intro { align-content: center; color: #26323c; }
+    .state_run_intro span, .state_run_card small { color: #5e6b76; font-size: 12px; line-height: 1.35; }
+    .state_run_card { border: 1px solid #dde5ec; background: #fff; opacity: 0.68; }
+    .state_run_card span { color: #66727c; font-size: 11px; font-weight: 800; line-height: 1.2; text-transform: uppercase; }
+    .state_run_card strong { color: #17202a; font-size: 14px; overflow-wrap: anywhere; }
+    .state_run_card.initial { border-color: #bdd3e8; background: #f2f8ff; }
+    .state_run_card.active { border-color: #5a95cf; background: #eaf4ff; box-shadow: inset 0 0 0 1px #5a95cf; opacity: 1; }
+    .state_run_card.terminal { border-color: #94c7b5; background: #f0faf6; }
     .simulation_player { position: sticky; top: 10px; z-index: 3; display: grid; grid-template-columns: minmax(0, 1fr) max-content; gap: 10px 14px; align-items: center; padding: 12px; border: 1px solid #c9d5df; border-radius: 8px; background: rgba(251, 252, 253, 0.96); box-shadow: 0 8px 24px rgba(38, 50, 60, 0.08); backdrop-filter: blur(8px); }
     .player_status, .player_event { display: grid; gap: 4px; min-width: 0; }
     .player_status span, .player_event span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
@@ -1075,8 +1122,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .turn_editor textarea { min-height: 116px; padding: 9px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.45; }
     .turn_editor_grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
     .turn_editor_grid label { display: grid; gap: 6px; min-width: 0; }
-    .history_context_editor { display: grid; gap: 10px; padding: 10px; border: 1px solid #d4dfda; border-radius: 8px; background: #f7fbf8; }
+    .history_context_editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; padding: 10px; border: 1px solid #d4dfda; border-radius: 8px; background: #f7fbf8; }
     .history_context_editor > div { display: grid; gap: 4px; }
+    .history_context_editor > div:first-child { grid-column: 1 / -1; }
     .history_context_editor strong { color: #263238; }
     .history_context_editor span { color: #5e6b76; font-size: 13px; line-height: 1.4; }
     .history_context_editor label { max-width: 420px; }
@@ -1159,7 +1207,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     pre { max-height: 380px; overflow: auto; padding: 12px; border: 1px solid #dbe2e8; border-radius: 6px; color: #25313b; background: #f7f9fb; font-size: 12px; line-height: 1.45; }
     .receipt_details summary { cursor: pointer; color: #2f5f87; font-size: 13px; font-weight: 800; }
     .receipt_details pre { margin-top: 10px; }
-    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed, .attempt_step { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; } .diagram_legend, .player_controls { justify-content: flex-start; } .effect_row, .state_step, .turn_editor_header form { grid-template-columns: 1fr; } .trace_event small, .trace_summary span, .turn_editor_header form label { grid-column: 1; } .trace_event .badge { grid-column: 1; grid-row: auto; justify-self: start; } .engine_card, .turn_editor_header form { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
+    @media (max-width: 980px) { .shell > [data-phx-main], .split, .scan_strip, .state_columns, .simulation_player, .player_event, .turn_editor_grid, .boundary_pair.changed, .attempt_step, .state_run_strip { grid-template-columns: 1fr; } .sidebar { position: sticky; top: 0; z-index: 1; } .topbar, .panel_header, .state_machine_summary, .assistant_boundary, .diagram_header, .turn_editor_header { display: grid; } .diagram_legend, .player_controls { justify-content: flex-start; } .effect_row, .state_step, .turn_editor_header form { grid-template-columns: 1fr; } .trace_event small, .trace_summary span, .turn_editor_header form label { grid-column: 1; } .trace_event .badge { grid-column: 1; grid-row: auto; justify-self: start; } .engine_card, .turn_editor_header form { min-width: 0; } .schema_badge { white-space: normal; overflow-wrap: anywhere; } }
     """
   end
 
@@ -1362,6 +1410,45 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     |> Enum.at(max(step - 1, 0))
   end
 
+  defp active_state_id(projection, simulation, playback_step) do
+    initial_state = get_in(projection, ["state_machine", "initial_state"])
+
+    current =
+      simulation
+      |> current_trace_event(playback_step)
+      |> state_id()
+
+    previous =
+      simulation
+      |> Map.get("trace", [])
+      |> Enum.take(playback_step)
+      |> Enum.reverse()
+      |> Enum.find_value(&state_id/1)
+
+    current || previous || initial_state
+  end
+
+  defp state_id(nil), do: nil
+  defp state_id(event), do: Map.get(event, "state_id")
+
+  defp state_run_card_class(state_machine, state, active_state_id) do
+    cond do
+      state["id"] == active_state_id -> "active"
+      state["terminal"] -> "terminal"
+      state["id"] == state_machine["initial_state"] -> "initial"
+      true -> "available"
+    end
+  end
+
+  defp state_run_status_label(state_machine, state, active_state_id) do
+    cond do
+      state["id"] == active_state_id -> "current state"
+      state["terminal"] -> "terminal state"
+      state["id"] == state_machine["initial_state"] -> "initial state"
+      true -> "available state"
+    end
+  end
+
   defp simulation_status(_event, 0, trace_count) do
     "Ready: #{trace_count} trace events available for playback."
   end
@@ -1464,17 +1551,28 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     path(pattern_id, mode) <> "?" <> URI.encode_query(%{"source" => source_id})
   end
 
-  defp mode_label("diagram"), do: "Diagram"
-  defp mode_label("phase_map"), do: "Policy parts"
-  defp mode_label("state_machine"), do: "States"
-  defp mode_label("effect_matrix"), do: "Actions"
-  defp mode_label("trace_overlay"), do: "Trace"
+  defp workbench_title("diagram"), do: "Policy Simulator"
+  defp workbench_title(_mode), do: "Artifact Inspector"
 
-  defp mode_hint("diagram"), do: "map and simulator"
-  defp mode_hint("phase_map"), do: "rules grouped by step"
-  defp mode_hint("state_machine"), do: "policy states"
-  defp mode_hint("effect_matrix"), do: "possible outcomes"
-  defp mode_hint("trace_overlay"), do: "this example"
+  defp workbench_description("diagram") do
+    "Edit a scenario, step through the run, and see which state, rule, action, and output boundary changed. The deterministic artifact remains the authority; this is evidence against it."
+  end
+
+  defp workbench_description(_mode) do
+    "Lower-level projection views for reviewing the compiled artifact behind the simulator. These are useful when the main run map does not explain enough."
+  end
+
+  defp mode_label("diagram"), do: "Simulate"
+  defp mode_label("phase_map"), do: "Compiled rules"
+  defp mode_label("state_machine"), do: "State model"
+  defp mode_label("effect_matrix"), do: "Effect table"
+  defp mode_label("trace_overlay"), do: "Trace details"
+
+  defp mode_hint("diagram"), do: "primary workspace"
+  defp mode_hint("phase_map"), do: "artifact internals"
+  defp mode_hint("state_machine"), do: "all transitions"
+  defp mode_hint("effect_matrix"), do: "writes and actions"
+  defp mode_hint("trace_overlay"), do: "raw run evidence"
 
   defp phase_label("request.preparing"), do: "Before the model"
   defp phase_label("request.routing"), do: "Route choice"
