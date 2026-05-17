@@ -22,8 +22,8 @@ correctness-heavy pure policy logic when the boundary is stable enough.
 
 ## Install
 
-Wardwright publishes early native binaries for macOS and Linux. The current
-release is `v0.0.3`.
+Wardwright publishes early native binaries for macOS and Linux. The next
+prepared release is `v0.0.4`.
 
 ### macOS Homebrew
 
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/in
 For a pinned release:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.3
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.4
 ```
 
 Run it locally:
@@ -115,6 +115,10 @@ The active app exposes:
 - A Phoenix LiveView policy workbench at `/policies` with projection diagrams,
   simulation playback, recipe selection, state-machine views, route/effect
   summaries, and tool-governance demos.
+- A unified project example catalog seeded into the configured local recipe
+  directory (`:policy_recipe_workspace_dir`, defaulting to
+  `~/.wardwright/recipes/policies`), with optional community recipes loaded from
+  `wardwright.dev`.
 
 Wardwright is still an early prototype. Interfaces are intentionally more
 important than deep implementation maturity, and unsupported inputs should fail

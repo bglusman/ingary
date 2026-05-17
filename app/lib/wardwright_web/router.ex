@@ -26,6 +26,8 @@ defmodule WardwrightWeb.Router do
 
     live("/", PolicyProjectionLive, :index)
     live("/policies", PolicyProjectionLive, :index)
+    live("/policies/:pattern/:mode/recipe/:recipe/step/:step", PolicyProjectionLive, :index)
+    live("/policies/:pattern/:mode/recipe/:recipe", PolicyProjectionLive, :index)
     live("/policies/:pattern/:mode/step/:step", PolicyProjectionLive, :index)
     live("/policies/:pattern/:mode", PolicyProjectionLive, :index)
   end

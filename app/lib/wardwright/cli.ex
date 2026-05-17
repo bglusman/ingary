@@ -50,6 +50,7 @@ defmodule Wardwright.CLI do
 
     Runtime environment:
       WARDWRIGHT_BIND             Host and port, default 127.0.0.1:8787
+      WARDWRIGHT_ALLOWED_ORIGINS  Extra comma-separated LiveView origins
       WARDWRIGHT_SECRET_KEY_BASE  Stable Phoenix signing secret for services
       WARDWRIGHT_ADMIN_TOKEN      Optional token for protected local APIs
     """

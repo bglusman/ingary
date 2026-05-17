@@ -1,0 +1,32 @@
+{
+  "recipes": [
+    {
+      "id": "deprecated-sdk-stream-retry",
+      "title": "Deprecated SDK stream retry",
+      "management_area": "Stream repair and retry",
+      "category": "response.streaming",
+      "promise": "Catch a prohibited SDK name before it reaches the user, abort the attempt, add a targeted reminder, and release the fixed retry.",
+      "failure_story": "A coding assistant keeps recommending an old client constructor across chunk boundaries. A prompt-level rule wastes context on every turn, but a plain output filter either leaks the bad token or blocks a useful answer.",
+      "old_behavior": "The first bad stream either reached the user or the whole request failed with no repair path.",
+      "wardwright_behavior": "A bounded holdback window detects the split stream match, stops unreleased generation, retries once with a precise reminder, and records both attempts.",
+      "composition": "TTSR-style stream guard with a retry route that can move from the local first attempt to a review-capable managed route.",
+      "primitives": ["time_travel_stream_rule", "retry_with_reminder", "attempt_receipt"],
+      "pattern_id": "tts-retry",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "credential-redaction-ladder",
+      "title": "Credential redaction ladder",
+      "management_area": "Stream repair and retry",
+      "category": "response.streaming",
+      "promise": "Rewrite account-like spans, count related secret matches in session history, and escalate later turns only when repetition makes the session risky.",
+      "failure_story": "An assistant can safely redact one account identifier, but repeated related secret-shaped matches in nearby turns suggest the session has drifted into credential handling.",
+      "old_behavior": "Every match looked the same: either redact everything forever or alert too early.",
+      "wardwright_behavior": "The policy distinguishes a safe rewrite from a state transition, uses bounded session history, and changes future turn routing after the threshold is reached.",
+      "composition": "State machine plus stream rewrite policy; future turns can bind the review state to a managed route.",
+      "primitives": ["regex_rewrite", "session_history_count", "state_transition"],
+      "pattern_id": "stream-rewrite-state",
+      "recipe_kind": "policy_recipe"
+    }
+  ]
+}

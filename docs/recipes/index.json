@@ -17,6 +17,14 @@
       "recipe_kind": "policy_recipe"
     },
     {
+      "id": "community-review-model-escalation",
+      "title": "Review model escalation",
+      "category": "response.streaming",
+      "promise": "Demonstrate a multi-model policy where local handling is preferred until repeated stream matches move later turns onto a review-capable managed route.",
+      "pattern_id": "stream-rewrite-state",
+      "recipe_kind": "policy_recipe"
+    },
+    {
       "id": "community-done-but-missing-file",
       "title": "Done, but where is the file?",
       "category": "output.finalizing",
@@ -29,6 +37,14 @@
       "title": "Private-route starter",
       "category": "route.selecting",
       "promise": "Keep private-risk requests on local or approved routes while still showing the route decision in receipts.",
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "community-local-first-cascade",
+      "title": "Local-first cascade",
+      "category": "route.selecting",
+      "promise": "Model a dispatcher/cascade shape where private or small-context work stays local and larger approved requests can use a managed fallback.",
       "pattern_id": "route-privacy",
       "recipe_kind": "policy_recipe"
     },

@@ -1,0 +1,18 @@
+{
+  "recipes": [
+    {
+      "id": "tool-loop-cost-brake",
+      "title": "Tool loop cost brake",
+      "management_area": "Tool and workflow control",
+      "category": "tool.using",
+      "promise": "Detect repeated write-capable tool calls and make the next action reviewable before the agent burns budget or mutates state twice.",
+      "failure_story": "A repo agent keeps calling the same issue or pull-request tool after a transient error. The individual calls look valid, but the sequence is wasting time and may repeat an external side effect.",
+      "old_behavior": "Only the final failure was visible; the repeated tool sequence was buried in trace noise.",
+      "wardwright_behavior": "Tool context records namespace, tool name, risk class, call id, and session history so policy can deny, reroute, or alert on the repeated sequence.",
+      "composition": "Tool policy over session-scoped history; compatible with route policy for switching to a stronger planner after repeated failures.",
+      "primitives": ["tool_context", "session_window", "deny_tool"],
+      "pattern_id": "tool-governance",
+      "recipe_kind": "policy_recipe"
+    }
+  ]
+}

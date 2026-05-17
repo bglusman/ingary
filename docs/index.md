@@ -28,10 +28,10 @@ description: Synthetic model contracts, governance, and receipts for agentic wor
 </section>
 
 <div class="notice">
-  <strong>Status:</strong> Wardwright is early but installable. Release
-  <code>v0.0.3</code> publishes native macOS and Linux artifacts, a Homebrew
-  formula, the active BEAM implementation, shared contracts, and tests used to
-  validate policy behavior. See the
+  <strong>Status:</strong> Wardwright is early but installable. The prepared
+  <code>v0.0.4</code> release publishes native macOS and Linux artifacts, a
+  Homebrew formula, the active BEAM implementation, shared contracts, and
+  clearer state-machine model visibility in the policy workbench. See the
   [Backend Selection Decision](backend-selection-decision.html) for the pruning
   rationale.
 </div>
@@ -58,10 +58,10 @@ WARDWRIGHT_BIND=127.0.0.1:8787 \
 ~/.local/bin/wardwright
 ```
 
-For a pinned release, pass `--version v0.0.3` to the installer:
+For a pinned release, pass `--version v0.0.4` to the installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.3
+curl -fsSL https://raw.githubusercontent.com/bglusman/wardwright/main/scripts/install.sh | sh -s -- --version v0.0.4
 ```
 
 The Linux installer verifies the release archive against published SHA-256

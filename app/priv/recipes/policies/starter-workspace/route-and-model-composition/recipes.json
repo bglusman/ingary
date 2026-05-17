@@ -1,0 +1,46 @@
+{
+  "recipes": [
+    {
+      "id": "private-helpdesk-local-gate",
+      "title": "Private helpdesk route gate",
+      "management_area": "Route and cost management",
+      "category": "route.selecting",
+      "promise": "Keep customer-private helpdesk turns on approved local routes unless a policy explicitly allows managed fallback.",
+      "failure_story": "A support agent needs to summarize a ticket with account notes and internal customer IDs. The old gateway treated the public model name as a plain provider alias, so one prompt-size or operator setting mistake could move private context to a cloud route without a clear receipt trail.",
+      "old_behavior": "Routing was implicit: if the selected provider changed, the user saw the same model name but the operator had to reconstruct why from logs.",
+      "wardwright_behavior": "The route policy narrows candidates before provider selection, fails closed if every candidate is removed, and records the policy constraint beside the selected route.",
+      "composition": "Dispatcher baseline over local and managed targets, with request-policy constraints layered on top.",
+      "primitives": ["dispatcher", "restrict_routes", "fail_closed_receipt"],
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "context-window-dispatcher",
+      "title": "Context-window dispatcher",
+      "management_area": "Route and cost management",
+      "category": "route.selecting",
+      "promise": "Use the smallest route that fits the prompt, then preserve larger routes as explicit fallbacks.",
+      "failure_story": "Long-running coding sessions often cross a context threshold gradually. Without a visible dispatcher, a small local model can start failing mysteriously or an expensive long-context model can become the silent default.",
+      "old_behavior": "The caller chose a model name and learned about context limits only after provider failure or cost drift.",
+      "wardwright_behavior": "Wardwright estimates prompt size, skips too-small targets before dispatch, and records the selected target plus skipped-context reasons.",
+      "composition": "Flat dispatcher over concrete upstream targets today; nested selector DAGs are the planned extension for composing dispatchers inside cascades or alloys.",
+      "primitives": ["dispatcher", "context_window_fit", "fallback_plan"],
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "partial-alloy-context-ladder",
+      "title": "Partial alloy context ladder",
+      "management_area": "Route and cost management",
+      "category": "route.selecting",
+      "promise": "Blend local and managed model strengths while the prompt fits both; keep the larger window alone after the local context drops out.",
+      "failure_story": "Calciforge-style synthetic models are useful when a local model is fast and private but a managed model has a larger context or different reasoning style. Operators need to see when both participate and when the local constituent was skipped.",
+      "old_behavior": "Alloy-like routing was hard to explain because the public model name hid which constituent actually handled a request.",
+      "wardwright_behavior": "The route planner supports partial-context alloys over concrete targets and receipts expose selected, fallback, and skipped constituents.",
+      "composition": "Implemented for concrete upstream targets; synthetic-model-to-synthetic-model DAG composition is planned with cycle detection.",
+      "primitives": ["partial_alloy", "deterministic_all", "context_window_fit"],
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    }
+  ]
+}

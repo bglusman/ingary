@@ -12,6 +12,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
   @allowed_remote_schemes MapSet.new(~w(http https))
   @community_warning "Community examples are untrusted until imported and reviewed."
   @starter_recipe_file "starter-recipes.json"
+  @starter_workspace_dir "starter-workspace"
   @starter_seed_marker ".starter-recipes-seeded"
 
   @type source_id :: String.t()
@@ -28,7 +29,23 @@ defmodule Wardwright.PolicyRecipeCatalog do
   defmodule Recipe do
     @moduledoc false
     @enforce_keys [:id, :title, :category, :promise, :pattern_id, :recipe_kind, :source_id]
-    defstruct [:id, :title, :category, :promise, :pattern_id, :recipe_kind, :source_id]
+    defstruct [
+      :id,
+      :title,
+      :category,
+      :promise,
+      :pattern_id,
+      :recipe_kind,
+      :source_id,
+      :collection_id,
+      :collection_title,
+      :management_area,
+      :failure_story,
+      :old_behavior,
+      :wardwright_behavior,
+      :composition,
+      primitives: []
+    ]
   end
 
   defmodule Catalog do
@@ -49,10 +66,10 @@ defmodule Wardwright.PolicyRecipeCatalog do
       },
       %Source{
         id: "workspace",
-        label: "Workspace examples",
+        label: "Project examples",
         kind: "filesystem",
         trusted: true,
-        summary: "Locally reviewed recipe JSON files.",
+        summary: "Locally reviewed recipe JSON files seeded from this Wardwright build.",
         endpoint: workspace_dir(opts)
       },
       %Source{
@@ -119,9 +136,25 @@ defmodule Wardwright.PolicyRecipeCatalog do
       # boundary-map-ok
       {"recipe_kind", recipe.recipe_kind},
       # boundary-map-ok
-      {"source_id", recipe.source_id}
+      {"source_id", recipe.source_id},
+      # boundary-map-ok
+      {"collection_id", recipe.collection_id},
+      # boundary-map-ok
+      {"collection_title", recipe.collection_title},
+      # boundary-map-ok
+      {"management_area", recipe.management_area},
+      # boundary-map-ok
+      {"failure_story", recipe.failure_story},
+      # boundary-map-ok
+      {"old_behavior", recipe.old_behavior},
+      # boundary-map-ok
+      {"wardwright_behavior", recipe.wardwright_behavior},
+      # boundary-map-ok
+      {"composition", recipe.composition},
+      # boundary-map-ok
+      {"primitives", recipe.primitives}
     ]
-    |> Map.new()
+    |> reject_empty()
   end
 
   def to_map(%Catalog{} = catalog) do
@@ -151,7 +184,9 @@ defmodule Wardwright.PolicyRecipeCatalog do
           promise: Map.fetch!(pattern, "promise"),
           source_id: source.id,
           pattern_id: pattern_id,
-          recipe_kind: "projection_demo"
+          recipe_kind: "projection_demo",
+          collection_id: "built-in",
+          collection_title: "Built-in projection demos"
         }
       end)
 
@@ -162,11 +197,11 @@ defmodule Wardwright.PolicyRecipeCatalog do
     seed_warning = seed_workspace(source)
 
     case File.ls(source.endpoint) do
-      {:ok, entries} ->
+      {:ok, _entries} ->
         recipes =
-          entries
-          |> Enum.filter(&String.ends_with?(&1, ".json"))
-          |> Enum.flat_map(&read_workspace_file(Path.join(source.endpoint, &1)))
+          source.endpoint
+          |> workspace_recipe_files()
+          |> Enum.flat_map(&read_workspace_file(source.endpoint, &1))
 
         {:ok,
          %Catalog{
@@ -188,7 +223,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
          %Catalog{
            source: source,
            recipes: [],
-           error: "Could not read workspace examples: #{:file.format_error(reason)}"
+           error: "Could not read workspace examples: #{format_file_error(reason)}"
          }}
     end
   end
@@ -196,7 +231,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
   defp community(source, opts) do
     with :ok <- require_https(source.endpoint, opts),
          {:ok, body} <- fetch_json(source.endpoint, opts),
-         {:ok, recipes} <- decode_recipes(body, source.id) do
+         {:ok, recipes} <- decode_recipes(body, source.id, default_collection(source.id)) do
       {:ok,
        %Catalog{
          source: source,
@@ -209,21 +244,30 @@ defmodule Wardwright.PolicyRecipeCatalog do
     end
   end
 
-  defp read_workspace_file(path) do
+  defp workspace_recipe_files(endpoint) do
+    endpoint
+    |> Path.join("**/*.json")
+    |> Path.wildcard(match_dot: false)
+    |> Enum.sort()
+  end
+
+  defp read_workspace_file(workspace_root, path) do
+    collection = workspace_collection(workspace_root, path)
+
     with {:ok, body} <- File.read(path),
-         {:ok, recipes} <- decode_recipes(body, "workspace") do
+         {:ok, recipes} <- decode_recipes(body, "workspace", collection) do
       recipes
     else
       _ -> []
     end
   end
 
-  defp decode_recipes(body, source_id) do
+  defp decode_recipes(body, source_id, collection) do
     with {:ok, decoded} <- Jason.decode(body),
          {:ok, recipes} <- recipe_list(decoded) do
       recipes =
         recipes
-        |> Enum.map(&validate_recipe(&1, source_id))
+        |> Enum.map(&validate_recipe(&1, source_id, collection))
         |> Enum.reject(&is_nil/1)
 
       {:ok, recipes}
@@ -244,7 +288,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
   defp recipe_list(recipes) when is_list(recipes), do: {:ok, recipes}
   defp recipe_list(_), do: {:error, "Recipe catalog must be a recipe object or list."}
 
-  defp validate_recipe(recipe, source_id) when is_map(recipe) do
+  defp validate_recipe(recipe, source_id, collection) when is_map(recipe) do
     id = string_field(recipe, "id")
     title = string_field(recipe, "title")
 
@@ -256,12 +300,20 @@ defmodule Wardwright.PolicyRecipeCatalog do
         promise: string_field(recipe, "promise") || "No summary provided.",
         pattern_id: string_field(recipe, "pattern_id") || string_field(recipe, "id"),
         recipe_kind: string_field(recipe, "recipe_kind") || "policy_recipe",
-        source_id: source_id
+        source_id: source_id,
+        collection_id: string_field(recipe, "collection_id") || collection.id,
+        collection_title: string_field(recipe, "collection_title") || collection.title,
+        management_area: string_field(recipe, "management_area"),
+        failure_story: string_field(recipe, "failure_story"),
+        old_behavior: string_field(recipe, "old_behavior"),
+        wardwright_behavior: string_field(recipe, "wardwright_behavior"),
+        composition: string_field(recipe, "composition"),
+        primitives: string_list_field(recipe, "primitives")
       }
     end
   end
 
-  defp validate_recipe(_recipe, _source_id), do: nil
+  defp validate_recipe(_recipe, _source_id, _collection), do: nil
 
   defp string_field(map, key) do
     case Map.get(map, key) do
@@ -275,6 +327,18 @@ defmodule Wardwright.PolicyRecipeCatalog do
 
       _ ->
         nil
+    end
+  end
+
+  defp string_list_field(map, key) do
+    case Map.get(map, key) do
+      values when is_list(values) ->
+        values
+        |> Enum.map(fn value -> value |> to_string() |> String.trim() end)
+        |> Enum.reject(&(&1 == ""))
+
+      _ ->
+        []
     end
   end
 
@@ -368,9 +432,8 @@ defmodule Wardwright.PolicyRecipeCatalog do
         write_seed_marker(marker_path)
 
       true ->
-        with {:ok, starter_path} <- starter_recipe_path(),
-             :ok <- File.mkdir_p(endpoint),
-             :ok <- File.cp(starter_path, starter_target),
+        with :ok <- File.mkdir_p(endpoint),
+             :ok <- copy_starter_workspace(endpoint),
              nil <- write_seed_marker(marker_path) do
           nil
         else
@@ -390,6 +453,55 @@ defmodule Wardwright.PolicyRecipeCatalog do
 
       {:error, reason} ->
         "Could not record workspace example seed marker: #{format_file_error(reason)}"
+    end
+  end
+
+  defp copy_starter_workspace(endpoint) do
+    case starter_workspace_path() do
+      {:ok, starter_dir} ->
+        copy_starter_workspace_dir(starter_dir, endpoint)
+
+      {:error, _reason} ->
+        with {:ok, starter_path} <- starter_recipe_path() do
+          File.cp(starter_path, Path.join(endpoint, @starter_recipe_file))
+        end
+    end
+  end
+
+  defp copy_starter_workspace_dir(starter_dir, endpoint) do
+    starter_dir
+    |> Path.join("**/*.json")
+    |> Path.wildcard(match_dot: false)
+    |> Enum.reduce_while(:ok, fn source_path, :ok ->
+      relative_path = Path.relative_to(source_path, starter_dir)
+      target_path = Path.join(endpoint, relative_path)
+
+      case File.mkdir_p(Path.dirname(target_path)) do
+        :ok ->
+          case File.cp(source_path, target_path) do
+            :ok -> {:cont, :ok}
+            error -> {:halt, error}
+          end
+
+        error ->
+          {:halt, error}
+      end
+    end)
+  end
+
+  defp starter_workspace_path do
+    case :code.priv_dir(:wardwright) do
+      priv_dir when is_list(priv_dir) ->
+        path =
+          priv_dir
+          |> List.to_string()
+          |> Path.join("recipes/policies/#{@starter_workspace_dir}")
+
+        if File.dir?(path), do: {:ok, path}, else: {:error, :enoent}
+
+      {:error, _reason} ->
+        path = Path.expand("../../priv/recipes/policies/#{@starter_workspace_dir}", __DIR__)
+        if File.dir?(path), do: {:ok, path}, else: {:error, :enoent}
     end
   end
 
@@ -415,9 +527,45 @@ defmodule Wardwright.PolicyRecipeCatalog do
 
   defp format_file_error(reason), do: :file.format_error(reason) |> List.to_string()
 
+  defp workspace_collection(workspace_root, path) do
+    relative_dir =
+      path
+      |> Path.dirname()
+      |> Path.relative_to(workspace_root)
+
+    case relative_dir do
+      "." -> default_collection("workspace")
+      "" -> default_collection("workspace")
+      dir -> %{id: dir, title: titleize_path(dir)}
+    end
+  end
+
+  defp default_collection(source_id) do
+    case source_id do
+      "workspace" -> %{id: "workspace", title: "Workspace examples"}
+      "community" -> %{id: "community", title: "Community examples"}
+      "built_in" -> %{id: "built-in", title: "Built-in projection demos"}
+      _ -> %{id: "examples", title: "Examples"}
+    end
+  end
+
+  defp titleize_path(path) do
+    path
+    |> String.split("/")
+    |> List.last()
+    |> String.replace(~r/[-_]+/, " ")
+    |> String.capitalize()
+  end
+
   defp reject_nil(pairs) do
     pairs
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+    |> Map.new()
+  end
+
+  defp reject_empty(pairs) do
+    pairs
+    |> Enum.reject(fn {_key, value} -> value in [nil, "", []] end)
     |> Map.new()
   end
 end
