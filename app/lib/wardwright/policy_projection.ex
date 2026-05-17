@@ -2382,6 +2382,7 @@ defmodule Wardwright.PolicyProjection do
 
   defp normalize_history_context(context) when is_map(context) do
     context
+    |> Enum.reject(fn {key, _value} -> String.starts_with?(to_string(key), "_unused_") end)
     |> Enum.map(fn {key, value} -> {to_string(key), history_context_value(value)} end)
     |> Map.new()
   end

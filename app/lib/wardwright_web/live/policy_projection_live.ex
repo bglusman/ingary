@@ -604,11 +604,14 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           </form>
         </div>
 
-        <form phx-change="edit-simulation-turn" class="turn_editor_grid">
+        <form phx-change="edit-simulation-turn" phx-submit="edit-simulation-turn" class="turn_editor_grid">
           <div class={boundary_pair_class(@simulation_boundary.input_changed)}>
             <label>
               <span>Raw user input</span>
               <textarea name="simulation[user_input]" rows="5"><%= @simulation_user_input %></textarea>
+              <small :if={!@simulation_boundary.input_changed} class="boundary_status">
+                Model receives this input unchanged.
+              </small>
             </label>
             <label :if={@simulation_boundary.input_changed}>
               <span>Model receives after Wardwright</span>
@@ -619,6 +622,9 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             <label>
               <span>Raw model output / stream</span>
               <textarea name="simulation[model_response]" rows="5"><%= @simulation_model_response %></textarea>
+              <small :if={!@simulation_boundary.output_changed} class="boundary_status">
+                Released unchanged. The user receives this raw model output.
+              </small>
             </label>
             <label :if={@simulation_boundary.output_changed}>
               <span><%= if @simulation_boundary.output_withheld, do: "User-visible output", else: "User receives after Wardwright" %></span>
@@ -637,6 +643,10 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               <span><%= history_context_label(key) %></span>
               <input name={"simulation[history_context][#{key}]"} value={value} />
             </label>
+          </div>
+          <div class="turn_editor_actions">
+            <span>Changes are evaluated live; Apply is a fallback if the browser waits for field blur.</span>
+            <button type="submit">Apply changes</button>
           </div>
         </form>
       </div>
@@ -1032,6 +1042,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .withheld_notice { min-height: 116px; padding: 12px; border: 1px solid #dfc1a1; border-radius: 6px; color: #6d4717; background: #fff8ec; font-size: 13px; line-height: 1.45; }
     .boundary_pair { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 10px; border: 1px solid #e0e6ec; border-radius: 8px; background: #fbfcfd; }
     .boundary_pair.changed { grid-template-columns: repeat(2, minmax(0, 1fr)); border-color: #bfd0df; background: #f6f9fb; }
+    .boundary_status { color: #3b6657; font-size: 12px; font-weight: 800; line-height: 1.35; }
+    .turn_editor_actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .turn_editor_actions span { color: #5e6b76; font-size: 12px; line-height: 1.35; }
+    .turn_editor_actions button { min-height: 34px; padding: 6px 11px; border: 1px solid #b8c6d1; border-radius: 6px; color: #26323c; background: #fff; font-weight: 800; cursor: pointer; }
+    .turn_editor_actions button:hover { border-color: #8fa1b2; background: #f3f6f8; }
     .trace_event.pending { opacity: 0.46; }
     .trace_event.active { border-color: #84b9e8; background: #eef6ff; }
     .phase_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
@@ -1197,6 +1212,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   defp simulation_history_context(%{"history_context" => context}) when is_map(context) do
     context
+    |> Enum.reject(fn {key, _value} -> String.starts_with?(to_string(key), "_unused_") end)
     |> Enum.map(fn {key, value} -> {to_string(key), to_string(value)} end)
     |> Map.new()
   end

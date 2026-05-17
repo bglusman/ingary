@@ -397,8 +397,42 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert changed =~ "stream released"
     assert changed =~ "Ready: 3 trace events available for playback."
     assert changed =~ "ordinary response text with no matching tokens"
+    assert changed =~ "Released unchanged. The user receives this raw model output."
     refute changed =~ "User receives after Wardwright"
     refute changed =~ "review hold selected"
+  end
+
+  test "LiveView diagram releases unchanged output when edited text no longer matches rewrite rules" do
+    {:ok, view, _html} = live(build_conn(), "/policies/stream-rewrite-state/diagram")
+
+    selected =
+      view
+      |> element("form[phx-change='select-simulation-input']")
+      |> render_change(%{"simulation_input" => "rewrite-then-secret"})
+
+    assert selected =~ "No output is released to the user in this simulated branch"
+
+    changed =
+      view
+      |> element("form.turn_editor_grid")
+      |> render_change(%{
+        "simulation" => %{
+          "user_input" => "Summarize the billing incident without exposing credentials.",
+          "model_response" =>
+            "account {redacted} appears in the answer\n{redacted} follows in the held horizon",
+          "history_context" => %{
+            "recent_related_secret_matches" => "0",
+            "policy_state" => "observing"
+          }
+        }
+      })
+
+    assert changed =~ "Edited stream has no regex match"
+    assert changed =~ "stream released"
+    assert changed =~ "Released unchanged. The user receives this raw model output."
+    assert changed =~ "account {redacted} appears in the answer"
+    refute changed =~ "No output is released to the user in this simulated branch"
+    refute changed =~ "User-visible output"
   end
 
   test "LiveView diagram shows before and after boundaries only when policy rewrites them" do
