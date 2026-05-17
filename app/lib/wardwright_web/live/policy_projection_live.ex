@@ -919,6 +919,7 @@ defmodule WardwrightWeb.PolicyProjectionLive do
               <rect x={state.x} y={state.y} width={state.width} height={state.height} rx="8" class={"state_diagram_node #{state.role}"} />
               <text x={state.x + 12} y={state.y + 25} class="state_node_title"><%= state.label %></text>
               <text x={state.x + 12} y={state.y + 47} class="state_node_caption"><%= state.id %></text>
+              <text :if={state.model_id} x={state.x + 12} y={state.y + 66} class="state_node_model"><%= state.model_id %></text>
             </g>
           </g>
         </svg>
@@ -931,6 +932,11 @@ defmodule WardwrightWeb.PolicyProjectionLive do
             <.badge value={if state["id"] == @projection["state_machine"]["initial_state"], do: "initial", else: "state"} />
           </div>
           <span><%= state["summary"] %></span>
+          <div :if={state["model_id"]} class="state_card_model">
+            <span>Model</span>
+            <strong><%= state["model_id"] %></strong>
+            <small :if={state["model_reason"]}><%= state["model_reason"] %></small>
+          </div>
           <small><%= Enum.join(state["node_ids"], ", ") %></small>
         </article>
       </div>
@@ -1293,9 +1299,14 @@ defmodule WardwrightWeb.PolicyProjectionLive do
     .state_diagram_node.terminal { fill: #f0faf6; stroke: #78b59f; stroke-width: 2.2; }
     .state_node_title { fill: #17202a; font-size: 14px; font-weight: 800; }
     .state_node_caption { fill: #5e6b76; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+    .state_node_model { fill: #2f5f87; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px; font-weight: 800; }
     .state_grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
     .state_card { display: grid; gap: 8px; min-height: 126px; }
-    .state_card div { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .state_card > div:first-child { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .state_card_model { display: grid; gap: 3px; justify-content: stretch; padding: 8px; border: 1px solid #c6d9ea; border-radius: 7px; background: #f2f8ff; }
+    .state_card_model span { color: #55708a; font-size: 11px; font-weight: 800; line-height: 1.2; text-transform: uppercase; }
+    .state_card_model strong { color: #244f76; overflow-wrap: anywhere; }
+    .state_card_model small { color: #526776; }
     .state_card.terminal { border-color: #94c7b5; background: #f0faf6; }
     .state_columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 0.8fr); gap: 14px; }
     .transition_row { display: grid; gap: 4px; }
@@ -1790,7 +1801,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
           x: 34 + index * 190,
           y: 72,
           width: 146,
-          height: 64,
+          height: if(state["model_id"], do: 82, else: 64),
+          model_id: state["model_id"],
           role: state_role(state_machine, state)
         }
       end)

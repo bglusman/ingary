@@ -762,6 +762,18 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert retry_html =~ "Observing"
     assert retry_html =~ "Retrying"
     assert render(retry_view) =~ "stream.match"
+
+    {:ok, _stream_view, stream_html} =
+      live(build_conn(), "/policies/stream-rewrite-state/state_machine")
+
+    assert stream_html =~ "Model"
+    assert stream_html =~ "local/qwen-coder"
+    assert stream_html =~ "managed/kimi-k2.6"
+
+    assert stream_html =~
+             "Future turns in this session should use the review-capable managed route"
+
+    assert stream_html =~ "Receipt recording does not call a provider model."
   end
 
   defp put_route_gate_config do
