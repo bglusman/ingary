@@ -1,0 +1,44 @@
+{
+  "recipes": [
+    {
+      "id": "community-basic-stream-retry",
+      "title": "Basic stream retry",
+      "category": "response.streaming",
+      "promise": "A minimal time-travel stream rule: catch one prohibited phrase before release, retry once, and record why.",
+      "pattern_id": "tts-retry",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "community-stateful-redaction",
+      "title": "Stateful redaction ladder",
+      "category": "response.streaming",
+      "promise": "Rewrite account identifiers, count related secret matches, and escalate future turns only when history makes that necessary.",
+      "pattern_id": "stream-rewrite-state",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "community-done-but-missing-file",
+      "title": "Done, but where is the file?",
+      "category": "output.finalizing",
+      "promise": "A boring but useful receipt check: alert when a model claims an export is ready without artifact evidence.",
+      "pattern_id": "ambiguous-success",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "community-private-route-gate",
+      "title": "Private-route starter",
+      "category": "route.selecting",
+      "promise": "Keep private-risk requests on local or approved routes while still showing the route decision in receipts.",
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "community-tool-loop-guard",
+      "title": "Tool loop guard",
+      "category": "tool.using",
+      "promise": "Watch repeated write-capable tool calls in session history and make the next action reviewable before costs run away.",
+      "pattern_id": "tool-governance",
+      "recipe_kind": "policy_recipe"
+    }
+  ]
+}

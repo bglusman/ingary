@@ -49,6 +49,8 @@ defmodule Wardwright.Application do
         |> Application.get_env(WardwrightWeb.Endpoint, [])
         |> Keyword.merge(
           http: [ip: host, port: port],
+          url: [host: endpoint_host(host), port: port],
+          check_origin: check_origins(host, port),
           server: true,
           secret_key_base: secret_key_base()
         )
@@ -73,6 +75,24 @@ defmodule Wardwright.Application do
 
   defp serve_http?, do: Application.get_env(:wardwright, :serve_http, true)
 
+  defp endpoint_host(host) do
+    case :inet.ntoa(host) |> to_string() do
+      "0.0.0.0" -> "localhost"
+      "::" -> "localhost"
+      host -> host
+    end
+  end
+
+  defp check_origins(host, port) do
+    host = endpoint_host(host)
+
+    ["localhost", "127.0.0.1", host]
+    |> Enum.uniq()
+    |> Enum.flat_map(fn origin_host ->
+      ["http://#{origin_host}:#{port}", "//#{origin_host}:#{port}"]
+    end)
+  end
+
   defp bind do
     raw = System.get_env("WARDWRIGHT_BIND", "127.0.0.1:8787")
     [host, port] = String.split(raw, ":", parts: 2)
@@ -81,33 +101,9 @@ defmodule Wardwright.Application do
   end
 
   defp maybe_handle_standalone_command do
-    case argv() do
-      ["--version" | _] ->
-        IO.puts(version())
-        System.halt(0)
-
-      ["version" | _] ->
-        IO.puts(version())
-        System.halt(0)
-
-      ["--help" | _] ->
-        IO.puts("""
-        wardwright #{version()}
-
-        Usage:
-          wardwright              Start the Wardwright HTTP service
-          wardwright --version    Print the packaged app version
-
-        Runtime environment:
-          WARDWRIGHT_BIND             Host and port, default 127.0.0.1:8787
-          WARDWRIGHT_SECRET_KEY_BASE  Stable Phoenix signing secret for services
-          WARDWRIGHT_ADMIN_TOKEN      Optional token for protected local APIs
-        """)
-
-        System.halt(0)
-
-      _ ->
-        :ok
+    case Wardwright.CLI.run(argv()) do
+      {:halt, status} -> System.halt(status)
+      :start -> :ok
     end
   end
 
@@ -117,11 +113,5 @@ defmodule Wardwright.Application do
     else
       System.argv()
     end
-  end
-
-  defp version do
-    :wardwright
-    |> Application.spec(:vsn)
-    |> to_string()
   end
 end

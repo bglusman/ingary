@@ -19,8 +19,15 @@ defmodule Wardwright.PolicyProjection.Contract do
       reads: [],
       writes: [],
       actions: [],
+      annotations: %{},
       source_span: nil
     ]
+  end
+
+  defmodule Annotation do
+    @moduledoc false
+    @enforce_keys [:why, :change_when, :review_hint]
+    defstruct [:why, :change_when, :review_hint]
   end
 
   defmodule Effect do
@@ -61,7 +68,15 @@ defmodule Wardwright.PolicyProjection.Contract do
   defmodule State do
     @moduledoc false
     @enforce_keys [:id, :label, :summary]
-    defstruct [:id, :label, :summary, node_ids: [], terminal: false]
+    defstruct [
+      :id,
+      :label,
+      :summary,
+      node_ids: [],
+      terminal: false,
+      model_id: nil,
+      model_reason: nil
+    ]
   end
 
   defmodule Transition do
@@ -88,7 +103,17 @@ defmodule Wardwright.PolicyProjection.Contract do
       {"reads", node.reads},
       {"writes", node.writes},
       {"actions", node.actions},
+      {"annotations", to_map(node.annotations)},
       {"source_span", node.source_span}
+    ]
+    |> reject_nil()
+  end
+
+  def to_map(%Annotation{} = annotation) do
+    [
+      {"why", annotation.why},
+      {"change_when", annotation.change_when},
+      {"review_hint", annotation.review_hint}
     ]
     |> reject_nil()
   end
@@ -139,7 +164,9 @@ defmodule Wardwright.PolicyProjection.Contract do
       {"label", state.label},
       {"summary", state.summary},
       {"node_ids", state.node_ids},
-      {"terminal", state.terminal}
+      {"terminal", state.terminal},
+      {"model_id", state.model_id},
+      {"model_reason", state.model_reason}
     ]
     |> reject_nil()
   end

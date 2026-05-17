@@ -1,0 +1,28 @@
+{
+  "recipes": [
+    {
+      "id": "local-private-route-gate",
+      "title": "Local private route gate",
+      "category": "route.selecting",
+      "promise": "A small route policy starter that keeps private context on approved local routes.",
+      "pattern_id": "route-privacy",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "local-tool-loop-watch",
+      "title": "Local tool loop watch",
+      "category": "tool.using",
+      "promise": "A starter tool-governance recipe for reviewing repeated write-capable tool calls.",
+      "pattern_id": "tool-governance",
+      "recipe_kind": "policy_recipe"
+    },
+    {
+      "id": "local-basic-stream-retry",
+      "title": "Local basic stream retry",
+      "category": "response.streaming",
+      "promise": "A simple TTSR-style stream guard: hold a small horizon, retry once on a prohibited phrase, then release the fixed attempt.",
+      "pattern_id": "tts-retry",
+      "recipe_kind": "policy_recipe"
+    }
+  ]
+}

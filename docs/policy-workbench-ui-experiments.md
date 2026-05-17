@@ -46,6 +46,26 @@ The UI should preserve the distinction between "this model is configured" and
 "this model is currently allowed for this request." Users need both to debug
 unexpected routing.
 
+State machines can be a useful bridge between policy behavior and model
+routing, but state should not be reduced to exactly one backend model. A state
+may bind a route policy such as "force this concrete model", "use this
+dispatcher", "use this alloy", or "constrain candidates to this provider set".
+That lets a review state move to a slower local model, a broad-search state use
+an alloy, and a normal state use the default dispatcher without inventing a
+separate routing mental model. The UI should display this as an optional
+state-to-route binding. A one-state policy simply means "use the active route
+plan unless a rule constrains it."
+
+The important distinction for users is:
+
+- state controls policy context and allowed transitions
+- route binding controls candidate or selected backend models for that state
+- effects and receipts prove which route constraint actually applied
+
+This avoids hiding alloys, fallback, and partial-context composition behind a
+single "model per state" label while still letting model-switching policies feel
+like normal state transitions.
+
 ### Simulation Trace
 
 Simulation is evidence, not authority. Each simulation should show:
@@ -152,6 +172,14 @@ Compare UI spikes on these dimensions:
 For the first product slice, prefer native LiveView plus a stable projection
 schema. Add a client graph hook only when a specific workflow proves that pan,
 zoom, auto-layout, or large-graph interaction is needed.
+
+Recipe catalogs should be another backend-owned boundary. The workbench may
+offer built-in, workspace, and community sources, but community recipes should
+be treated as untrusted data until imported and reviewed. The default community
+hub can live at `wardwright.dev/recipes`, with configuration allowing private or
+enterprise catalogs to replace it. Catalog entries should point to deterministic
+policy artifacts, projection demos, scenarios, and docs; selecting a remote
+recipe must not execute arbitrary policy code.
 
 ## 2026-05-15 LiveView UI Spike Notes
 
