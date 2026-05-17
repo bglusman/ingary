@@ -26,6 +26,20 @@ defmodule Wardwright.PolicyProjectionLiveTest do
   end
 
   setup do
+    original_workspace = Application.get_env(:wardwright, :policy_recipe_workspace_dir)
+
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-live-default-#{System.unique_integer()}")
+
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
+
+    on_exit(fn ->
+      case original_workspace do
+        nil -> Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+        value -> Application.put_env(:wardwright, :policy_recipe_workspace_dir, value)
+      end
+    end)
+
     Wardwright.reset_config()
     Wardwright.ReceiptStore.clear()
     Wardwright.PolicyScenarioStore.clear()
@@ -419,7 +433,7 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
     assert html =~ "Regex rewrite and state transition"
     assert html =~ "Example set"
-    assert html =~ "Built-in examples"
+    assert html =~ "Workspace examples"
     assert html =~ "wardwright.dev/recipes"
     assert html =~ "account redactor"
     assert html =~ "secret transition"
@@ -656,25 +670,24 @@ defmodule Wardwright.PolicyProjectionLiveTest do
     assert html =~ "Tool call governance"
     assert html =~ "tool receipt context"
 
-    built_in =
+    workspace =
       view
       |> element("form[phx-submit='select-recipe-source']")
       |> render_submit(%{"recipe_source" => "built_in"})
 
-    assert built_in =~ "Built-in examples"
-    assert built_in =~ "compiled into this build"
-    refute built_in =~ "Workspace tool policy"
+    assert workspace =~ "Workspace examples"
+    assert workspace =~ workspace_dir
+    assert workspace =~ "Workspace tool policy"
 
     {:ok, view, _html} = live(build_conn(), "/policies/tool-governance/diagram?source=workspace")
 
-    assert {:error,
-            {:redirect, %{to: "/policies/tool-governance/state_machine?source=workspace"}}} =
+    assert {:error, {:redirect, %{to: "/policies/tool-governance/state_machine"}}} =
              view
              |> element("a", "State model")
              |> render_click()
 
     {:ok, _state_view, updated} =
-      live(build_conn(), "/policies/tool-governance/state_machine?source=workspace")
+      live(build_conn(), "/policies/tool-governance/state_machine")
 
     assert updated =~ "Workspace examples"
     assert updated =~ "State model"
@@ -682,7 +695,11 @@ defmodule Wardwright.PolicyProjectionLiveTest do
 
   test "LiveView default workspace source loads committed starter recipes" do
     original_workspace = Application.get_env(:wardwright, :policy_recipe_workspace_dir)
-    Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-live-starter-recipes-#{System.unique_integer()}")
+
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
 
     on_exit(fn ->
       case original_workspace do
@@ -691,9 +708,10 @@ defmodule Wardwright.PolicyProjectionLiveTest do
       end
     end)
 
-    {:ok, _view, html} = live(build_conn(), "/policies/route-privacy/diagram?source=workspace")
+    {:ok, _view, html} = live(build_conn(), "/policies/route-privacy/diagram")
 
     assert html =~ "Workspace examples"
+    assert html =~ workspace_dir
     assert html =~ "Local private route gate"
     assert html =~ "Local tool loop watch"
     assert html =~ "Private context route gate"

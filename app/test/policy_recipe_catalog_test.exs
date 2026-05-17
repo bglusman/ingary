@@ -23,17 +23,45 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
     assert Enum.all?(catalog["recipes"], &is_binary(&1["pattern_id"]))
   end
 
-  test "default workspace source exposes committed starter recipes" do
-    Application.delete_env(:wardwright, :policy_recipe_workspace_dir)
+  test "workspace source seeds starter recipes into a missing user workspace once" do
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-seeded-recipes-#{System.unique_integer()}")
+
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
 
     assert {:ok, catalog} = Wardwright.PolicyRecipeCatalog.list("workspace")
     catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
 
     assert catalog["source"]["trusted"] == true
-    assert catalog["source"]["endpoint"] =~ "priv/recipes/policies"
+    assert catalog["source"]["endpoint"] == workspace_dir
     assert catalog["warnings"] == []
     assert Enum.any?(catalog["recipes"], &(&1["id"] == "local-private-route-gate"))
     assert Enum.any?(catalog["recipes"], &(&1["pattern_id"] == "tool-governance"))
+    assert File.exists?(Path.join(workspace_dir, ".starter-recipes-seeded"))
+
+    File.rm!(Path.join(workspace_dir, "starter-recipes.json"))
+
+    assert {:ok, catalog} = Wardwright.PolicyRecipeCatalog.list("workspace")
+    catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
+
+    assert catalog["recipes"] == []
+    assert catalog["warnings"] == ["No valid workspace examples were found in #{workspace_dir}."]
+  end
+
+  test "workspace source seeds starter recipes into an existing unmarked directory" do
+    workspace_dir =
+      Path.join(System.tmp_dir!(), "wardwright-existing-recipes-#{System.unique_integer()}")
+
+    File.mkdir_p!(workspace_dir)
+    Application.put_env(:wardwright, :policy_recipe_workspace_dir, workspace_dir)
+
+    assert {:ok, catalog} = Wardwright.PolicyRecipeCatalog.list("workspace")
+    catalog = Wardwright.PolicyRecipeCatalog.to_map(catalog)
+
+    assert catalog["warnings"] == []
+    assert Enum.any?(catalog["recipes"], &(&1["id"] == "local-private-route-gate"))
+    assert File.exists?(Path.join(workspace_dir, "starter-recipes.json"))
+    assert File.exists?(Path.join(workspace_dir, ".starter-recipes-seeded"))
   end
 
   test "workspace source loads valid recipe JSON and ignores invalid files" do
@@ -51,6 +79,11 @@ defmodule Wardwright.PolicyRecipeCatalogTest do
         }
       ]
     }
+
+    File.write!(
+      Path.join(workspace_dir, ".starter-recipes-seeded"),
+      "test workspace already initialized\n"
+    )
 
     File.write!(Path.join(workspace_dir, "valid.json"), Jason.encode!(valid))
     File.write!(Path.join(workspace_dir, "invalid.json"), "{")

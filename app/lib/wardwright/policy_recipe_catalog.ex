@@ -11,6 +11,8 @@ defmodule Wardwright.PolicyRecipeCatalog do
   @default_remote_max_bytes 256_000
   @allowed_remote_schemes MapSet.new(~w(http https))
   @community_warning "Community examples are untrusted until imported and reviewed."
+  @starter_recipe_file "starter-recipes.json"
+  @starter_seed_marker ".starter-recipes-seeded"
 
   @type source_id :: String.t()
   @type source :: %__MODULE__.Source{}
@@ -157,6 +159,8 @@ defmodule Wardwright.PolicyRecipeCatalog do
   end
 
   defp workspace(source) do
+    seed_warning = seed_workspace(source)
+
     case File.ls(source.endpoint) do
       {:ok, entries} ->
         recipes =
@@ -168,7 +172,7 @@ defmodule Wardwright.PolicyRecipeCatalog do
          %Catalog{
            source: source,
            recipes: recipes,
-           warnings: workspace_warnings(source, recipes)
+           warnings: workspace_warnings(source, recipes, seed_warning)
          }}
 
       {:error, :enoent} ->
@@ -274,10 +278,14 @@ defmodule Wardwright.PolicyRecipeCatalog do
     end
   end
 
-  defp workspace_warnings(source, []),
+  defp workspace_warnings(source, [], nil),
     do: ["No valid workspace examples were found in #{source.endpoint}."]
 
-  defp workspace_warnings(_source, _recipes), do: []
+  defp workspace_warnings(_source, recipes, nil) when recipes != [], do: []
+
+  defp workspace_warnings(source, recipes, seed_warning) do
+    workspace_warnings(source, recipes, nil) ++ [seed_warning]
+  end
 
   defp require_https(url, opts) do
     uri = URI.parse(url)
@@ -345,14 +353,58 @@ defmodule Wardwright.PolicyRecipeCatalog do
   end
 
   defp default_workspace_dir do
+    Path.join(System.user_home!(), ".wardwright/recipes/policies")
+  end
+
+  defp seed_workspace(%Source{endpoint: endpoint}) do
+    marker_path = Path.join(endpoint, @starter_seed_marker)
+    starter_target = Path.join(endpoint, @starter_recipe_file)
+
+    cond do
+      File.exists?(marker_path) ->
+        nil
+
+      File.exists?(starter_target) ->
+        write_seed_marker(marker_path)
+
+      true ->
+        with {:ok, starter_path} <- starter_recipe_path(),
+             :ok <- File.mkdir_p(endpoint),
+             :ok <- File.cp(starter_path, starter_target),
+             nil <- write_seed_marker(marker_path) do
+          nil
+        else
+          {:error, reason} ->
+            "Could not seed workspace examples: #{format_file_error(reason)}"
+
+          warning when is_binary(warning) ->
+            warning
+        end
+    end
+  end
+
+  defp write_seed_marker(marker_path) do
+    case File.write(marker_path, "starter recipes copied from this Wardwright build\n") do
+      :ok ->
+        nil
+
+      {:error, reason} ->
+        "Could not record workspace example seed marker: #{format_file_error(reason)}"
+    end
+  end
+
+  defp starter_recipe_path do
     case :code.priv_dir(:wardwright) do
       priv_dir when is_list(priv_dir) ->
-        priv_dir
-        |> List.to_string()
-        |> Path.join("recipes/policies")
+        path =
+          priv_dir
+          |> List.to_string()
+          |> Path.join("recipes/policies/starter-recipes.json")
+
+        {:ok, path}
 
       {:error, _reason} ->
-        Path.expand("../../priv/recipes/policies", __DIR__)
+        {:ok, Path.expand("../../priv/recipes/policies/starter-recipes.json", __DIR__)}
     end
   end
 
@@ -360,6 +412,8 @@ defmodule Wardwright.PolicyRecipeCatalog do
     opts[:community_url] ||
       Application.get_env(:wardwright, :policy_recipe_community_url, @default_community_url)
   end
+
+  defp format_file_error(reason), do: :file.format_error(reason) |> List.to_string()
 
   defp reject_nil(pairs) do
     pairs

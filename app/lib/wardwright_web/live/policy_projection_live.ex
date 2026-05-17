@@ -1638,18 +1638,20 @@ defmodule WardwrightWeb.PolicyProjectionLive do
   defp normalize_mode(mode) when mode in @modes, do: mode
   defp normalize_mode(_), do: "phase_map"
 
-  defp normalize_recipe_source(nil), do: "built_in"
+  defp normalize_recipe_source(nil), do: "workspace"
+  defp normalize_recipe_source("built_in"), do: "workspace"
 
   defp normalize_recipe_source(source_id) do
     if source_id in Wardwright.PolicyRecipeCatalog.source_ids() do
       source_id
     else
-      "built_in"
+      "workspace"
     end
   end
 
   defp recipe_sources do
     Wardwright.PolicyRecipeCatalog.sources()
+    |> Enum.reject(&(&1.id == "built_in"))
     |> Enum.map(&Wardwright.PolicyRecipeCatalog.to_map/1)
   end
 
@@ -1731,7 +1733,8 @@ defmodule WardwrightWeb.PolicyProjectionLive do
 
   defp path(pattern_id, mode), do: "/policies/#{pattern_id}/#{mode}"
 
-  defp path(pattern_id, mode, "built_in"), do: path(pattern_id, mode)
+  defp path(pattern_id, mode, source_id) when source_id in ["built_in", "workspace"],
+    do: path(pattern_id, mode)
 
   defp path(pattern_id, mode, source_id) do
     path(pattern_id, mode) <> "?" <> URI.encode_query(%{"source" => source_id})
